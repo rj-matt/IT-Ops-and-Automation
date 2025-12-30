@@ -14,24 +14,20 @@ during support and incident workflows.
 ## Organization Philosophy
 Scripts are organized to reflect how work is actually performed:
 
-1. By environment or scope (endpoints, cloud platforms, infrastructure, security)
+1. By environment or scope (endpoint-systems, cloud-services, core-infrastructure, security-operations)
 2. By function (diagnostics, remediation, audit, automation)
 
 This structure is designed to make it easy to:
 
 - Locate the right tool quickly
-
 - Understand what a script affects before running it
-
 - Reduct accidental misuse across environments
 
 ## Usage Expectations
 Scripts in this repository are intended to be
 
 - Reviewed before execution
-
 - Used in the appropriate context
-
 - Applied deliberately, not indiscriminately
 
 Diagnostic scripts are generally read-only
@@ -46,13 +42,9 @@ When in doubt, pause and confirm before proceeding.
 Each script includes a header describing:
 
 - Purpose and use case
-
 - Scope and impact
-
 - Requirements or prerequisites
-
 - Risk considerations
-
 - Last verification date
 
 These headers exist to support safe reuse, faster decision-making, and easier handoff
@@ -74,9 +66,7 @@ Scripts are exptected to evolve as platforms, tooling, and best practices change
 Updates should prioritize:
 
 - Clarity over cleverness
-
 - Predictability over speed
-
 - Safety over convenience
 
 Deprecated or superseded scripts should be retained in designated locations rather
@@ -88,9 +78,7 @@ than removed outright to preserve context.
 Automation is most effective when it:
 
 - Encodes known-good practices
-
 - Reduces unnecessary variability
-
 
 This repository exists to support those outcomes
 
