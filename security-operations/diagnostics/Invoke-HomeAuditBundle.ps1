@@ -41,8 +41,10 @@
     Without it the checklist items are recorded as "Not verified".
 
 .PARAMETER ApprovedRemoteTool
-    Remote-access tools the MSP/client uses on purpose (for example 'ScreenConnect'), passed to
-    Get-HomeDeviceInventory so they are not flagged.
+    Remote-access tools the MSP/client uses on purpose (for example 'Kaseya','ScreenConnect'),
+    passed to Get-HomeDeviceInventory so they are not flagged. When given, this REPLACES the
+    approved-remote-tools.txt list next to Get-HomeDeviceInventory.ps1 (Kaseya by default) for
+    this run; when omitted, that file is used.
 
 .PARAMETER AllUsers
     As administrator: include other users' browser profiles and per-user software.
@@ -75,7 +77,7 @@
     Risk Level    : Read-Only -- runs read-only scripts and writes result files only.
     Prerequisites : Windows PowerShell 5.1 | Admin: No (recommended: Yes, for complete results) |
                     Modules: built-in only | The eight audit scripts must be present (see .DESCRIPTION)
-    Version       : 1.0.0
+    Version       : 1.0.1
     Limitations   : Runs on the local PC only; repeat on each PC to audit. Per-script output
                     appears on screen as each one runs; each script's own log is in
                     %TEMP%\MSP-Toolkit.
@@ -592,7 +594,7 @@ function Complete-MSPRun {
 #endregion MSPHelper:Core
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '1.0.0'
+$ScriptVersion = '1.0.1'
 Initialize-MSPRun -ScriptName 'Invoke-HomeAuditBundle' -ScriptVersion $ScriptVersion -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'Home network audit: runs A1-A8 and collects the results'
 

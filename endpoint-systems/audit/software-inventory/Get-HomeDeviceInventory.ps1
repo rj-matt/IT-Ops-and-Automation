@@ -14,7 +14,8 @@
     Software   Programs from Apps & Features (64-bit, 32-bit and per-user). Flags:
                  - Remote-access tools (TeamViewer, AnyDesk, UltraViewer, ScreenConnect, VNC...).
                    Tech-support scammers install these; a recently installed one is High.
-                   Tools the MSP itself uses can be marked approved with -ApprovedRemoteTool.
+                   Tools the MSP itself uses are listed in approved-remote-tools.txt (next to
+                   this script) and reported as INFO; -ApprovedRemoteTool overrides the list.
                  - Peer-to-peer / torrent clients (malware and copyright-notice risk).
                Running processes are also checked, because portable remote tools (common in
                scams) run without being installed.
@@ -32,6 +33,9 @@
 .PARAMETER ApprovedRemoteTool
     Names (or parts of names) of remote-access tools the MSP or client uses on purpose, for
     example "ScreenConnect","NinjaOne". Matching tools are reported as INFO, not WARN.
+    When given, this list REPLACES approved-remote-tools.txt for this run (include the MSP's
+    own tools again if they should stay approved). When omitted, the file is used; if the
+    file is missing, no tool is approved.
 
 .PARAMETER StaleAccountDays
     Enabled accounts not used for this many days are flagged. Default 90.
@@ -40,7 +44,8 @@
     .\Get-HomeDeviceInventory.ps1
 
 .EXAMPLE
-    .\Get-HomeDeviceInventory.ps1 -ApprovedRemoteTool 'ScreenConnect' -OutputPath C:\Temp\Audit
+    .\Get-HomeDeviceInventory.ps1 -ApprovedRemoteTool 'Kaseya','ScreenConnect' -OutputPath C:\Temp\Audit
+    Approves Kaseya and ScreenConnect for this run instead of the approved-remote-tools.txt list.
 
 .NOTES
     Purpose       : Know what this PC is, who uses it, and what is installed on it.
@@ -48,7 +53,7 @@
     Scope         : Local computer only. No network scanning.
     Risk Level    : Read-Only -- reads WMI/CIM, registry and the process list; changes nothing.
     Prerequisites : Windows PowerShell 5.1 | Admin: No (Yes for -IncludeOtherUsers) | Modules: built-in only
-    Version       : 1.0.0
+    Version       : 1.1.0
     Limitations   : Microsoft Store apps and portable programs that are not running are not
                     listed. "Last logon" for local accounts comes from Windows and can be blank
                     for accounts that sign in with a Microsoft/Entra account; profile "last used"
@@ -673,12 +678,39 @@ function Get-MSPInstalledSoftware {
 #endregion MSPHelper:Software
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '1.0.0'
+$ScriptVersion = '1.1.0'
 Initialize-MSPRun -ScriptName 'Get-HomeDeviceInventory' -ScriptVersion $ScriptVersion -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'Device, user and software inventory (read-only)'
 
 # "powershell.exe -File" (used by Invoke-HomeAuditBundle.ps1) passes a list as one "a,b" string.
 $ApprovedRemoteTool = @($ApprovedRemoteTool | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+
+# Approved remote tools: -ApprovedRemoteTool replaces the list file; otherwise read the file next to this script.
+$here = $PSScriptRoot
+if (-not $here) { $here = Split-Path -Path $MyInvocation.MyCommand.Path -Parent }
+$approvedFile = Join-Path -Path $here -ChildPath 'approved-remote-tools.txt'
+$approvedSource = '-ApprovedRemoteTool'
+if (-not $PSBoundParameters.ContainsKey('ApprovedRemoteTool')) {
+    $approvedSource = $approvedFile
+    if (Test-Path -LiteralPath $approvedFile -PathType Leaf) {
+        try {
+            $ApprovedRemoteTool = @(Get-Content -LiteralPath $approvedFile -ErrorAction Stop |
+                    ForEach-Object { $_.Trim() } | Where-Object { $_ -and -not $_.StartsWith('#') })
+        }
+        catch {
+            Add-MSPFinding -Check 'Approved remote tools' -Category 'Setup' -Status ERROR -Detail ('Could not read {0}: {1}' -f $approvedFile, $_.Exception.Message) `
+                -Recommendation 'Every remote-access tool will be flagged. Fix the file, or pass -ApprovedRemoteTool.'
+            $ApprovedRemoteTool = @()
+        }
+    }
+    else {
+        $approvedSource = '{0} - file not found' -f $approvedFile
+    }
+}
+$approvedText = 'none'
+if ($ApprovedRemoteTool.Count -gt 0) { $approvedText = $ApprovedRemoteTool -join ', ' }
+Add-MSPFinding -Check 'Approved remote tools' -Category 'Setup' -Status INFO -Evidence @{ Source = $approvedSource; Tools = $approvedText } `
+    -Detail ('{0} (from {1})' -f $approvedText, $approvedSource)
 
 # Remote-access tools: program-name pattern, and process names for portable/running copies.
 $remoteTools = @(
@@ -901,7 +933,7 @@ Invoke-MSPCheck -Name 'Remote-access and P2P software' -Category 'Software' -Scr
         $check = 'Remote-access tool: {0}' -f $tool.Name
         $evidence = @{ Tool = $tool.Name; Installed = $versions; Running = ($procs.Count -gt 0); InstallDate = $installedText }
         if ((Test-ApprovedTool -Name $tool.Name) -or @($installed | Where-Object { Test-ApprovedTool -Name $_.Name }).Count -gt 0) {
-            Add-MSPFinding -Check $check -Category 'Software' -Status INFO -Evidence $evidence -Detail ('{0} (marked approved with -ApprovedRemoteTool).' -f ($where -join '; '))
+            Add-MSPFinding -Check $check -Category 'Software' -Status INFO -Evidence $evidence -Detail ('{0} (approved remote tool).' -f ($where -join '; '))
             continue
         }
         $severity = 'Medium'

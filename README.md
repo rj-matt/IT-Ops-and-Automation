@@ -69,6 +69,20 @@ Updates should prioritize:
 - Predictability over speed
 - Safety over convenience
 
+Scheduled upkeep:
+
+- **Windows end-of-support table (A6).** `Get-WindowsUpdateCompliance.ps1` has a built-in
+  `$lifecycle` table (build -> version, consumer/business/LTSC end dates) plus the Windows 10
+  ESU end dates, marked "Reviewed 2026-10". Review it **every October and April** (feature
+  updates ship in the autumn; Microsoft sometimes adjusts dates) and whenever a run reports a
+  build as "newer than (or not in) this script's lifecycle table". Take dates only from
+  Microsoft Lifecycle / Windows release health, add a row per new build, update the
+  "Reviewed" comment and the `.NOTES` Limitations date, bump the script version, and run the
+  script once to confirm the current PC's build resolves. A stale table under-reports
+  end-of-support: an unsupported Windows version looks supported.
+- **Approved remote tools.** Update `approved-remote-tools.txt` (next to
+  `Get-HomeDeviceInventory.ps1`) when the MSP adds or retires an RMM/remote-support product.
+
 Deprecated or superseded scripts should be retained in designated locations rather
 than removed outright to preserve context.
 
@@ -122,11 +136,13 @@ Copy the toolkit **without `_archive`** (it holds superseded scripts and unsigne
 must never reach a client machine):
 
 ```powershell
-robocopy "<repo>" "E:\MSP-Toolkit" *.ps1 /S /XD _archive .git
+robocopy "<repo>" "E:\MSP-Toolkit" *.ps1 approved-remote-tools.txt /S /XD _archive .git
 ```
 
 `git archive` and GitHub "Download ZIP" already leave `_archive` out (`.gitattributes`).
 A flat folder (all `.ps1` files side by side) also works: the bundle looks next to itself first.
+Keep `approved-remote-tools.txt` in the same folder as `Get-HomeDeviceInventory.ps1`; without
+it, our own RMM agent is flagged like any other remote-access tool.
 
 ### 2. Allow the scripts to run (non-managed home PCs)
 
@@ -154,9 +170,18 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\security-operations\di
 ```
 
 Useful options: `-HomeSsid "<wifi name>"` (PC is wired), `-OnlineUpdateSearch` (live Windows
-Update query), `-ApprovedRemoteTool ScreenConnect,Kaseya` (our own RMM tools are not flagged),
+Update query), `-ApprovedRemoteTool Kaseya,ScreenConnect` (replaces the approved list for this run, see below),
 `-AllUsers` (admin: other users' browsers/software), `-Skip Get-HomeNetworkMap`,
 `-OutputPath E:\Results` (default `%TEMP%\MSP-Toolkit`). The bundle prints the results folder at the end.
+
+**Approved remote tools.** Remote-access tools the MSP deploys on purpose are listed in
+`endpoint-systems/audit/software-inventory/approved-remote-tools.txt` (one name per line,
+`#` comments; **Kaseya** by default). `Get-HomeDeviceInventory.ps1` reports matches as INFO
+instead of WARN/High, and records which list it used in an `Approved remote tools` finding.
+`-ApprovedRemoteTool` (on the bundle or the script) **replaces** the file for that run, so
+include Kaseya again if it should stay approved, e.g. `-ApprovedRemoteTool Kaseya,ScreenConnect`
+when the client's own IT uses ScreenConnect. Change the file only when the MSP's own tooling
+changes; confirm a client's tool per audit with the parameter.
 
 Or run scripts one at a time (prefix each with `powershell.exe -NoProfile -ExecutionPolicy Bypass -File`):
 

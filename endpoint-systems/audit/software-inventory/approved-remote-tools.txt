@@ -1,0 +1,13 @@
+# Remote-access tools we (the MSP) use on purpose. Get-HomeDeviceInventory.ps1 reports
+# matching tools as INFO instead of WARN/High.
+#
+# One name (or part of a name) per line, matched against the tool names in the script's
+# remote-tool list and the installed program names, case-insensitive. Blank lines and lines
+# starting with # are ignored.
+#
+# Keep this file next to Get-HomeDeviceInventory.ps1 (also when copying to a USB stick).
+# -ApprovedRemoteTool on the command line replaces this list for that run.
+#
+# Only add tools the MSP itself deploys. A client's own tool is confirmed per audit
+# with -ApprovedRemoteTool, not here.
+Kaseya
