@@ -1,0 +1,3 @@
+# Archived/untrusted files never ship in packaged copies (git archive, "Download ZIP").
+_archive/ export-ignore
+_archive/** export-ignore
