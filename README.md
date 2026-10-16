@@ -131,6 +131,15 @@ Exit codes: `0` done, `1` nothing changed (not admin / not confirmed / non-inter
 | `MSPToolkit.Common.psm1` | `endpoint-systems/utilities/` | Shared helper source (embedded into each script; not run directly) | Read-Only | - | 5.1 | - |
 | `Sync-MSPEmbeddedHelper.ps1` | `endpoint-systems/utilities/` | Regenerates / verifies (`-Check`) the embedded helper copies | Safe (repo files only) | No | 5.1 | - |
 
+**D1 backup folders.** `Clear-WindowsUpdateCache.ps1` renames the caches to
+`C:\Windows\SoftwareDistribution.old-<yyyyMMdd-HHmmss>` and
+`C:\Windows\System32\catroot2.old-<yyyyMMdd-HHmmss>` and never deletes them. Running it again is
+safe: it picks a new name (adding `-2`, `-3` ... if needed) before any service is stopped, and
+never reuses or overwrites an earlier `.old` or `.old-<timestamp>` folder. The `.old` folders
+are only needed to undo the reset. **Once Windows Update has installed updates successfully
+again, they can be deleted** (as administrator) to free disk space. The script lists any it
+finds from earlier runs.
+
 Scripts not listed here have not yet been reviewed against the standards (Batches B-E).
 Superseded scripts and unsigned binaries are in `_archive/` (see `_archive/README.md`).
 
@@ -257,7 +266,9 @@ There are two helper sources, one per script language:
 
 1. Edit the helper source only, never a generated region.
 2. Run `.\endpoint-systems\utilities\Sync-MSPEmbeddedHelper.ps1` to regenerate every copy
-   (`.ps1` as UTF-8 with BOM + CRLF; `.sh` as UTF-8 without BOM + LF).
+   (`.ps1` as UTF-8 with BOM, keeping each file's line endings: CRLF on a Windows checkout, LF on
+   macOS/Linux; `.sh` always as UTF-8 without BOM + LF). It runs on Windows PowerShell 5.1 and on
+   pwsh 7 on macOS/Linux.
 3. Before committing, run `.\endpoint-systems\utilities\Sync-MSPEmbeddedHelper.ps1 -Check`.
    It exits **1** if any embedded copy was hand-edited (hash mismatch) or is out of date, or if a
    `.sh` file has CR line endings or a BOM. `.gitattributes` keeps `*.sh` at LF on every checkout.
@@ -287,14 +298,23 @@ Category/Check text on every platform so their IDs match. Export file names:
 
 ### Development checks (not for client machines)
 
-`.\tests\Invoke-ToolkitTests.ps1` runs everything: PowerShell parser (5.1 and 7), PSScriptAnalyzer
+`tests/Invoke-ToolkitTests.ps1` runs everything: PowerShell parser (5.1 and 7), PSScriptAnalyzer
 (Write-Host allowed), `bash -n`, ShellCheck, a bash 4+ / GNU-only construct scan, the embedded-helper
-check plus a tamper test, the bash helper unit tests in WSL (as a normal user and as root, under
-bash 5 and bash 3.2.57 when built at `/opt/bash-3.2`), a JSON escaping round-trip into PowerShell,
-finding-ID parity between bash and PowerShell, schema validation, and the PowerShell helper unit
-tests, then runtime smoke tests of the Windows scripts on this PC. Limit the static checks with
-`-Path folder1,folder2`; skip the runtime tests with `-SkipRuntime`. Validate any result folder
-with `.\tests\Test-MSPResultSchema.ps1 -Path <folder>`.
+check plus a tamper test, the bash helper unit tests (under every bash it finds, including bash
+3.2.57), a JSON escaping round-trip into PowerShell, finding-ID and MAC-vendor parity between bash
+and PowerShell, schema validation, the PowerShell helper unit tests, logic tests with mocked paths
+(D1 repeat runs), then runtime smoke tests of the scripts for the platform it runs on.
+
+| Run on | Command | Not available there (reported as NOT RUN, with the reason) |
+|---|---|---|
+| Windows | `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Invoke-ToolkitTests.ps1` | bash steps need WSL (`-Distro`, `-TestUser`); macOS/Linux runtime cases |
+| macOS | `pwsh -NoProfile -File tests/Invoke-ToolkitTests.ps1` | Windows PowerShell 5.1 steps; Windows/Linux runtime cases; bash tests as root (never uses sudo) |
+| Linux | `pwsh -NoProfile -File tests/Invoke-ToolkitTests.ps1` | Windows PowerShell 5.1 steps; Windows/macOS runtime cases; bash 3.2 unless built at `/opt/bash-3.2` |
+
+On a Mac, `/bin/bash` is the real bash 3.2.57 that ships with macOS, so the bash scripts are run
+under it for real, not only parse-checked. Limit the static checks with `-Path folder1,folder2`;
+skip the runtime tests with `-SkipRuntime`. Validate any result folder with
+`tests/Test-MSPResultSchema.ps1 -Path <folder>`.
 
 **The harness is passive by default.** Runtime cases that would send traffic beyond the PC
 (A2 ping sweep or reverse DNS, A4 `-ScanLan`, A7 router/SSDP, A6 `-Online`, D2 connectivity

@@ -18,6 +18,9 @@
          needs it, and stopping it could break a program installation in progress.
       4. Renames  C:\Windows\SoftwareDistribution  ->  SoftwareDistribution.old-<yyyyMMdd-HHmmss>
                   C:\Windows\System32\catroot2     ->  catroot2.old-<yyyyMMdd-HHmmss>
+         Repeat runs are safe: earlier .old / .old-<timestamp> folders are never reused or
+         overwritten. The new name is chosen (with a -2, -3 ... suffix if it is somehow
+         taken) while planning, before any service is stopped.
       5. Starts the services that were running before, plus Windows Update and Cryptographic
          Services so Windows creates fresh folders.
       6. Checks: services running, both folders recreated, Windows Update COM API available.
@@ -58,7 +61,7 @@
     Prerequisites : Windows PowerShell 5.1 | Admin: Yes for changes (No for -WhatIf) | Modules: built-in only
     Exit codes    : 0 changes made and checked (or -WhatIf); 1 nothing changed (not admin, not
                     confirmed, non-interactive without -Force); 2 a step failed (see findings)
-    Version       : 2.0.0
+    Version       : 2.1.0
     Limitations   : Does not repair Windows component store corruption (use DISM /RestoreHealth
                     and sfc /scannow for that). Group Policy or security software that blocks the
                     update services is reported, not changed.
@@ -849,7 +852,7 @@ function Confirm-MSPChange {
 #endregion MSPHelper:Change
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '2.0.0'
+$ScriptVersion = '2.1.0'
 # Read -WhatIf into our own flag, then switch it off so it cannot reach the log writes and
 # module loading. The dry run prints its own "What if:" lines with Write-MSPWhatIf.
 $dryRun = [bool]$WhatIfPreference
@@ -886,6 +889,36 @@ function Get-FolderSummary {
     $bytes = ($files | Measure-Object -Property Length -Sum).Sum
     if (-not $bytes) { $bytes = 0 }
     return [pscustomobject]@{ Files = $files.Count; MB = [math]::Round($bytes / 1MB, 1); Partial = (@($readErrors).Count -gt 0) }
+}
+
+function Get-FreeBackupName {
+    <#
+        First unused backup name next to the folder: <Name>.old-<stamp>, then <Name>.old-<stamp>-2,
+        -3, ... An earlier backup (timestamped, or a plain <Name>.old from a manual fix or another
+        tool) is never reused or overwritten, and a file with that name counts as taken too.
+    #>
+    param([string]$Parent, [string]$Name, [string]$Stamp)
+    $candidate = '{0}.old-{1}' -f $Name, $Stamp
+    $n = 2
+    while (Test-Path -LiteralPath (Join-Path $Parent $candidate)) {
+        if ($n -gt 99) { throw ('No free backup name for {0} in {1} (tried up to -99).' -f $Name, $Parent) }
+        $candidate = '{0}.old-{1}-{2}' -f $Name, $Stamp, $n
+        $n++
+    }
+    return $candidate
+}
+
+function Get-CacheRenamePlan {
+    <#
+        One entry per existing cache folder with a backup name that is free right now. Called
+        while planning, before any service is stopped, so a name clash can never surface after
+        the services are down.
+    #>
+    param([object[]]$Folder, [string]$Stamp)
+    foreach ($f in $Folder) {
+        if (-not (Test-Path -LiteralPath $f.Path -PathType Container)) { continue }
+        [pscustomobject]@{ Folder = $f; NewName = (Get-FreeBackupName -Parent (Split-Path -Path $f.Path -Parent) -Name $f.Name -Stamp $Stamp) }
+    }
 }
 
 function Wait-ServiceStatus {
@@ -968,12 +1001,17 @@ $runningBefore = @($before | Where-Object { $_.Status -eq 'Running' } | ForEach-
 $toStop = @($before | Where-Object { $_.Status -notin @('Stopped', 'NotFound') } | ForEach-Object { $_.Name })
 $toStart = @($serviceNames | Where-Object { ($runningBefore -contains $_) -or ($_ -in @('cryptSvc', 'wuauserv')) } |
         Where-Object { ($before | Where-Object Name -eq $_).StartType -notin @('Disabled', '') })
-$renames = foreach ($f in $folders) {
-    if (Test-Path -LiteralPath $f.Path) {
-        [pscustomobject]@{ Folder = $f; NewName = ('{0}.old-{1}' -f $f.Name, $stamp) }
-    }
+$renames = @()
+try {
+    $renames = @(Get-CacheRenamePlan -Folder $folders -Stamp $stamp)
 }
-$renames = @($renames)
+catch {
+    # Only possible with 98 same-second backups in place; refuse before touching anything.
+    Add-MSPFinding -Check 'Backup name' -Category 'Safety' -Status FAIL -Detail $_.Exception.Message `
+        -Recommendation 'Delete old SoftwareDistribution.old* / catroot2.old* folders that are no longer needed, then run again.'
+    Complete-MSPRun -OutputPath $OutputPath
+    exit 2
+}
 
 $plan = @()
 if ($toStop.Count -gt 0) { $plan += ('Stop services: {0}' -f ($toStop -join ', ')) } else { $plan += 'Stop services: none are running' }
@@ -1048,6 +1086,14 @@ $renamed = New-Object System.Collections.Generic.List[object]
 foreach ($r in $renames) {
     if (-not $PSCmdlet.ShouldProcess($r.Folder.Path, ('Rename to {0}' -f $r.NewName))) { continue }
     try {
+        # The name was free when planned; if something created it since, take the next free one
+        # rather than fail while the services are stopped.
+        $parent = Split-Path -Path $r.Folder.Path -Parent
+        if (Test-Path -LiteralPath (Join-Path $parent $r.NewName)) {
+            $planned = $r.NewName
+            $r.NewName = Get-FreeBackupName -Parent $parent -Name $r.Folder.Name -Stamp $stamp
+            Write-MSPLog -Level WARN -Message ('{0} appeared after planning; using {1} instead.' -f $planned, $r.NewName)
+        }
         Rename-Item -LiteralPath $r.Folder.Path -NewName $r.NewName -ErrorAction Stop
         $renamed.Add($r)
         Add-MSPFinding -Check ('Rename {0}' -f $r.Folder.Name) -Category 'Change' -Status PASS -Detail ('{0} -> {1}' -f $r.Folder.Path, $r.NewName) `

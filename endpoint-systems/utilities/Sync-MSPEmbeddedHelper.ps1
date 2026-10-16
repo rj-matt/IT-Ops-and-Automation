@@ -20,9 +20,10 @@
 
     Everything between them is replaced with the named sections of the matching source (Core is
     always included first), a "DO NOT EDIT" notice and a SHA256 hash of the embedded code.
-    PowerShell scripts are written as UTF-8 with BOM and CRLF line endings (Windows PowerShell
-    5.1 needs the BOM); bash scripts as UTF-8 without BOM and LF line endings (a BOM or CR
-    breaks bash and the #! line).
+    PowerShell scripts are written as UTF-8 with BOM (Windows PowerShell 5.1 needs it) and keep
+    the line endings they already have: CRLF on a Windows checkout, LF on macOS/Linux (git
+    stores LF either way, so regenerating never turns into a whole-file diff). Bash scripts are
+    always UTF-8 without BOM and LF (a BOM or CR breaks bash and the #! line).
 
     -Check mode changes nothing. It exits with code 1 when any script:
       - was edited by hand inside the generated region (hash no longer matches its content),
@@ -56,7 +57,7 @@
     Scope         : Rewrites only the generated region of .ps1 and .sh files in this repository.
     Risk Level    : Safe -- edits repository files only; supports -WhatIf; -Check is read-only.
     Prerequisites : Windows PowerShell 5.1 or PowerShell 7 | Admin: No | Modules: none
-    Version       : 2.0.0
+    Version       : 2.1.0
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -243,7 +244,10 @@ foreach ($file in $scripts) {
     $before = if ($beginIndex -gt 0) { $lines[0..($beginIndex - 1)] } else { @() }
     $after = if ($endIndex -lt $lines.Count - 1) { $lines[($endIndex + 1)..($lines.Count - 1)] } else { @() }
     $newText = ((@($before) + $expected.Text + @($after)) -join "`n")
-    if ($language.NewLine -ne "`n") { $newText = $newText -replace "`n", $language.NewLine }
+    # .ps1: keep the file's own line endings (CRLF only if it already uses CRLF).
+    $newLine = $language.NewLine
+    if ($file.Extension -eq '.ps1' -and -not $raw.Contains("`r`n")) { $newLine = "`n" }
+    if ($newLine -ne "`n") { $newText = $newText -replace "`n", $newLine }
     if ($PSCmdlet.ShouldProcess($relative, 'Regenerate embedded MSPToolkit helper region')) {
         [System.IO.File]::WriteAllText($file.FullName, $newText, $language.Encoding)
         Write-Host ('[UPDATED]  {0}' -f $relative) -ForegroundColor Yellow

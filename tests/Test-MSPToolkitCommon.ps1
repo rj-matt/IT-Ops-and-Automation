@@ -10,10 +10,12 @@
 
 .EXAMPLE
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Test-MSPToolkitCommon.ps1
+    pwsh -NoProfile -File tests/Test-MSPToolkitCommon.ps1          (macOS / Linux)
 
 .NOTES
-    Risk Level    : Safe -- writes a log under %TEMP%\MSP-Toolkit and a temporary export folder
-    Prerequisites : Windows PowerShell 5.1 or PowerShell 7 on Windows | Admin: No
+    Risk Level    : Safe -- writes a log under the toolkit log folder and a temporary export folder
+    Prerequisites : Windows PowerShell 5.1, or PowerShell 7 on Windows, macOS or Linux | Admin: No
+                    (the network cmdlets are faked, so the subnet tests also run off Windows)
     Exit code     : 0 all passed, 1 any failure
     Version       : 1.0.0
 #>
@@ -27,7 +29,8 @@ $here = $PSScriptRoot
 if (-not $here) { $here = Split-Path -Path $MyInvocation.MyCommand.Path -Parent }
 # Load the helpers the way scripts embed them: in this script's own scope. Dynamic scoping of
 # $ErrorActionPreference inside Invoke-MSPCheck depends on that, as it does in real scripts.
-$moduleText = [System.IO.File]::ReadAllText((Join-Path $here '..\endpoint-systems\utilities\MSPToolkit.Common.psm1'))
+$modulePath = (Resolve-Path -LiteralPath (Join-Path $here '../endpoint-systems/utilities/MSPToolkit.Common.psm1')).ProviderPath
+$moduleText = [System.IO.File]::ReadAllText($modulePath)
 # Export-ModuleMember only works inside a real module; scripts never contain it.
 . ([scriptblock]::Create(($moduleText -replace '(?m)^Export-ModuleMember.*$', '')))
 
@@ -42,16 +45,33 @@ function Assert-True {
 
 
 function Get-Run { return $script:MSPRun }
+# Child sessions use the same PowerShell as this test (powershell.exe on 5.1, pwsh on 7).
+$psExe = (Get-Process -Id $PID).Path
+$onWindows = ($PSVersionTable.PSEdition -ne 'Core') -or $IsWindows
 
 # --- Run setup and result object ---------------------------------------------------------
 $null = Initialize-MSPRun -ScriptName 'Test-MSPToolkitCommon' -ScriptVersion '1.0.0' -CheckId 'T2' -RiskLevel 'Read-Only' `
     -Parameters @{ Switch = [switch]$true; List = @('a', 'b') } -AdminSections 'TPM' 6>$null
 $run = Get-Run
-Assert-True 'platform is Windows' ($run.Platform -eq 'Windows') $run.Platform
-Assert-True 'OS version mentions Windows' ($run.OSVersion -like 'Windows*') $run.OSVersion
+if ($onWindows) {
+    Assert-True 'platform is Windows' ($run.Platform -eq 'Windows') $run.Platform
+    Assert-True 'OS version mentions Windows' ($run.OSVersion -like 'Windows*') $run.OSVersion
+    Assert-True 'log under %TEMP%\MSP-Toolkit' ($run.LogPath -like (Join-Path $env:TEMP 'MSP-Toolkit\Test-MSPToolkitCommon_*')) $run.LogPath
+}
+elseif ($IsMacOS) {
+    Assert-True 'platform is macOS' ($run.Platform -eq 'macOS') $run.Platform
+    Assert-True 'OS version like the bash helper (macOS x.y)' ($run.OSVersion -match '^macOS \d+(\.\d+)*$') $run.OSVersion
+}
+else {
+    Assert-True 'platform is Linux' ($run.Platform -eq 'Linux') $run.Platform
+}
+if (-not $onWindows) {
+    $base = $env:TMPDIR
+    if (-not $base) { $base = '/tmp' }
+    Assert-True 'log under ${TMPDIR:-/tmp}/msp-toolkit (same as bash)' ($run.LogPath -like (Join-Path $base 'msp-toolkit/Test-MSPToolkitCommon_*')) $run.LogPath
+}
 Assert-True 'shell names PowerShell' ($run.Shell -like '*PowerShell*') $run.Shell
 Assert-True 'host is short name' ($run.Host -notmatch '\.') $run.Host
-Assert-True 'log under %TEMP%\MSP-Toolkit' ($run.LogPath -like (Join-Path $env:TEMP 'MSP-Toolkit\Test-MSPToolkitCommon_*')) $run.LogPath
 Assert-True 'switch parameter stored as text' ($run.Parameters['Switch'] -eq 'True') $run.Parameters['Switch']
 Assert-True 'array parameter joined' ($run.Parameters['List'] -eq 'a, b') $run.Parameters['List']
 
@@ -90,7 +110,7 @@ Assert-True 'export wrote JSON' ($json.Count -eq 1)
 $csvHeader = (Get-Content -LiteralPath (Get-ChildItem -LiteralPath $out -Filter '*_findings.csv').FullName -TotalCount 1)
 Assert-True 'findings CSV header matches bash' ($csvHeader -eq '"CheckId","ScriptName","Platform","Host","Timestamp","Id","Category","Check","Status","Severity","Target","Detail","Recommendation"') $csvHeader
 $validator = Join-Path $here 'Test-MSPResultSchema.ps1'
-$null = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $validator -Path $out
+$null = & $psExe -NoProfile -ExecutionPolicy Bypass -File $validator -Path $out
 Assert-True 'export passes schema validation' ($LASTEXITCODE -eq 0)
 Remove-Item -LiteralPath $out -Recurse -Force
 
@@ -136,8 +156,7 @@ Assert-True 'no gateway -> ERROR with plain reason' ($last.Status -eq 'ERROR' -a
 foreach ($name in 'Get-NetRoute', 'Get-NetAdapter', 'Get-NetIPAddress', 'Get-NetIPInterface', 'Get-DnsClientServerAddress') { Remove-Item -Path ('function:global:{0}' -f $name) }
 
 # --- Confirmation for state changes (Change section) -------------------------------------
-# Each case runs in a child Windows PowerShell so the session type is controlled exactly.
-$modulePath = (Resolve-Path (Join-Path $here '..\endpoint-systems\utilities\MSPToolkit.Common.psm1')).ProviderPath
+# Each case runs in a child PowerShell of the same version so the session type is controlled exactly.
 $childTemplate = @'
 $t = [System.IO.File]::ReadAllText('{0}') -replace '(?m)^Export-ModuleMember.*$', ''
 . ([scriptblock]::Create($t))
@@ -146,11 +165,11 @@ $ok = Confirm-MSPChange -Question 'Test?' {1} 6>$null
 $f = $MSPRun.Findings.ToArray()[-1]
 'RESULT={{0}}|{{1}}|{{2}}' -f $ok, $f.Status, (Test-MSPInteractive)
 '@
-$nonInteractive = & powershell.exe -NoProfile -NonInteractive -Command ($childTemplate -f $modulePath, '') 2>&1 | Where-Object { "$_" -like 'RESULT=*' }
+$nonInteractive = & $psExe -NoProfile -NonInteractive -Command ($childTemplate -f $modulePath, '') 2>&1 | Where-Object { "$_" -like 'RESULT=*' }
 Assert-True 'confirm refuses a -NonInteractive session' ($nonInteractive -eq 'RESULT=False|SKIPPED|False') "$nonInteractive"
-$piped = 'YES' | & powershell.exe -NoProfile -Command ($childTemplate -f $modulePath, '') 2>&1 | Where-Object { "$_" -like 'RESULT=*' }
+$piped = 'YES' | & $psExe -NoProfile -Command ($childTemplate -f $modulePath, '') 2>&1 | Where-Object { "$_" -like 'RESULT=*' }
 Assert-True 'confirm ignores YES piped into the session' ($piped -eq 'RESULT=False|SKIPPED|False') "$piped"
-$forced = & powershell.exe -NoProfile -NonInteractive -Command ($childTemplate -f $modulePath, '-Force') 2>&1 | Where-Object { "$_" -like 'RESULT=*' }
+$forced = & $psExe -NoProfile -NonInteractive -Command ($childTemplate -f $modulePath, '-Force') 2>&1 | Where-Object { "$_" -like 'RESULT=*' }
 Assert-True 'confirm with -Force proceeds and is recorded' ($forced -eq 'RESULT=True|INFO|False') "$forced"
 
 # --- Runspace pool cap -------------------------------------------------------------------
