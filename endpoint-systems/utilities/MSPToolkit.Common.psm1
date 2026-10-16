@@ -21,6 +21,8 @@
       Updates     Windows Update status via the Windows Update COM API, pending reboot detection
       LocalAdmin  Members of the local Administrators group (handles Entra ID / orphaned SIDs)
       Software    Installed programs from 64-bit, 32-bit and per-user uninstall registry keys
+      Change      For scripts that change state: interactive-session test, typed confirmation
+                  that refuses non-interactive runs without -Force, printed change plan
 
     Every section depends on Core. The sync tool always embeds Core first.
 
@@ -119,7 +121,7 @@ function Write-MSPLog {
     if (-not $script:MSPRun -or -not $script:MSPRun.LogPath -or $script:MSPRun.LogFailed) { return }
     $line = '{0} [{1}] {2}' -f (Get-Date).ToString('yyyy-MM-dd HH:mm:ss'), $Level, $Message
     try {
-        Add-Content -LiteralPath $script:MSPRun.LogPath -Value $line -Encoding UTF8 -ErrorAction Stop
+        Add-Content -LiteralPath $script:MSPRun.LogPath -Value $line -Encoding UTF8 -ErrorAction Stop -WhatIf:$false
     }
     catch {
         # Stop retrying after the first failure; the console output is still complete.
@@ -161,7 +163,7 @@ function Initialize-MSPRun {
     try {
         $logDir = Get-MSPLogFolder
         if (-not (Test-Path -LiteralPath $logDir)) {
-            $null = New-Item -ItemType Directory -Path $logDir -Force -ErrorAction Stop
+            $null = New-Item -ItemType Directory -Path $logDir -Force -ErrorAction Stop -WhatIf:$false
         }
         $logPath = Join-Path -Path $logDir -ChildPath ('{0}_{1}_{2}.log' -f $ScriptName, $hostName, $start.ToString('yyyyMMdd-HHmmss'))
     }
@@ -579,7 +581,7 @@ function Export-MSPResult {
     param([Parameter(Mandatory)][string]$OutputPath)
     $run = $script:MSPRun
     if (-not (Test-Path -LiteralPath $OutputPath)) {
-        $null = New-Item -ItemType Directory -Path $OutputPath -Force -ErrorAction Stop
+        $null = New-Item -ItemType Directory -Path $OutputPath -Force -ErrorAction Stop -WhatIf:$false
     }
     $folder = (Resolve-Path -LiteralPath $OutputPath).ProviderPath
     $base = '{0}_{1}_{2}' -f $run.ScriptName, $run.Host, $run.StartTime.ToString('yyyyMMdd-HHmmss')
@@ -594,14 +596,14 @@ function Export-MSPResult {
     $run.Findings | Select-Object @{ n = 'CheckId'; e = { $run.CheckId } }, @{ n = 'ScriptName'; e = { $run.ScriptName } },
     @{ n = 'Platform'; e = { $run.Platform } }, @{ n = 'Host'; e = { $run.Host } }, @{ n = 'Timestamp'; e = { $timestamp } },
     Id, Category, Check, Status, Severity, Target, Detail, Recommendation |
-        Export-Csv -LiteralPath $csvPath -NoTypeInformation -Encoding UTF8
+        Export-Csv -LiteralPath $csvPath -NoTypeInformation -Encoding UTF8 -WhatIf:$false
 
     $dataPaths = @()
     foreach ($name in $run.Data.Keys) {
         $rows = @($run.Data[$name])
         if ($rows.Count -eq 0) { continue }
         $dataPath = Join-Path -Path $folder -ChildPath ('{0}_{1}.csv' -f $base, ($name -replace '[^A-Za-z0-9]+', ''))
-        $rows | Export-Csv -LiteralPath $dataPath -NoTypeInformation -Encoding UTF8
+        $rows | Export-Csv -LiteralPath $dataPath -NoTypeInformation -Encoding UTF8 -WhatIf:$false
         $dataPaths += $dataPath
     }
 
@@ -1565,5 +1567,85 @@ function Get-MSPInstalledSoftware {
     return @($items | Sort-Object -Property Name)
 }
 #endregion MSPHelper:Software
+
+#region MSPHelper:Change
+function Test-MSPInteractive {
+    <#
+        True when a person can answer a prompt: a console (or ISE / VS Code) with keyboard input.
+        False under RMM agents, scheduled tasks, "powershell -NonInteractive" and redirected input.
+    #>
+    try {
+        if ([Console]::IsInputRedirected) { return $false }
+    }
+    catch {
+        return $false
+    }
+    if (-not [Environment]::UserInteractive) { return $false }
+    if ([Environment]::GetCommandLineArgs() -match '^-NonI') { return $false }
+    return ($Host.Name -in @('ConsoleHost', 'Windows PowerShell ISE Host', 'Visual Studio Code Host'))
+}
+
+function Write-MSPChangePlan {
+    <# Prints and logs the numbered list of changes before anything is changed. #>
+    param(
+        [Parameter(Mandatory)][string[]]$Step,
+        [string]$Title = 'Planned changes'
+    )
+    Write-MSPSection -Title $Title
+    $n = 0
+    foreach ($s in $Step) {
+        $n++
+        Write-Host ('  {0}. {1}' -f $n, $s)
+        Write-MSPLog -Message ('Plan {0}: {1}' -f $n, $s)
+    }
+}
+
+function Write-MSPWhatIf {
+    <#
+        Prints one "What if:" line for a change a dry run would make, and logs it.
+        Scripts that change state read -WhatIf into their own $dryRun flag at the very top and
+        then set $WhatIfPreference = $false. Otherwise -WhatIf also reaches the helpers' log
+        writes and module auto-loading, which floods the screen with "What if:" noise and
+        leaves no log of the dry run.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Target,
+        [Parameter(Mandatory)][string]$Action
+    )
+    Write-Host ('What if: {0} on "{1}".' -f $Action, $Target) -ForegroundColor DarkGray
+    Write-MSPLog -Message ('What if: {0} on "{1}"' -f $Action, $Target)
+}
+
+function Confirm-MSPChange {
+    <#
+        Asks the technician to type YES before changes are made. Returns $true to go ahead.
+          -Force                       : no question (logged and recorded as a finding).
+          not interactive, no -Force   : refuses (SKIPPED finding), so an RMM job or pasted
+                                         command can never make changes by accident.
+        Callers skip this entirely under -WhatIf, which changes nothing.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Question,
+        [switch]$Force
+    )
+    if ($Force) {
+        Add-MSPFinding -Check 'Confirmation' -Category 'Safety' -Status INFO -Detail 'Not asked: -Force was given.'
+        return $true
+    }
+    if (-not (Test-MSPInteractive)) {
+        Add-MSPFinding -Check 'Confirmation' -Category 'Safety' -Status SKIPPED `
+            -Detail 'No changes made: this session cannot answer a confirmation prompt (non-interactive) and -Force was not given.' `
+            -Recommendation 'Run it in an interactive PowerShell window, or add -Force once you are sure (use -WhatIf first to see the plan).'
+        return $false
+    }
+    Write-Host ''
+    Write-Host ('  {0}' -f $Question) -ForegroundColor Yellow
+    $answer = Read-Host '  Type YES to continue (anything else cancels)'
+    Write-MSPLog -Message ('Confirmation answer: "{0}"' -f $answer)
+    if ($answer -ceq 'YES') { return $true }
+    Add-MSPFinding -Check 'Confirmation' -Category 'Safety' -Status INFO -Detail 'Cancelled by the technician. No changes were made.'
+    return $false
+}
+#endregion MSPHelper:Change
 
 Export-ModuleMember -Function *-MSP*

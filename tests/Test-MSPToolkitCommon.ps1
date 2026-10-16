@@ -135,6 +135,24 @@ Assert-True 'no gateway -> ERROR with plain reason' ($last.Status -eq 'ERROR' -a
 
 foreach ($name in 'Get-NetRoute', 'Get-NetAdapter', 'Get-NetIPAddress', 'Get-NetIPInterface', 'Get-DnsClientServerAddress') { Remove-Item -Path ('function:global:{0}' -f $name) }
 
+# --- Confirmation for state changes (Change section) -------------------------------------
+# Each case runs in a child Windows PowerShell so the session type is controlled exactly.
+$modulePath = (Resolve-Path (Join-Path $here '..\endpoint-systems\utilities\MSPToolkit.Common.psm1')).ProviderPath
+$childTemplate = @'
+$t = [System.IO.File]::ReadAllText('{0}') -replace '(?m)^Export-ModuleMember.*$', ''
+. ([scriptblock]::Create($t))
+$null = Initialize-MSPRun -ScriptName 'confirm-test' -ScriptVersion '1.0.0' -CheckId 'T3' -RiskLevel 'Safe' 6>$null
+$ok = Confirm-MSPChange -Question 'Test?' {1} 6>$null
+$f = $MSPRun.Findings.ToArray()[-1]
+'RESULT={{0}}|{{1}}|{{2}}' -f $ok, $f.Status, (Test-MSPInteractive)
+'@
+$nonInteractive = & powershell.exe -NoProfile -NonInteractive -Command ($childTemplate -f $modulePath, '') 2>&1 | Where-Object { "$_" -like 'RESULT=*' }
+Assert-True 'confirm refuses a -NonInteractive session' ($nonInteractive -eq 'RESULT=False|SKIPPED|False') "$nonInteractive"
+$piped = 'YES' | & powershell.exe -NoProfile -Command ($childTemplate -f $modulePath, '') 2>&1 | Where-Object { "$_" -like 'RESULT=*' }
+Assert-True 'confirm ignores YES piped into the session' ($piped -eq 'RESULT=False|SKIPPED|False') "$piped"
+$forced = & powershell.exe -NoProfile -NonInteractive -Command ($childTemplate -f $modulePath, '-Force') 2>&1 | Where-Object { "$_" -like 'RESULT=*' }
+Assert-True 'confirm with -Force proceeds and is recorded' ($forced -eq 'RESULT=True|INFO|False') "$forced"
+
 # --- Runspace pool cap -------------------------------------------------------------------
 $capped = $false
 try { $null = Invoke-MSPRunspacePool -InputObject @(1) -ScriptBlock { $args[0] } -ThrottleLimit 33 }

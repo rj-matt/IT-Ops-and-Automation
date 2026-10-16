@@ -68,7 +68,7 @@ param(
 
 #region MSPToolkit (generated) Sections=Core
 # DO NOT EDIT — regenerate with Sync-MSPEmbeddedHelper.ps1
-# Source: endpoint-systems/utilities/MSPToolkit.Common.psm1 | Sections: Core | SHA256: 153eb36cd58c32bcbf3bbabc3d4601c2b997aa22013dbb7257fa4f7a0f68c9ad
+# Source: endpoint-systems/utilities/MSPToolkit.Common.psm1 | Sections: Core | SHA256: 75e41e4c97747c4b54696e39056282bac01ba630bee10d9b0bed446fb2728602
 #region MSPHelper:Core
 # --- Run state ---------------------------------------------------------------------------
 # One toolkit script = one "run": one log file, one findings list, one optional export.
@@ -149,7 +149,7 @@ function Write-MSPLog {
     if (-not $script:MSPRun -or -not $script:MSPRun.LogPath -or $script:MSPRun.LogFailed) { return }
     $line = '{0} [{1}] {2}' -f (Get-Date).ToString('yyyy-MM-dd HH:mm:ss'), $Level, $Message
     try {
-        Add-Content -LiteralPath $script:MSPRun.LogPath -Value $line -Encoding UTF8 -ErrorAction Stop
+        Add-Content -LiteralPath $script:MSPRun.LogPath -Value $line -Encoding UTF8 -ErrorAction Stop -WhatIf:$false
     }
     catch {
         # Stop retrying after the first failure; the console output is still complete.
@@ -191,7 +191,7 @@ function Initialize-MSPRun {
     try {
         $logDir = Get-MSPLogFolder
         if (-not (Test-Path -LiteralPath $logDir)) {
-            $null = New-Item -ItemType Directory -Path $logDir -Force -ErrorAction Stop
+            $null = New-Item -ItemType Directory -Path $logDir -Force -ErrorAction Stop -WhatIf:$false
         }
         $logPath = Join-Path -Path $logDir -ChildPath ('{0}_{1}_{2}.log' -f $ScriptName, $hostName, $start.ToString('yyyyMMdd-HHmmss'))
     }
@@ -609,7 +609,7 @@ function Export-MSPResult {
     param([Parameter(Mandatory)][string]$OutputPath)
     $run = $script:MSPRun
     if (-not (Test-Path -LiteralPath $OutputPath)) {
-        $null = New-Item -ItemType Directory -Path $OutputPath -Force -ErrorAction Stop
+        $null = New-Item -ItemType Directory -Path $OutputPath -Force -ErrorAction Stop -WhatIf:$false
     }
     $folder = (Resolve-Path -LiteralPath $OutputPath).ProviderPath
     $base = '{0}_{1}_{2}' -f $run.ScriptName, $run.Host, $run.StartTime.ToString('yyyyMMdd-HHmmss')
@@ -624,14 +624,14 @@ function Export-MSPResult {
     $run.Findings | Select-Object @{ n = 'CheckId'; e = { $run.CheckId } }, @{ n = 'ScriptName'; e = { $run.ScriptName } },
     @{ n = 'Platform'; e = { $run.Platform } }, @{ n = 'Host'; e = { $run.Host } }, @{ n = 'Timestamp'; e = { $timestamp } },
     Id, Category, Check, Status, Severity, Target, Detail, Recommendation |
-        Export-Csv -LiteralPath $csvPath -NoTypeInformation -Encoding UTF8
+        Export-Csv -LiteralPath $csvPath -NoTypeInformation -Encoding UTF8 -WhatIf:$false
 
     $dataPaths = @()
     foreach ($name in $run.Data.Keys) {
         $rows = @($run.Data[$name])
         if ($rows.Count -eq 0) { continue }
         $dataPath = Join-Path -Path $folder -ChildPath ('{0}_{1}.csv' -f $base, ($name -replace '[^A-Za-z0-9]+', ''))
-        $rows | Export-Csv -LiteralPath $dataPath -NoTypeInformation -Encoding UTF8
+        $rows | Export-Csv -LiteralPath $dataPath -NoTypeInformation -Encoding UTF8 -WhatIf:$false
         $dataPaths += $dataPath
     }
 

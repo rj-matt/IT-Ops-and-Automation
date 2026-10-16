@@ -1,780 +1,1035 @@
-﻿#Requires -Version 5.1
-<#
+﻿<#
 .SYNOPSIS
-    Resets a corrupt or broken Outlook profile for a specified user.
+    Gives classic Outlook a fresh profile for the signed-in user: backs up the profile settings,
+    creates a NEW empty default profile and keeps the old one. The mail account must then be
+    added to the new profile by hand.
 
 .DESCRIPTION
-    This script safely diagnoses, backs up, and removes a corrupt Outlook profile,
-    then recreates a clean profile with proper registry configuration. Designed to
-    resolve Outlook launch failures, perpetual loading screens, repeated credential
-    prompts, and OST sync issues without requiring OS reinstall or full Office repair.
+    For classic Outlook (Microsoft 365 Apps / Office 2016-2021) problems that a new profile fixes:
+    Outlook will not open or hangs on "Loading profile", repeated password prompts, a corrupt
+    profile or OST, mailbox not updating.
 
-    Steps performed:
-      1. Pre-flight checks (Outlook running, profile exists, paths valid)
-      2. Collect and log current profile state for ticket documentation
-      3. Back up Outlook profile registry keys and local app data
-      4. Optionally back up the OST file (large -- skipped by default)
-      5. Terminate Outlook and related processes
-      6. Remove the corrupt profile registry entries
-      7. Recreate a clean default profile via registry
-      8. Produce a ticket-ready summary of all actions taken
+    What it does, in order:
+      1. Pre-flight (read-only): checks it is running as the affected user, finds the Outlook
+         profiles and the default profile, lists OST/PST data files and free disk space, and
+         checks whether Outlook is open.
+      2. Prints the plan and asks you to type YES (-Force skips the question; -WhatIf shows the
+         plan only).
+      3. If Outlook is open, asks the USER to close it and waits. It never closes Outlook itself
+         (that could lose an unsent message). A non-interactive run with Outlook open stops.
+      4. Exports the Outlook settings key (including all profiles) to a .reg file under
+         %LOCALAPPDATA%\MSP-Toolkit\Backups\OutlookProfile_<time>\ and writes the previous
+         default-profile name next to it.
+      5. Creates a new, EMPTY profile (default name Outlook-<yyyyMMdd>) and makes it the default.
+         Existing profiles, OST and PST files are not touched or deleted.
+      6. Prints the steps to finish (add the account) and to roll back.
 
-.PARAMETER TargetUser
-    The Windows username whose Outlook profile will be reset.
-    Defaults to the currently logged-on user.
+    THE NEW PROFILE HAS NO ACCOUNT. On the next start Outlook asks to add one: enter the user's
+    email address and sign in (Autodiscover fills in the server). If Outlook shows a profile list
+    instead, choose the new profile. PST files that were open in the old profile must be
+    re-opened (File > Open & Export > Open Outlook Data File). Shared mailboxes added by hand,
+    signatures stored in the profile, and other per-profile settings must be set up again.
 
-.PARAMETER ProfileName
-    The name of the Outlook profile to remove and recreate.
-    Defaults to "Outlook" (the standard default profile name).
+    Rollback: set the default profile back (the exact command is printed), or import the saved
+    .reg file with Outlook closed. The new profile can then be removed in Control Panel > Mail.
 
-.PARAMETER BackupRoot
-    Root folder where backup data will be saved.
-    Defaults to C:\MSP\Backups\OutlookProfileReset
+.PARAMETER Force
+    Do not ask for confirmation. Required for non-interactive runs. Even with -Force the script
+    stops if Outlook is open.
 
-.PARAMETER SkipOSTBackup
-    Switch. If specified, skips copying the OST file (recommended for large mailboxes).
-    OST will be re-downloaded from Exchange/M365 on first Outlook launch.
+.PARAMETER NewProfileName
+    Name for the new profile. Default: Outlook-<yyyyMMdd> (a number is added if it exists).
 
-.PARAMETER WhatIf
-    Switch. Simulates all actions without making any changes.
-    Use this to preview what the script will do before running for real.
+.PARAMETER CloseWaitMinutes
+    How long to wait for the user to close Outlook (1-30). Default 10.
+
+.PARAMETER OutputPath
+    Optional folder for JSON/CSV results (toolkit schema 2.0).
 
 .EXAMPLE
-    # Preview what the script will do -- no changes made
     .\Reset-OutlookProfile.ps1 -WhatIf
+    Pre-flight and plan only. Changes nothing.
 
 .EXAMPLE
-    # Reset Outlook for the currently logged-on user, skip OST backup
-    .\Reset-OutlookProfile.ps1 -SkipOSTBackup
-
-.EXAMPLE
-    # Reset a named profile for a specific user (run as admin)
-    .\Reset-OutlookProfile.ps1 -TargetUser "jsmith" -ProfileName "Outlook"
+    .\Reset-OutlookProfile.ps1
+    Run in a normal PowerShell window as the affected user (not "Run as administrator" with a
+    different account). Asks the user to close Outlook if needed, then asks for YES.
 
 .NOTES
-    Script Name   : Reset-OutlookProfile.ps1
-    Location      : cloud-services/m365/remediation/
-    Author        : MSP Automation Team
-    Version       : 1.0.0
-
-    RISK LEVEL    : MEDIUM
-      - Removes and recreates Outlook profile registry keys
-      - Does NOT delete PST files or modify Exchange/M365 mailbox data
-      - OST file is either backed up or left in place (never deleted)
-      - Outlook will re-sync from server on next launch
-      - Full backup is taken before any changes are made
-
-    PREREQUISITES :
-      - Run as the affected user OR as a local administrator
-      - Outlook must be installed (Microsoft 365 / Office 2016-2021)
-      - Target user must be logged on if running as admin for another user
-      - Internet/Exchange connectivity required for Outlook to re-sync after reset
-
-    SCOPE         :
-      - Affects only the named Outlook profile on the local machine
-      - No changes to Exchange Online, Azure AD, or the M365 tenant
-      - No changes to any other user profiles on this machine
-
-    TESTED ON     : Windows 10 / Windows 11, Microsoft 365 Apps
+    Purpose       : Replace a broken Outlook profile without deleting the old one.
+    Use Case      : Outlook will not open, hangs, keeps asking for a password, or stops syncing.
+    Scope         : The signed-in user's Outlook profile settings in HKCU. No mailbox, Microsoft
+                    365 tenant, OST or PST file is changed.
+    Risk Level    : Elevated -- changes which profile Outlook uses; the account must be added
+                    again by hand; reversible with the printed steps.
+    Prerequisites : Windows PowerShell 5.1 | Admin: No (run as the affected user) | Classic Outlook
+                    installed | Modules: built-in only
+    Exit codes    : 0 new profile created and set as default (or -WhatIf / nothing to do); 1 nothing
+                    changed (wrong user, not confirmed, Outlook still open, non-interactive without
+                    -Force); 2 a step failed (see findings)
+    Version       : 2.0.0
+    Limitations   : Classic Outlook only; the new Outlook for Windows does not use these profiles.
+                    Current user only: resetting another user's profile from an admin account is
+                    deliberately not supported (it would change the admin's own profile).
 #>
-
-[CmdletBinding(SupportsShouldProcess = $true)]
-param (
-    [Parameter()]
-    [string]$TargetUser = $env:USERNAME,
-
-    [Parameter()]
-    [string]$ProfileName = "Outlook",
-
-    [Parameter()]
-    [string]$BackupRoot = "C:\MSP\Backups\OutlookProfileReset",
-
-    [Parameter()]
-    [switch]$SkipOSTBackup
+[CmdletBinding(SupportsShouldProcess)]
+param(
+    [switch]$Force,
+    [ValidatePattern('^[^\\/:*?"<>|]{1,64}$')][string]$NewProfileName,
+    [ValidateRange(1, 30)][int]$CloseWaitMinutes = 10,
+    [string]$OutputPath
 )
 
-Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
+#region MSPToolkit (generated) Sections=Core,Change
+# DO NOT EDIT — regenerate with Sync-MSPEmbeddedHelper.ps1
+# Source: endpoint-systems/utilities/MSPToolkit.Common.psm1 | Sections: Core,Change | SHA256: ab51e62fe464996b1ba69106b38fcdc5cc974c2d2f441c6448772439d56c35e0
+#region MSPHelper:Core
+# --- Run state ---------------------------------------------------------------------------
+# One toolkit script = one "run": one log file, one findings list, one optional export.
+$script:MSPRun = $null
+$script:MSPSchemaVersion = '2.0'
+$script:MSPStatusOrder = @('PASS', 'WARN', 'FAIL', 'INFO', 'SKIPPED', 'ERROR')
+$script:MSPSeverityRank = @{ 'Critical' = 0; 'High' = 1; 'Medium' = 2; 'Low' = 3; 'Info' = 4 }
 
-# ============================================================
-# REGION: Initialization & Logging Setup
-# ============================================================
+function Get-MSPPlatform {
+    <# 'Windows', 'macOS' or 'Linux'. Windows PowerShell 5.1 has no $IsWindows; its edition is 'Desktop'. #>
+    if ($PSVersionTable.PSEdition -ne 'Core') { return 'Windows' }
+    if (Get-Variable -Name IsWindows -ValueOnly -ErrorAction SilentlyContinue) { return 'Windows' }
+    if (Get-Variable -Name IsMacOS -ValueOnly -ErrorAction SilentlyContinue) { return 'macOS' }
+    return 'Linux'
+}
 
-$ScriptVersion  = "1.0.0"
-$RunTimestamp   = Get-Date -Format "yyyyMMdd_HHmmss"
-$LogDir         = Join-Path $BackupRoot "$TargetUser`_$RunTimestamp"
-$LogFile        = Join-Path $LogDir "Reset-OutlookProfile_$RunTimestamp.log"
-$TicketSummary  = Join-Path $LogDir "TicketNotes_$RunTimestamp.txt"
-
-# Accumulate ticket notes throughout execution
-$script:TicketLines = [System.Collections.Generic.List[string]]::new()
-
-function Write-Log {
-    param(
-        [string]$Message,
-        [ValidateSet("INFO","WARN","ERROR","ACTION","SUCCESS","SKIP","DRYRUN")]
-        [string]$Level = "INFO"
-    )
-    $Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $Entry = "[$Timestamp] [$Level] $Message"
-    Write-Host $Entry -ForegroundColor $(
-        switch ($Level) {
-            "WARN"    { "Yellow" }
-            "ERROR"   { "Red" }
-            "ACTION"  { "Cyan" }
-            "SUCCESS" { "Green" }
-            "SKIP"    { "DarkGray" }
-            "DRYRUN"  { "Magenta" }
-            default   { "White" }
+function Get-MSPOSVersion {
+    <# Short OS description, matching what the bash helper reports ("macOS 15.1", PRETTY_NAME on Linux). #>
+    param([string]$Platform = (Get-MSPPlatform))
+    try {
+        if ($Platform -eq 'Windows') {
+            $cv = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop
+            $build = [int]$cv.CurrentBuildNumber
+            # ProductName still says "Windows 10" on Windows 11; the build number decides.
+            $name = [string]$cv.ProductName
+            if ($build -ge 22000) { $name = $name -replace 'Windows 10', 'Windows 11' }
+            $release = [string]$cv.DisplayVersion
+            if (-not $release) { $release = [string]$cv.ReleaseId }
+            return (('{0} {1} (build {2}.{3})' -f $name, $release, $build, $cv.UBR) -replace '\s+', ' ')
         }
-    )
-    if (Test-Path $LogDir) {
-        Add-Content -Path $LogFile -Value $Entry
+        if ($Platform -eq 'macOS') {
+            return ('macOS {0}' -f ([string](& sw_vers -productVersion 2>$null)).Trim())
+        }
+        $line = Get-Content -LiteralPath '/etc/os-release' -ErrorAction Stop | Where-Object { $_ -like 'PRETTY_NAME=*' } | Select-Object -First 1
+        if ($line) { return ($line -replace '^PRETTY_NAME=', '').Trim('"') }
+    }
+    catch {
+        Write-Verbose ('OS version lookup failed: {0}' -f $_.Exception.Message)
+    }
+    return $Platform
+}
+
+function Get-MSPLogFolder {
+    <# Windows: %TEMP%\MSP-Toolkit. macOS/Linux: ${TMPDIR:-/tmp}/msp-toolkit (same folder the bash scripts use). #>
+    if ((Get-MSPPlatform) -eq 'Windows') { return (Join-Path -Path $env:TEMP -ChildPath 'MSP-Toolkit') }
+    $base = $env:TMPDIR
+    if (-not $base) { $base = '/tmp' }
+    return (Join-Path -Path $base -ChildPath 'msp-toolkit')
+}
+
+function Test-MSPIsAdmin {
+    <# True when elevated: "Run as administrator" on Windows, root (sudo) on macOS/Linux. #>
+    try {
+        if ((Get-MSPPlatform) -ne 'Windows') { return ([string](& id -u) -eq '0') }
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+        return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    }
+    catch {
+        # If the OS cannot tell us, assume not elevated: admin-only checks are SKIPPED, nothing breaks.
+        return $false
     }
 }
 
-function Add-TicketNote {
-    param([string]$Line)
-    $script:TicketLines.Add($Line)
+function Get-MSPAdminTerm {
+    <# The word technicians see for elevation on this platform. #>
+    if ((Get-MSPPlatform) -eq 'Windows') { return 'administrator' }
+    return 'root (sudo)'
 }
 
-function Write-SectionHeader {
-    param([string]$Title)
-    $bar = "=" * 60
-    Write-Log ""
-    Write-Log $bar
-    Write-Log "  $Title"
-    Write-Log $bar
-    Add-TicketNote ""
-    Add-TicketNote "--- $Title ---"
+function Write-MSPLog {
+    <# Appends one line to the run log. Never throws: a full or locked disk must not stop a diagnostic. #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Message,
+        [ValidateSet('INFO', 'WARN', 'ERROR')][string]$Level = 'INFO'
+    )
+    if (-not $script:MSPRun -or -not $script:MSPRun.LogPath -or $script:MSPRun.LogFailed) { return }
+    $line = '{0} [{1}] {2}' -f (Get-Date).ToString('yyyy-MM-dd HH:mm:ss'), $Level, $Message
+    try {
+        Add-Content -LiteralPath $script:MSPRun.LogPath -Value $line -Encoding UTF8 -ErrorAction Stop -WhatIf:$false
+    }
+    catch {
+        # Stop retrying after the first failure; the console output is still complete.
+        $script:MSPRun.LogFailed = $true
+    }
 }
 
-# ============================================================
-# REGION: Pre-Flight Checks
-# ============================================================
+function Format-MSPParameter {
+    <# Turns a parameter dictionary into "Name=Value; Name=Value" for the log. #>
+    param([System.Collections.IDictionary]$Parameters)
+    if (-not $Parameters -or $Parameters.Count -eq 0) { return '(none)' }
+    $parts = foreach ($key in $Parameters.Keys) { '{0}={1}' -f $key, $Parameters[$key] }
+    return ($parts -join '; ')
+}
 
-Write-SectionHeader "Reset-OutlookProfile.ps1 -- Pre-Flight Checks"
-Write-Log "Script Version  : $ScriptVersion"
-Write-Log "Executed By     : $($env:USERNAME)"
-Write-Log "Target User     : $TargetUser"
-Write-Log "Profile Name    : $ProfileName"
-Write-Log "Backup Root     : $BackupRoot"
-Write-Log "Skip OST Backup : $($SkipOSTBackup.IsPresent)"
-Write-Log "WhatIf Mode     : $($WhatIfPreference -ne 'SilentlyContinue')"
+function Initialize-MSPRun {
+    <#
+        Starts a run: creates the log (see Get-MSPLogFolder), records start time, host, user,
+        version and parameters, and prints the banner. Call once at the top of every script.
+        -CheckId is the catalog ID (A1, B2, ...), identical for the Windows, macOS and Linux
+        versions of a script so reports can line their results up.
+        -AdminSections names the parts that need elevation, so the banner says so up front.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ScriptName,
+        [Parameter(Mandatory)][string]$ScriptVersion,
+        [Parameter(Mandatory)][ValidatePattern('^[A-Za-z][A-Za-z0-9-]*$')][string]$CheckId,
+        [Parameter(Mandatory)][ValidateSet('Read-Only', 'Safe', 'Elevated', 'Destructive')][string]$RiskLevel,
+        [System.Collections.IDictionary]$Parameters = @{},
+        [string]$Description = '',
+        [string[]]$AdminSections = @()
+    )
+    $start = Get-Date
+    $platform = Get-MSPPlatform
+    # Short host name on every platform (macOS can report "name.local").
+    $hostName = ([Environment]::MachineName -split '\.')[0]
+    $logPath = $null
+    try {
+        $logDir = Get-MSPLogFolder
+        if (-not (Test-Path -LiteralPath $logDir)) {
+            $null = New-Item -ItemType Directory -Path $logDir -Force -ErrorAction Stop -WhatIf:$false
+        }
+        $logPath = Join-Path -Path $logDir -ChildPath ('{0}_{1}_{2}.log' -f $ScriptName, $hostName, $start.ToString('yyyyMMdd-HHmmss'))
+    }
+    catch {
+        $logPath = $null
+    }
 
-Add-TicketNote "OUTLOOK PROFILE RESET"
-Add-TicketNote "Executed: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-Add-TicketNote "Technician: $($env:USERNAME)"
-Add-TicketNote "Target User: $TargetUser"
-Add-TicketNote "Profile Name: $ProfileName"
-Add-TicketNote "Machine: $($env:COMPUTERNAME)"
+    # Copy parameters to plain strings so the log and JSON never hold live objects.
+    $paramCopy = [ordered]@{}
+    foreach ($key in $Parameters.Keys) {
+        $value = $Parameters[$key]
+        if ($value -is [System.Management.Automation.SwitchParameter]) { $value = $value.IsPresent }
+        elseif ($value -is [array]) { $value = ($value -join ', ') }
+        $paramCopy[$key] = [string]$value
+    }
 
-# Determine whether we are running as the target user or as an admin for another user
-$TargetUserSID      = $null
-$OutlookProfilesHive = $null
+    $user = [Environment]::UserName
+    if ($platform -eq 'Windows') { $user = '{0}\{1}' -f $env:USERDOMAIN, $env:USERNAME }
+    $shell = 'PowerShell {0}' -f $PSVersionTable.PSVersion
+    if ($PSVersionTable.PSEdition -ne 'Core') { $shell = 'Windows PowerShell {0}' -f $PSVersionTable.PSVersion }
 
-try {
-    $CurrentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
-    $IsAdmin = ([System.Security.Principal.WindowsPrincipal]$CurrentIdentity).IsInRole(
-        [System.Security.Principal.WindowsBuiltInRole]::Administrator)
+    $script:MSPRun = [pscustomobject]@{
+        CheckId       = $CheckId
+        ScriptName    = $ScriptName
+        ScriptVersion = $ScriptVersion
+        RiskLevel     = $RiskLevel
+        Platform      = $platform
+        OSVersion     = (Get-MSPOSVersion -Platform $platform)
+        Shell         = $shell
+        Host          = $hostName
+        User          = $user
+        IsAdmin       = (Test-MSPIsAdmin)
+        StartTime     = $start
+        EndTime       = $null
+        Parameters    = $paramCopy
+        LogPath       = $logPath
+        LogFailed     = $false
+        Findings      = New-Object System.Collections.Generic.List[object]
+        Data          = [ordered]@{}
+    }
+    $run = $script:MSPRun
 
-    if ($TargetUser -eq $env:USERNAME) {
-        Write-Log "Running as the target user -- using HKCU hive." -Level INFO
-        $OutlookProfilesHive = "HKCU:\Software\Microsoft\Office"
+    Write-MSPLog -Message ('===== START {0} v{1} ({2}) =====' -f $ScriptName, $ScriptVersion, $CheckId)
+    Write-MSPLog -Message ('Host={0}; User={1}; Elevated={2}; Platform={3}; OS={4}; Shell={5}; Risk={6}' -f `
+            $run.Host, $run.User, $run.IsAdmin, $run.Platform, $run.OSVersion, $run.Shell, $RiskLevel)
+    Write-MSPLog -Message ('Parameters: {0}' -f (Format-MSPParameter -Parameters $paramCopy))
+
+    $adminTerm = Get-MSPAdminTerm
+    $adminText = 'No'
+    if ($run.IsAdmin) { $adminText = 'Yes' }
+    $bar = '=' * 72
+    Write-Host ''
+    Write-Host $bar -ForegroundColor Cyan
+    Write-Host (' {0} v{1}   [{2}]   [Risk: {3}]' -f $ScriptName, $ScriptVersion, $CheckId, $RiskLevel) -ForegroundColor Cyan
+    if ($Description) { Write-Host (' {0}' -f $Description) -ForegroundColor Gray }
+    Write-Host (' Computer: {0} ({1})' -f $run.Host, $run.OSVersion) -ForegroundColor Gray
+    Write-Host (' User    : {0}   Elevated ({1}): {2}' -f $run.User, $adminTerm, $adminText) -ForegroundColor Gray
+    Write-Host (' Started : {0}' -f $start.ToString('yyyy-MM-dd HH:mm:ss')) -ForegroundColor Gray
+    if ($logPath) { Write-Host (' Log     : {0}' -f $logPath) -ForegroundColor Gray }
+    Write-Host $bar -ForegroundColor Cyan
+    if (-not $run.IsAdmin) {
+        Write-Host (' Not running as {0}. Checks that need it will show SKIPPED;' -f $adminTerm) -ForegroundColor DarkGray
+        Write-Host ' everything else still runs.' -ForegroundColor DarkGray
+        if ($AdminSections.Count -gt 0) {
+            Write-Host (' Needs {0}: {1}' -f $adminTerm, ($AdminSections -join ', ')) -ForegroundColor DarkGray
+        }
+        if ($platform -eq 'Windows') { Write-Host ' For full results, use "Run as administrator".' -ForegroundColor DarkGray }
+    }
+}
+
+function Write-MSPSection {
+    <# Prints a section heading so long output is easy to follow on a screen share. #>
+    param([Parameter(Mandatory)][string]$Title)
+    Write-Host ''
+    Write-Host ('--- {0} ' -f $Title).PadRight(72, '-') -ForegroundColor Cyan
+    Write-MSPLog -Message ('--- {0}' -f $Title)
+}
+
+function Get-MSPStatusColor {
+    param([string]$Status)
+    switch ($Status) {
+        'PASS' { return 'Green' }
+        'WARN' { return 'Yellow' }
+        'FAIL' { return 'Red' }
+        'INFO' { return 'Cyan' }
+        'SKIPPED' { return 'DarkGray' }
+        'ERROR' { return 'Magenta' }
+        default { return 'White' }
+    }
+}
+
+function ConvertTo-MSPIdPart {
+    <# "Remote-access tool: Kaseya" -> "Remote-access-tool-Kaseya". Must match msp_id_part in the bash helper. #>
+    param([AllowEmptyString()][string]$Text)
+    $part = ($Text -replace '[^A-Za-z0-9]+', '-').Trim('-')
+    if (-not $part) { $part = 'General' }
+    return $part
+}
+
+function Add-MSPFinding {
+    <#
+        Records one finding and prints it as a colored line.
+        Status   = what the check found (PASS/WARN/FAIL/INFO) or why it has no answer (SKIPPED/ERROR).
+        Severity = how much it matters if it is not a PASS. Drives remediation priority in reports.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Check,
+        [Parameter(Mandatory)][ValidateSet('PASS', 'WARN', 'FAIL', 'INFO', 'SKIPPED', 'ERROR')][string]$Status,
+        [AllowEmptyString()][string]$Detail = '',
+        [ValidateSet('Critical', 'High', 'Medium', 'Low', 'Info')][string]$Severity,
+        [AllowEmptyString()][string]$Recommendation = '',
+        [string]$Category = 'General',
+        [string]$Id,
+        [string]$Target,
+        [System.Collections.IDictionary]$Evidence,
+        [switch]$NoConsole
+    )
+    if (-not $script:MSPRun) { throw 'Initialize-MSPRun must be called before Add-MSPFinding.' }
+
+    if (-not $Severity) {
+        switch ($Status) {
+            'FAIL' { $Severity = 'High' }
+            'WARN' { $Severity = 'Medium' }
+            default { $Severity = 'Info' }
+        }
+    }
+    if (-not $Target) { $Target = $script:MSPRun.Host }
+    if (-not $Id) {
+        # Stable, platform-neutral ID (<CheckId>.<Category>.<Check>) so reports can line up the
+        # same check across runs and across Windows/macOS/Linux. The bash helper builds it the same way.
+        $Id = '{0}.{1}.{2}' -f $script:MSPRun.CheckId, (ConvertTo-MSPIdPart -Text $Category), (ConvertTo-MSPIdPart -Text $Check)
+    }
+
+    $finding = [pscustomobject]@{
+        Id             = $Id
+        Category       = $Category
+        Check          = $Check
+        Status         = $Status
+        Severity       = $Severity
+        Target         = $Target
+        Detail         = $Detail
+        Recommendation = $Recommendation
+        Evidence       = $Evidence
+    }
+    $script:MSPRun.Findings.Add($finding)
+    Write-MSPLog -Message ('[{0}/{1}] {2} | {3} | {4}' -f $Status, $Severity, $Check, $Target, $Detail)
+
+    if (-not $NoConsole) {
+        $tag = ('[{0}]' -f $Status).PadRight(10)
+        Write-Host ('  {0}' -f $tag) -ForegroundColor (Get-MSPStatusColor -Status $Status) -NoNewline
+        if ($Detail) { Write-Host ('{0} - {1}' -f $Check, $Detail) }
+        else { Write-Host $Check }
+        if ($Recommendation -and $Status -in @('WARN', 'FAIL')) {
+            Write-Host ('            -> {0}' -f $Recommendation) -ForegroundColor DarkGray
+        }
+    }
+}
+
+function ConvertTo-MSPFriendlyError {
+    <# Turns an exception into one plain-English sentence a Tier 1 tech can paste into a ticket. #>
+    param([Parameter(Mandatory)]$ErrorRecord)
+    $exception = $ErrorRecord.Exception
+    # .NET method errors wrap the useful exception one level down.
+    if ($exception -is [System.Management.Automation.MethodInvocationException] -and $exception.InnerException) {
+        $exception = $exception.InnerException
+    }
+    $message = $exception.Message
+    $os = 'Windows'
+    if ((Get-MSPPlatform) -ne 'Windows') { $os = 'The operating system' }
+    if ($exception -is [System.UnauthorizedAccessException] -or $message -match 'Access is denied|access denied|Unauthorized|Permission denied') {
+        return ('{0} denied access to this information for the current account. Running as {1} may allow it.' -f $os, (Get-MSPAdminTerm))
+    }
+    if ($exception -is [System.Management.Automation.CommandNotFoundException]) {
+        return ('A command this check needs ({0}) is not available on this computer. This is normal on some editions or versions.' -f $ErrorRecord.CategoryInfo.TargetName)
+    }
+    if ($message -match 'Invalid namespace|Invalid class|Not supported|not supported') {
+        return 'This component is not present on this computer (common on Windows Server or older/limited editions).'
+    }
+    if ($message -match 'timed out|timeout') {
+        return 'The check took too long to answer and was stopped.'
+    }
+    if ($exception -is [System.Runtime.InteropServices.COMException]) {
+        return ('A Windows component did not respond (error 0x{0:X8}). {1}' -f $exception.HResult, $message.Trim())
+    }
+    return ('The check could not complete: {0}' -f $message.Trim())
+}
+
+function Skip-MSPCheck {
+    <#
+        Ends the current Invoke-MSPCheck with SKIPPED instead of ERROR, for "could not be checked
+        here, and that is expected" cases (for example: only a VPN adapter has a gateway).
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Reason,
+        [string]$Recommendation = ''
+    )
+    $exception = New-Object System.OperationCanceledException($Reason)
+    $marker = @{ MSPSkip = $true; Reason = $Reason; Recommendation = $Recommendation }
+    $record = New-Object System.Management.Automation.ErrorRecord($exception, 'MSPCheckSkipped', [System.Management.Automation.ErrorCategory]::NotEnabled, $marker)
+    throw $record
+}
+
+function Invoke-MSPCheck {
+    <#
+        Runs one check safely:
+          - If -RequiresAdmin and not elevated: records SKIPPED with a plain-language note instead of failing.
+          - Skip-MSPCheck inside the check records SKIPPED with its reason.
+          - Any other error inside the check becomes an ERROR finding; the script keeps going.
+        Anything the script block outputs is passed back to the caller.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][scriptblock]$ScriptBlock,
+        [string]$Category = 'General',
+        [switch]$RequiresAdmin,
+        [string]$AdminReason = ''
+    )
+    if ($RequiresAdmin -and -not $script:MSPRun.IsAdmin) {
+        $detail = 'Skipped: requires {0}.' -f (Get-MSPAdminTerm)
+        if ($AdminReason) { $detail = '{0} {1}' -f $detail, $AdminReason }
+        $how = 'Re-run with sudo to include this check.'
+        if ($script:MSPRun.Platform -eq 'Windows') { $how = 'Re-run from PowerShell opened with "Run as administrator" to include this check.' }
+        Add-MSPFinding -Check $Name -Category $Category -Status SKIPPED -Severity Info -Detail $detail -Recommendation $how
+        return
+    }
+    Write-MSPLog -Message ('Check start: {0}' -f $Name)
+    # Make every error inside the check catchable, including non-terminating cmdlet errors.
+    $ErrorActionPreference = 'Stop'
+    try {
+        & $ScriptBlock
+    }
+    catch {
+        $marker = $_.TargetObject
+        if ($marker -is [System.Collections.IDictionary] -and $marker['MSPSkip']) {
+            Write-MSPLog -Message ('Check skipped "{0}": {1}' -f $Name, $marker['Reason'])
+            Add-MSPFinding -Check $Name -Category $Category -Status SKIPPED -Severity Info -Detail $marker['Reason'] -Recommendation $marker['Recommendation']
+            return
+        }
+        $friendly = ConvertTo-MSPFriendlyError -ErrorRecord $_
+        Write-MSPLog -Level ERROR -Message ('Check error in "{0}": {1}: {2} | {3}' -f $Name, $_.Exception.GetType().FullName, $_.Exception.Message, $_.InvocationInfo.PositionMessage)
+        Add-MSPFinding -Check $Name -Category $Category -Status ERROR -Severity Info -Detail $friendly `
+            -Recommendation 'This check could not run; the other results are still valid. If it matters for this ticket, re-run as administrator or escalate with the log file.'
+    }
+}
+
+function Add-MSPData {
+    <# Attaches a table (for example a device or software list) to the run for JSON/CSV export. #>
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [AllowEmptyCollection()][object[]]$Rows = @()
+    )
+    $script:MSPRun.Data[$Name] = @($Rows)
+}
+
+function Get-MSPSummaryCount {
+    $counts = [ordered]@{}
+    foreach ($status in $script:MSPStatusOrder) {
+        $counts[$status] = @($script:MSPRun.Findings | Where-Object { $_.Status -eq $status }).Count
+    }
+    return $counts
+}
+
+function Get-MSPSortedIssue {
+    <# FAIL/WARN findings, most severe first (FAIL before WARN at equal severity). #>
+    $issues = @($script:MSPRun.Findings | Where-Object { $_.Status -in @('FAIL', 'WARN') })
+    return @($issues | Sort-Object -Property @{ Expression = { $script:MSPSeverityRank[$_.Severity] } }, @{ Expression = { if ($_.Status -eq 'FAIL') { 0 } else { 1 } } })
+}
+
+function Get-MSPTicketText {
+    <# Plain-text block (no colors, no special characters) for pasting into a ticket. #>
+    param([int]$MaxIssueLines = 40)
+    $run = $script:MSPRun
+    $end = $run.EndTime
+    if (-not $end) { $end = Get-Date }
+    $duration = [int]($end - $run.StartTime).TotalSeconds
+    $counts = Get-MSPSummaryCount
+    $adminText = 'No'
+    if ($run.IsAdmin) { $adminText = 'Yes' }
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add(('[MSP Toolkit] {0} {1} v{2} | Risk: {3}' -f $run.CheckId, $run.ScriptName, $run.ScriptVersion, $run.RiskLevel))
+    $lines.Add(('Computer: {0} ({1}) | User: {2} | Elevated: {3} | Run: {4} ({5}s)' -f $run.Host, $run.OSVersion, $run.User, $adminText, $run.StartTime.ToString('yyyy-MM-dd HH:mm'), $duration))
+    $lines.Add(('Result: PASS {0} | WARN {1} | FAIL {2} | INFO {3} | SKIPPED {4} | ERROR {5}' -f `
+                $counts['PASS'], $counts['WARN'], $counts['FAIL'], $counts['INFO'], $counts['SKIPPED'], $counts['ERROR']))
+
+    $issues = @(Get-MSPSortedIssue)
+    if ($issues.Count -gt 0) {
+        $lines.Add('Issues (most severe first):')
+        $shown = 0
+        foreach ($f in $issues) {
+            if ($shown -ge $MaxIssueLines) {
+                $lines.Add(('  ... {0} more issue(s) - see the exported CSV/JSON or the log.' -f ($issues.Count - $shown)))
+                break
+            }
+            $target = ''
+            if ($f.Target -and $f.Target -ne $run.Host) { $target = ' [{0}]' -f $f.Target }
+            $text = '  - [{0}/{1}] {2}{3}: {4}' -f $f.Status, $f.Severity, $f.Check, $target, $f.Detail
+            if ($f.Recommendation) { $text = '{0} Action: {1}' -f $text, $f.Recommendation }
+            $lines.Add($text)
+            $shown++
+        }
     }
     else {
-        if (-not $IsAdmin) {
-            throw "Elevation required. You must run as Administrator to reset another user's Outlook profile."
-        }
+        $lines.Add('Issues: none found by the checks that ran.')
+    }
 
-        # Resolve SID for the target user
-        try {
-            $NTAccount      = New-Object System.Security.Principal.NTAccount($TargetUser)
-            $TargetUserSID  = $NTAccount.Translate([System.Security.Principal.SecurityIdentifier]).Value
-            Write-Log "Resolved SID for '$TargetUser': $TargetUserSID" -Level INFO
-        }
-        catch {
-            throw "Could not resolve Windows SID for user '$TargetUser'. Verify the username and ensure the account exists on this machine."
-        }
+    $errors = @($run.Findings | Where-Object { $_.Status -eq 'ERROR' })
+    if ($errors.Count -gt 0) {
+        $lines.Add('Could not run (ERROR - not the same as a failed check):')
+        foreach ($f in $errors) { $lines.Add(('  - {0}: {1}' -f $f.Check, $f.Detail)) }
+    }
+    $skipped = @($run.Findings | Where-Object { $_.Status -eq 'SKIPPED' })
+    if ($skipped.Count -gt 0) {
+        $lines.Add('Skipped:')
+        foreach ($f in $skipped) { $lines.Add(('  - {0}: {1}' -f $f.Check, $f.Detail)) }
+    }
+    if ($run.LogPath -and -not $run.LogFailed) { $lines.Add(('Log: {0}' -f $run.LogPath)) }
+    return ($lines -join [Environment]::NewLine)
+}
 
-        # Ensure the HKU PSDrive is available and the user hive is loaded
-        if (-not (Get-PSDrive -Name HKU -ErrorAction SilentlyContinue)) {
-            New-PSDrive -Name HKU -PSProvider Registry -Root HKEY_USERS | Out-Null
+function Write-MSPSummary {
+    <# Prints the colored summary, the top issues, and the plain-text ticket block. #>
+    $counts = Get-MSPSummaryCount
+    $bar = '=' * 72
+    Write-Host ''
+    Write-Host $bar -ForegroundColor Cyan
+    Write-Host ' SUMMARY  ' -ForegroundColor Cyan -NoNewline
+    foreach ($status in $script:MSPStatusOrder) {
+        $color = 'DarkGray'
+        if ($counts[$status] -gt 0) { $color = Get-MSPStatusColor -Status $status }
+        Write-Host ('{0}: {1}   ' -f $status, $counts[$status]) -ForegroundColor $color -NoNewline
+    }
+    Write-Host ''
+    Write-Host $bar -ForegroundColor Cyan
+
+    $issues = @(Get-MSPSortedIssue)
+    if ($issues.Count -gt 0) {
+        Write-Host ' Most important items:' -ForegroundColor White
+        foreach ($f in ($issues | Select-Object -First 10)) {
+            Write-Host ('  [{0}/{1}] ' -f $f.Status, $f.Severity) -ForegroundColor (Get-MSPStatusColor -Status $f.Status) -NoNewline
+            Write-Host ('{0}: {1}' -f $f.Check, $f.Detail)
         }
-        if (-not (Test-Path "HKU:\$TargetUserSID")) {
-            throw "Registry hive for '$TargetUser' (SID: $TargetUserSID) is not loaded. The user must be currently logged on for a remote profile reset."
+        if ($issues.Count -gt 10) { Write-Host ('  ... and {0} more (see ticket block below).' -f ($issues.Count - 10)) -ForegroundColor DarkGray }
+    }
+    else {
+        Write-Host ' No WARN or FAIL items from the checks that ran.' -ForegroundColor Green
+    }
+    if ($counts['ERROR'] -gt 0) {
+        Write-Host (' {0} check(s) could not run (ERROR). That is not a failed check - see details above.' -f $counts['ERROR']) -ForegroundColor Magenta
+    }
+
+    $ticket = Get-MSPTicketText
+    Write-Host ''
+    Write-Host '----- COPY FOR TICKET (plain text) ' -ForegroundColor White -NoNewline
+    Write-Host ('-' * 37) -ForegroundColor White
+    Write-Host $ticket
+    Write-Host ('-' * 72) -ForegroundColor White
+    Write-MSPLog -Message ('Ticket block:{0}{1}' -f [Environment]::NewLine, $ticket)
+}
+
+function Get-MSPResultObject {
+    <# Builds the shared-schema result (see README "Output schema"). #>
+    $run = $script:MSPRun
+    $endTime = $run.EndTime
+    if (-not $endTime) { $endTime = Get-Date }
+    $findings = foreach ($f in $run.Findings) {
+        [ordered]@{
+            Id             = $f.Id
+            Category       = $f.Category
+            Check          = $f.Check
+            Status         = $f.Status
+            Severity       = $f.Severity
+            Target         = $f.Target
+            Detail         = $f.Detail
+            Recommendation = $f.Recommendation
+            Evidence       = $f.Evidence
         }
-        $OutlookProfilesHive = "HKU:\$TargetUserSID\Software\Microsoft\Office"
-        Write-Log "Using HKU hive for user '$TargetUser'." -Level INFO
+    }
+    # Field order and names are shared with the bash helper (msp_json_result).
+    return [ordered]@{
+        SchemaVersion = $script:MSPSchemaVersion
+        CheckId       = $run.CheckId
+        ScriptName    = $run.ScriptName
+        Version       = $run.ScriptVersion
+        Platform      = $run.Platform
+        OSVersion     = $run.OSVersion
+        Shell         = $run.Shell
+        Host          = $run.Host
+        User          = $run.User
+        IsAdmin       = $run.IsAdmin
+        RiskLevel     = $run.RiskLevel
+        Parameters    = $run.Parameters
+        Timestamp     = (ConvertTo-MSPIsoTime -Time $run.StartTime)
+        EndTime       = (ConvertTo-MSPIsoTime -Time $endTime)
+        Summary       = (Get-MSPSummaryCount)
+        Findings      = @($findings)
+        Data          = $run.Data
     }
 }
-catch {
-    Write-Log "Pre-flight failed: $_" -Level ERROR
-    Write-Host "`nFATAL: Pre-flight check failed. No changes have been made.`n$_" -ForegroundColor Red
+
+function ConvertTo-MSPIsoTime {
+    <# ISO 8601 local time with offset, to the second (2026-10-16T14:05:09+02:00), as the bash helper writes it. #>
+    param([Parameter(Mandatory)][datetime]$Time)
+    return $Time.ToString('yyyy-MM-ddTHH:mm:sszzz')
+}
+
+function Export-MSPResult {
+    <#
+        Writes <Script>_<Host>_<yyyyMMdd-HHmmss>.json (full result), ..._findings.csv
+        (one row per finding) and ..._<Table>.csv for each attached data table.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$OutputPath)
+    $run = $script:MSPRun
+    if (-not (Test-Path -LiteralPath $OutputPath)) {
+        $null = New-Item -ItemType Directory -Path $OutputPath -Force -ErrorAction Stop -WhatIf:$false
+    }
+    $folder = (Resolve-Path -LiteralPath $OutputPath).ProviderPath
+    $base = '{0}_{1}_{2}' -f $run.ScriptName, $run.Host, $run.StartTime.ToString('yyyyMMdd-HHmmss')
+
+    $jsonPath = Join-Path -Path $folder -ChildPath ('{0}.json' -f $base)
+    $json = Get-MSPResultObject | ConvertTo-Json -Depth 8
+    [System.IO.File]::WriteAllText($jsonPath, $json, (New-Object System.Text.UTF8Encoding($false)))
+
+    # Same columns, in the same order, as the bash helper's findings CSV.
+    $csvPath = Join-Path -Path $folder -ChildPath ('{0}_findings.csv' -f $base)
+    $timestamp = ConvertTo-MSPIsoTime -Time $run.StartTime
+    $run.Findings | Select-Object @{ n = 'CheckId'; e = { $run.CheckId } }, @{ n = 'ScriptName'; e = { $run.ScriptName } },
+    @{ n = 'Platform'; e = { $run.Platform } }, @{ n = 'Host'; e = { $run.Host } }, @{ n = 'Timestamp'; e = { $timestamp } },
+    Id, Category, Check, Status, Severity, Target, Detail, Recommendation |
+        Export-Csv -LiteralPath $csvPath -NoTypeInformation -Encoding UTF8 -WhatIf:$false
+
+    $dataPaths = @()
+    foreach ($name in $run.Data.Keys) {
+        $rows = @($run.Data[$name])
+        if ($rows.Count -eq 0) { continue }
+        $dataPath = Join-Path -Path $folder -ChildPath ('{0}_{1}.csv' -f $base, ($name -replace '[^A-Za-z0-9]+', ''))
+        $rows | Export-Csv -LiteralPath $dataPath -NoTypeInformation -Encoding UTF8 -WhatIf:$false
+        $dataPaths += $dataPath
+    }
+
+    Write-Host ''
+    Write-Host ' Results saved:' -ForegroundColor Green
+    Write-Host ('   {0}' -f $jsonPath) -ForegroundColor Gray
+    Write-Host ('   {0}' -f $csvPath) -ForegroundColor Gray
+    foreach ($p in $dataPaths) { Write-Host ('   {0}' -f $p) -ForegroundColor Gray }
+    Write-MSPLog -Message ('Exported: {0}; {1}; {2}' -f $jsonPath, $csvPath, ($dataPaths -join '; '))
+    return [pscustomobject]@{ Json = $jsonPath; FindingsCsv = $csvPath; DataCsv = $dataPaths }
+}
+
+function Complete-MSPRun {
+    <#
+        Ends the run: prints the summary and ticket block, exports if -OutputPath was given,
+        and writes the end time to the log. Findings never change the exit code; the exit
+        code only says whether the script itself ran.
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$OutputPath,
+        [switch]$PassThru
+    )
+    $run = $script:MSPRun
+    $run.EndTime = Get-Date
+    Write-MSPSummary
+    if ($OutputPath) {
+        try {
+            $null = Export-MSPResult -OutputPath $OutputPath
+        }
+        catch {
+            Write-Host (' Could not save results to "{0}": {1}' -f $OutputPath, $_.Exception.Message) -ForegroundColor Red
+            Write-Host ' The console output and log above are still complete.' -ForegroundColor Red
+            Write-MSPLog -Level ERROR -Message ('Export failed: {0}' -f $_.Exception.Message)
+        }
+    }
+    $counts = Get-MSPSummaryCount
+    $duration = [int]($run.EndTime - $run.StartTime).TotalSeconds
+    Write-MSPLog -Message ('===== END {0} | duration {1}s | PASS {2} WARN {3} FAIL {4} INFO {5} SKIPPED {6} ERROR {7} =====' -f `
+            $run.EndTime.ToString('yyyy-MM-dd HH:mm:ss'), $duration, $counts['PASS'], $counts['WARN'], $counts['FAIL'], $counts['INFO'], $counts['SKIPPED'], $counts['ERROR'])
+    if ($run.LogPath -and -not $run.LogFailed) {
+        Write-Host (' Log file: {0}' -f $run.LogPath) -ForegroundColor DarkGray
+    }
+    Write-Host ''
+    if ($PassThru) { return (Get-MSPResultObject) }
+}
+#endregion MSPHelper:Core
+
+#region MSPHelper:Change
+function Test-MSPInteractive {
+    <#
+        True when a person can answer a prompt: a console (or ISE / VS Code) with keyboard input.
+        False under RMM agents, scheduled tasks, "powershell -NonInteractive" and redirected input.
+    #>
+    try {
+        if ([Console]::IsInputRedirected) { return $false }
+    }
+    catch {
+        return $false
+    }
+    if (-not [Environment]::UserInteractive) { return $false }
+    if ([Environment]::GetCommandLineArgs() -match '^-NonI') { return $false }
+    return ($Host.Name -in @('ConsoleHost', 'Windows PowerShell ISE Host', 'Visual Studio Code Host'))
+}
+
+function Write-MSPChangePlan {
+    <# Prints and logs the numbered list of changes before anything is changed. #>
+    param(
+        [Parameter(Mandatory)][string[]]$Step,
+        [string]$Title = 'Planned changes'
+    )
+    Write-MSPSection -Title $Title
+    $n = 0
+    foreach ($s in $Step) {
+        $n++
+        Write-Host ('  {0}. {1}' -f $n, $s)
+        Write-MSPLog -Message ('Plan {0}: {1}' -f $n, $s)
+    }
+}
+
+function Write-MSPWhatIf {
+    <#
+        Prints one "What if:" line for a change a dry run would make, and logs it.
+        Scripts that change state read -WhatIf into their own $dryRun flag at the very top and
+        then set $WhatIfPreference = $false. Otherwise -WhatIf also reaches the helpers' log
+        writes and module auto-loading, which floods the screen with "What if:" noise and
+        leaves no log of the dry run.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Target,
+        [Parameter(Mandatory)][string]$Action
+    )
+    Write-Host ('What if: {0} on "{1}".' -f $Action, $Target) -ForegroundColor DarkGray
+    Write-MSPLog -Message ('What if: {0} on "{1}"' -f $Action, $Target)
+}
+
+function Confirm-MSPChange {
+    <#
+        Asks the technician to type YES before changes are made. Returns $true to go ahead.
+          -Force                       : no question (logged and recorded as a finding).
+          not interactive, no -Force   : refuses (SKIPPED finding), so an RMM job or pasted
+                                         command can never make changes by accident.
+        Callers skip this entirely under -WhatIf, which changes nothing.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Question,
+        [switch]$Force
+    )
+    if ($Force) {
+        Add-MSPFinding -Check 'Confirmation' -Category 'Safety' -Status INFO -Detail 'Not asked: -Force was given.'
+        return $true
+    }
+    if (-not (Test-MSPInteractive)) {
+        Add-MSPFinding -Check 'Confirmation' -Category 'Safety' -Status SKIPPED `
+            -Detail 'No changes made: this session cannot answer a confirmation prompt (non-interactive) and -Force was not given.' `
+            -Recommendation 'Run it in an interactive PowerShell window, or add -Force once you are sure (use -WhatIf first to see the plan).'
+        return $false
+    }
+    Write-Host ''
+    Write-Host ('  {0}' -f $Question) -ForegroundColor Yellow
+    $answer = Read-Host '  Type YES to continue (anything else cancels)'
+    Write-MSPLog -Message ('Confirmation answer: "{0}"' -f $answer)
+    if ($answer -ceq 'YES') { return $true }
+    Add-MSPFinding -Check 'Confirmation' -Category 'Safety' -Status INFO -Detail 'Cancelled by the technician. No changes were made.'
+    return $false
+}
+#endregion MSPHelper:Change
+#endregion MSPToolkit (generated)
+
+$ScriptVersion = '2.0.0'
+# Read -WhatIf into our own flag, then switch it off so it cannot reach the log writes and
+# module loading. The dry run prints its own "What if:" lines with Write-MSPWhatIf.
+$dryRun = [bool]$WhatIfPreference
+$WhatIfPreference = $false
+Initialize-MSPRun -ScriptName 'Reset-OutlookProfile' -ScriptVersion $ScriptVersion -CheckId 'D3' -RiskLevel 'Elevated' `
+    -Parameters $PSBoundParameters -Description 'New default Outlook profile; the old profile is kept (account must be added by hand)'
+
+$stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
+$exitCode = 0
+$outlookKey = $null
+$profilesKey = $null
+$profiles = @()
+$oldDefault = ''
+
+function Test-OutlookRunning {
+    return [bool](Get-Process -Name 'OUTLOOK' -ErrorAction SilentlyContinue)
+}
+
+# =========================================================================================
+Write-MSPSection -Title 'Pre-flight (read-only)'
+# =========================================================================================
+$wrongUser = $false
+Invoke-MSPCheck -Name 'Running as the affected user' -Category 'Preflight' -ScriptBlock {
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $console = [string](Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop).UserName
+    if ($console -and $console -ne $me) {
+        $script:wrongUser = $true
+        Add-MSPFinding -Check 'Running as the affected user' -Category 'Preflight' -Status FAIL -Severity High `
+            -Detail ('PowerShell runs as {0}, but {1} is signed in. Changes would go to {0}''s Outlook, not the user''s.' -f $me, $console) `
+            -Recommendation 'Open a normal PowerShell window in the user''s own session (not "Run as administrator" with another account) and run again.'
+    }
+    elseif (-not $console) {
+        Add-MSPFinding -Check 'Running as the affected user' -Category 'Preflight' -Status INFO -Detail ('Running as {0} (no console user reported, e.g. a Remote Desktop session). Make sure this is the affected user.' -f $me)
+    }
+    else {
+        Add-MSPFinding -Check 'Running as the affected user' -Category 'Preflight' -Status PASS -Detail ('Running as the signed-in user {0}.' -f $me)
+    }
+}
+
+Invoke-MSPCheck -Name 'Outlook profiles' -Category 'Preflight' -ScriptBlock {
+    foreach ($version in @('16.0', '15.0')) {
+        $candidate = 'HKCU:\Software\Microsoft\Office\{0}\Outlook' -f $version
+        if (Test-Path -LiteralPath (Join-Path $candidate 'Profiles')) {
+            $script:outlookKey = $candidate
+            $script:profilesKey = Join-Path $candidate 'Profiles'
+            break
+        }
+    }
+    if (-not $script:profilesKey) {
+        Add-MSPFinding -Check 'Outlook profiles' -Category 'Preflight' -Status INFO -Detail 'No Outlook profile exists for this user yet. Outlook creates one on first start; nothing to reset.'
+        return
+    }
+    $script:profiles = @(Get-ChildItem -LiteralPath $script:profilesKey -ErrorAction Stop | ForEach-Object { $_.PSChildName })
+    $script:oldDefault = [string](Get-ItemProperty -LiteralPath $script:outlookKey -Name DefaultProfile -ErrorAction SilentlyContinue).DefaultProfile
+    $pick = [string](Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Exchange\Client\Options' -Name PickLogonProfile -ErrorAction SilentlyContinue).PickLogonProfile
+    $detail = 'Profiles: {0}. Default: {1}.' -f ($script:profiles -join ', '), $(if ($script:oldDefault) { $script:oldDefault } else { '(not set)' })
+    if ($pick -eq '1') { $detail = '{0} Outlook is set to ask which profile to use at start.' -f $detail }
+    Add-MSPFinding -Check 'Outlook profiles' -Category 'Preflight' -Status INFO -Detail $detail -Evidence @{ Key = $script:profilesKey; Profiles = ($script:profiles -join ', '); Default = $script:oldDefault }
+}
+
+Invoke-MSPCheck -Name 'Outlook version' -Category 'Preflight' -ScriptBlock {
+    $classic = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\OUTLOOK.EXE' -ErrorAction SilentlyContinue
+    $newOutlook = [bool](Get-Process -Name 'olk' -ErrorAction SilentlyContinue) -or [bool](Get-AppxPackage -Name 'Microsoft.OutlookForWindows' -ErrorAction SilentlyContinue)
+    if ($classic) {
+        Add-MSPFinding -Check 'Outlook version' -Category 'Preflight' -Status INFO -Detail ('Classic Outlook: {0}' -f $classic.'(default)')
+    }
+    else {
+        Add-MSPFinding -Check 'Outlook version' -Category 'Preflight' -Status WARN -Detail 'Classic Outlook (OUTLOOK.EXE) was not found.' `
+            -Recommendation 'This script only helps classic Outlook. For the new Outlook, remove and re-add the account in Outlook settings.'
+    }
+    if ($newOutlook) {
+        Add-MSPFinding -Check 'New Outlook' -Category 'Preflight' -Status INFO -Detail 'The new Outlook for Windows is also present; it does not use these profiles and is not affected.'
+    }
+}
+
+Invoke-MSPCheck -Name 'Data files' -Category 'Preflight' -ScriptBlock {
+    $ostFolder = Join-Path $env:LOCALAPPDATA 'Microsoft\Outlook'
+    $osts = @(Get-ChildItem -LiteralPath $ostFolder -Filter '*.ost' -File -ErrorAction SilentlyContinue)
+    $psts = @(Get-ChildItem -LiteralPath ([Environment]::GetFolderPath('MyDocuments')) -Filter '*.pst' -File -Recurse -Depth 2 -ErrorAction SilentlyContinue)
+    $ostGB = [math]::Round((($osts | Measure-Object -Property Length -Sum).Sum) / 1GB, 2)
+    $drive = Get-CimInstance -ClassName Win32_LogicalDisk -Filter ("DeviceID='{0}'" -f $env:SystemDrive) -ErrorAction Stop
+    $freeGB = [math]::Round($drive.FreeSpace / 1GB, 1)
+    Add-MSPFinding -Check 'Data files' -Category 'Preflight' -Status INFO `
+        -Detail ('{0} OST file(s), {1} GB total (kept; the new profile downloads a fresh copy). {2} PST file(s) in Documents (kept; re-open them in the new profile if they were in use). {3} GB free.' -f $osts.Count, $ostGB, $psts.Count, $freeGB)
+    if ($ostGB -gt 0 -and $freeGB -lt ($ostGB + 5)) {
+        Add-MSPFinding -Check 'Disk space for new OST' -Category 'Preflight' -Status WARN -Detail ('The new profile needs about {0} GB for its mailbox copy; only {1} GB is free.' -f $ostGB, $freeGB) `
+            -Recommendation 'Free disk space first, or reduce the "Mail to keep offline" setting after adding the account.'
+    }
+}
+
+$outlookOpen = Test-OutlookRunning
+Add-MSPFinding -Check 'Outlook open' -Category 'Preflight' -Status INFO -Detail $(if ($outlookOpen) { 'Outlook is open. It must be closed by the user before any change (this script never closes it).' } else { 'Outlook is closed.' })
+
+if ($wrongUser) {
+    Add-MSPFinding -Check 'Result' -Category 'Safety' -Status SKIPPED -Detail 'No changes made: wrong user account (see above).'
+    Complete-MSPRun -OutputPath $OutputPath
+    exit 1
+}
+if (-not $profilesKey -or $profiles.Count -eq 0) {
+    Add-MSPFinding -Check 'Result' -Category 'Safety' -Status INFO -Detail 'Nothing to reset: this user has no Outlook profile.'
+    Complete-MSPRun -OutputPath $OutputPath
+    exit 0
+}
+
+# =========================================================================================
+# Plan
+# =========================================================================================
+if (-not $NewProfileName) { $NewProfileName = 'Outlook-{0}' -f (Get-Date).ToString('yyyyMMdd') }
+$baseName = $NewProfileName
+$n = 2
+while ($profiles -contains $NewProfileName) { $NewProfileName = '{0}-{1}' -f $baseName, $n; $n++ }
+$backupDir = Join-Path $env:LOCALAPPDATA ('MSP-Toolkit\Backups\OutlookProfile_{0}' -f $stamp)
+$regKey = ($outlookKey -replace '^HKCU:\\', 'HKCU\')
+$regFile = Join-Path $backupDir 'Outlook-settings.reg'
+
+Write-MSPChangePlan -Title 'Planned changes (nothing is deleted)' -Step @(
+    ('Back up {0} (all profiles) to {1}' -f $regKey, $regFile),
+    ('Create a new, EMPTY profile "{0}". Existing profile(s) kept unchanged: {1}' -f $NewProfileName, ($profiles -join ', ')),
+    ('Make "{0}" the default profile (was: {1})' -f $NewProfileName, $(if ($oldDefault) { $oldDefault } else { 'not set' })),
+    'Afterwards the account must be ADDED BY HAND: start Outlook, enter the user''s email address, sign in',
+    'Not touched: OST and PST files, the mailbox, Microsoft 365 settings'
+)
+
+if ($dryRun) {
+    Write-MSPWhatIf -Target ($regFile) -Action ('Export Outlook settings')
+    Write-MSPWhatIf -Target ((Join-Path $profilesKey $NewProfileName)) -Action ('Create empty profile')
+    Write-MSPWhatIf -Target (('{0} DefaultProfile' -f $outlookKey)) -Action (('Set to {0}' -f $NewProfileName))
+    Add-MSPFinding -Check 'Dry run' -Category 'Safety' -Status INFO -Detail '-WhatIf: the plan was shown; nothing was changed.'
+    Complete-MSPRun -OutputPath $OutputPath
+    exit 0
+}
+
+# Outlook must be closed by the user; never by this script.
+if (Test-OutlookRunning) {
+    if (-not (Test-MSPInteractive)) {
+        Add-MSPFinding -Check 'Outlook open' -Category 'Safety' -Status SKIPPED -Detail 'No changes made: Outlook is open and this session cannot ask the user to close it. This script never closes Outlook itself.' `
+            -Recommendation 'Ask the user to close Outlook, then run again.'
+        Complete-MSPRun -OutputPath $OutputPath
+        exit 1
+    }
+    $deadline = (Get-Date).AddMinutes($CloseWaitMinutes)
+    while ((Test-OutlookRunning) -and (Get-Date) -lt $deadline) {
+        Write-Host ''
+        Write-Host '  Outlook is open. Ask the user to save any drafts and close Outlook.' -ForegroundColor Yellow
+        $answer = Read-Host '  Press Enter when Outlook is closed, or type Q to cancel'
+        if ($answer -match '^[Qq]') { break }
+        Start-Sleep -Seconds 2
+    }
+    if (Test-OutlookRunning) {
+        Add-MSPFinding -Check 'Outlook open' -Category 'Safety' -Status SKIPPED -Detail 'No changes made: Outlook is still open (cancelled or not closed in time). This script never closes Outlook itself.' `
+            -Recommendation 'Close Outlook (check the taskbar and system tray), then run again.'
+        Complete-MSPRun -OutputPath $OutputPath
+        exit 1
+    }
+    Add-MSPFinding -Check 'Outlook closed' -Category 'Safety' -Status PASS -Detail 'The user closed Outlook.'
+}
+
+if (-not (Confirm-MSPChange -Question ('Create the new default Outlook profile "{0}" for {1}? The account will need to be added by hand.' -f $NewProfileName, $script:MSPRun.User) -Force:$Force)) {
+    Complete-MSPRun -OutputPath $OutputPath
+    exit 1
+}
+if (Test-OutlookRunning) {
+    Add-MSPFinding -Check 'Outlook open' -Category 'Safety' -Status SKIPPED -Detail 'No changes made: Outlook was opened again before the change.' -Recommendation 'Close Outlook and run again.'
+    Complete-MSPRun -OutputPath $OutputPath
     exit 1
 }
 
-# Discover Outlook version keys that contain a Profiles subkey
-$OutlookVersionKeys = @()
-if (Test-Path $OutlookProfilesHive) {
-    $OutlookVersionKeys = @(
-        Get-ChildItem -Path $OutlookProfilesHive -ErrorAction SilentlyContinue |
-            Where-Object { $_.PSChildName -match "^\d+\.\d+$" } |
-            ForEach-Object {
-                # Normalize the registry item path to a clean PSDrive path
-                # (HKCU:\... or HKU:\...) so all downstream consumers work
-                # reliably. PSPath from the pipeline can be a provider-
-                # qualified string like:
-                #   Microsoft.PowerShell.Core\Registry::HKEY_CURRENT_USER\...
-                # which breaks Join-Path, Test-Path, and reg.exe conversion.
-                $normalized = $_.PSPath
-                if ($normalized -match "::") {
-                    $normalized = $normalized -replace "^.*::", ""
-                }
-                $normalized = $normalized `
-                    -replace "^HKEY_CURRENT_USER\\",  "HKCU:\" `
-                    -replace "^HKEY_LOCAL_MACHINE\\", "HKLM:\" `
-                    -replace "^HKEY_USERS\\",         "HKU:\"
-                $profilesPath = "$normalized\Outlook\Profiles"
-                if (Test-Path $profilesPath) { $profilesPath }
-            }
-    )
-}
-
-if ($OutlookVersionKeys.Count -eq 0) {
-    Write-Log "No Outlook profile registry keys found. Outlook may not have been configured for this user." -Level WARN
-    Add-TicketNote "WARNING: No Outlook profile registry entries found. Outlook may not have been configured for this user yet."
-}
-else {
-    Write-Log "Found $($OutlookVersionKeys.Count) Outlook version key(s) with profile data." -Level INFO
-    $OutlookVersionKeys | ForEach-Object { Write-Log "  $_" -Level INFO }
-}
-
-# Locate the specific profile to be removed
-$TargetProfileKey = $null
-foreach ($versionPath in $OutlookVersionKeys) {
-    $candidate = Join-Path $versionPath $ProfileName
-    if (Test-Path $candidate) {
-        $TargetProfileKey = $candidate
-        Write-Log "Located target profile key: $TargetProfileKey" -Level INFO
-        break
-    }
-}
-
-if (-not $TargetProfileKey) {
-    # Profile name not found as-is. Check whether the registry DefaultProfile
-    # value points to a differently-named profile and use that instead.
-    Write-Log "Profile '$ProfileName' not found in registry. Checking DefaultProfile value for active profile name..." -Level WARN
-
-    foreach ($versionPath in $OutlookVersionKeys) {
-        $outlookKeyCheck  = ($versionPath -replace "\\Profiles$", "")
-        $defProfObj       = Get-ItemProperty -Path $outlookKeyCheck -Name "DefaultProfile" -ErrorAction SilentlyContinue
-        $detectedDefault  = if ($defProfObj) { $defProfObj.DefaultProfile } else { $null }
-
-        if ($detectedDefault) {
-            $candidateKey = Join-Path $versionPath $detectedDefault
-            if (Test-Path $candidateKey) {
-                Write-Log "Found active profile via DefaultProfile value: '$detectedDefault' -- using this as the reset target." -Level WARN
-                Write-Log "NOTE: To target a specific profile by name, re-run with: -ProfileName '$detectedDefault'" -Level INFO
-                $ProfileName      = $detectedDefault
-                $TargetProfileKey = $candidateKey
-                Add-TicketNote "Auto-detected active profile: '$ProfileName' (DefaultProfile registry value was used as target)"
-                break
-            }
-        }
-    }
-
-    if (-not $TargetProfileKey) {
-        Write-Log "Could not locate any resettable profile in registry. The profile may already be removed." -Level WARN
-        Add-TicketNote "WARNING: No resettable profile found in registry. The profile may already be absent."
-    }
-}
-
-# Resolve the target user's local AppData path
-$TargetAppData = $null
-if ($TargetUser -eq $env:USERNAME) {
-    $TargetAppData = $env:LOCALAPPDATA
-}
-elseif ($TargetUserSID) {
-    $ProfileListKey = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$TargetUserSID"
-    if (Test-Path $ProfileListKey) {
-        $UserProfileRoot = (Get-ItemProperty -Path $ProfileListKey -Name "ProfileImagePath").ProfileImagePath
-        $TargetAppData   = Join-Path $UserProfileRoot "AppData\Local"
-    }
-}
-
-$OutlookAppDataPath = if ($TargetAppData) { Join-Path $TargetAppData "Microsoft\Outlook" } else { $null }
-Write-Log "Outlook AppData path: $OutlookAppDataPath" -Level INFO
-
-# ============================================================
-# REGION: Create Backup Directory
-# ============================================================
-
-Write-SectionHeader "Creating Backup Directory"
-
-if ($PSCmdlet.ShouldProcess($LogDir, "Create backup directory")) {
+# =========================================================================================
+Write-MSPSection -Title 'Backup'
+# =========================================================================================
+$backupOk = $false
+if ($PSCmdlet.ShouldProcess($regFile, 'Export Outlook settings')) {
     try {
-        New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
-        Write-Log "Backup directory created: $LogDir" -Level SUCCESS
-        Add-TicketNote "Backup location: $LogDir"
+        $null = New-Item -ItemType Directory -Path $backupDir -Force -ErrorAction Stop
+        $out = @(& reg.exe export $regKey $regFile /y 2>&1 | ForEach-Object { "$_" })
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $regFile)) { throw ('reg export failed (exit {0}): {1}' -f $LASTEXITCODE, ($out -join ' ')) }
+        $note = @(
+            ('Previous default profile: {0}' -f $(if ($oldDefault) { $oldDefault } else { '(not set)' })),
+            ('Profiles before the change: {0}' -f ($profiles -join ', ')),
+            ('New profile: {0}' -f $NewProfileName),
+            '',
+            'Roll back (close Outlook first):',
+            $(if ($oldDefault) { ('  reg add "{0}" /v DefaultProfile /t REG_SZ /d "{1}" /f' -f $regKey, $oldDefault) } else { ('  reg delete "{0}" /v DefaultProfile /f' -f $regKey) }),
+            ('  or restore everything: reg import "{0}"' -f $regFile),
+            '  then remove the new profile: Control Panel > Mail (Microsoft Outlook) > Show Profiles > select it > Remove'
+        )
+        [System.IO.File]::WriteAllText((Join-Path $backupDir 'previous-default-profile.txt'), ($note -join "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
+        $backupOk = $true
+        Add-MSPFinding -Check 'Backup' -Category 'Backup' -Status PASS -Detail ('Saved {0}' -f $regFile) -Evidence @{ Folder = $backupDir }
     }
     catch {
-        Write-Log "Failed to create backup directory at '$LogDir': $_" -Level ERROR
-        throw
+        $exitCode = 2
+        Add-MSPFinding -Check 'Backup' -Category 'Backup' -Status FAIL -Detail ('Could not back up the Outlook settings: {0}. Nothing was changed.' -f $_.Exception.Message) `
+            -Recommendation 'Check free space in the user profile and run again. No change is made without a backup.'
     }
 }
-else {
-    Write-Log "DRYRUN: Would create backup directory: $LogDir" -Level DRYRUN
+if (-not $backupOk) {
+    Complete-MSPRun -OutputPath $OutputPath
+    exit 2
 }
 
-# ============================================================
-# REGION: Collect Current Profile State (Read-Only Diagnostics)
-# ============================================================
-
-Write-SectionHeader "Collecting Current Outlook Profile State"
-
-Add-TicketNote ""
-Add-TicketNote "PRE-RESET DIAGNOSTICS"
-
-# Installed Office version
-try {
-    $OfficeReg = @(
-        "HKLM:\SOFTWARE\Microsoft\Office\ClickToRun\Configuration",
-        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Office\ClickToRun\Configuration"
-    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-
-    if ($OfficeReg) {
-        $OfficeProps    = Get-ItemProperty -Path $OfficeReg -ErrorAction SilentlyContinue
-        $OfficeVersion  = $OfficeProps.VersionToReport
-        $OfficePlatform = $OfficeProps.Platform
-        Write-Log "Office Version  : $OfficeVersion ($OfficePlatform)" -Level INFO
-        Add-TicketNote "Office Version: $OfficeVersion ($OfficePlatform)"
-    }
-    else {
-        Write-Log "Could not determine Office version from registry." -Level WARN
-        Add-TicketNote "Office Version: Unknown (ClickToRun registry key not found)"
-    }
-}
-catch {
-    Write-Log "Error reading Office version: $_" -Level WARN
-}
-
-# Enumerate existing profiles
-Write-Log "" -Level INFO
-Write-Log "Existing Outlook profiles in registry:" -Level INFO
-Add-TicketNote ""
-Add-TicketNote "Existing Outlook Profiles (pre-reset):"
-
-foreach ($versionPath in $OutlookVersionKeys) {
-    $versionLabel = ($versionPath -split "\\") | Where-Object { $_ -match "^\d+\.\d+$" } | Select-Object -First 1
-    $profiles = Get-ChildItem -Path $versionPath -ErrorAction SilentlyContinue
-    if ($profiles) {
-        foreach ($p in $profiles) {
-            Write-Log "  [Office $versionLabel] $($p.PSChildName)" -Level INFO
-            Add-TicketNote "  Office $versionLabel | Profile: $($p.PSChildName)"
-        }
-    }
-    # Log the current DefaultProfile setting
-    $outlookKey    = ($versionPath -replace "\\Profiles$", "")
-    $defaultProfObj = Get-ItemProperty -Path $outlookKey -Name "DefaultProfile" -ErrorAction SilentlyContinue
-    $defaultProf    = if ($defaultProfObj) { $defaultProfObj.DefaultProfile } else { $null }
-    if ($defaultProf) {
-        Write-Log "  Default Profile set to: $defaultProf" -Level INFO
-        Add-TicketNote "  DefaultProfile value: $defaultProf"
-    }
-}
-
-# Outlook AppData file inventory
-if ($OutlookAppDataPath -and (Test-Path $OutlookAppDataPath)) {
-    Write-Log "" -Level INFO
-    Write-Log "Files in Outlook AppData ($OutlookAppDataPath):" -Level INFO
-    Add-TicketNote ""
-    Add-TicketNote "Outlook AppData Files (pre-reset):"
-    $appDataFiles = Get-ChildItem -Path $OutlookAppDataPath -File -ErrorAction SilentlyContinue |
-        Sort-Object Length -Descending
-    foreach ($f in $appDataFiles) {
-        $sizeMB = [Math]::Round($f.Length / 1MB, 2)
-        Write-Log "  $($f.Name)  [$sizeMB MB]  Modified: $($f.LastWriteTime)" -Level INFO
-        Add-TicketNote "  $($f.Name) | $sizeMB MB | Modified: $($f.LastWriteTime)"
-    }
-}
-else {
-    Write-Log "Outlook AppData path not found or inaccessible: $OutlookAppDataPath" -Level WARN
-    Add-TicketNote "Outlook AppData path not found: $OutlookAppDataPath"
-}
-
-# ============================================================
-# REGION: Terminate Outlook and Related Processes
-# ============================================================
-
-Write-SectionHeader "Terminating Outlook and Related Processes"
-
-$ProcessesToStop    = @("OUTLOOK", "UCMapi", "lync", "communicator")
-$TerminatedProcesses = @()
-
-foreach ($procName in $ProcessesToStop) {
-    $running = Get-Process -Name $procName -ErrorAction SilentlyContinue
-    if ($running) {
-        if ($PSCmdlet.ShouldProcess($procName, "Stop process")) {
-            try {
-                Stop-Process -Name $procName -Force -ErrorAction Stop
-                Write-Log "Stopped process: $procName (PID: $($running.Id -join ', '))" -Level ACTION
-                $TerminatedProcesses += $procName
-            }
-            catch {
-                Write-Log "Failed to stop ${procName}: $_" -Level WARN
-            }
-        }
-        else {
-            Write-Log "DRYRUN: Would stop process: $procName" -Level DRYRUN
-        }
-    }
-    else {
-        Write-Log "Process not running: $procName" -Level SKIP
-    }
-}
-
-if ($TerminatedProcesses.Count -gt 0) {
-    Add-TicketNote "Processes stopped before reset: $($TerminatedProcesses -join ', ')"
-    Start-Sleep -Seconds 2
-}
-else {
-    Add-TicketNote "Outlook was not running at time of reset."
-}
-
-# ============================================================
-# REGION: Back Up Registry Profile Keys
-# ============================================================
-
-Write-SectionHeader "Backing Up Registry Profile Keys"
-
-$RegBackupDir = Join-Path $LogDir "RegistryBackup"
-if ($PSCmdlet.ShouldProcess($RegBackupDir, "Create registry backup directory")) {
-    New-Item -ItemType Directory -Path $RegBackupDir -Force | Out-Null
-}
-
-foreach ($versionPath in $OutlookVersionKeys) {
-    $versionLabel = ($versionPath -split "\\") | Where-Object { $_ -match "^\d+\.\d+$" } | Select-Object -First 1
-
-    # Convert the clean PSDrive path (HKCU:\...) to the format reg.exe expects.
-    # reg.exe uses HKCU\ (no colon) rather than the PowerShell HKCU:\ form.
-    $regExportPath = ($versionPath -replace "\\Profiles$", "") -replace ":\\", "\"
-
-    $exportFile = Join-Path $RegBackupDir "OutlookKey_Office${versionLabel}_$RunTimestamp.reg"
-    $errorFile  = Join-Path $RegBackupDir "reg_err_Office${versionLabel}.txt"
-
-    if ($PSCmdlet.ShouldProcess($exportFile, "Export Outlook registry key")) {
-        try {
-            $result = Start-Process -FilePath "reg.exe" `
-                -ArgumentList "export `"$regExportPath`" `"$exportFile`" /y" `
-                -Wait -PassThru -WindowStyle Hidden `
-                -RedirectStandardError $errorFile
-
-            if ($result.ExitCode -eq 0) {
-                Write-Log "Registry backup saved: $exportFile" -Level SUCCESS
-                Add-TicketNote "Registry backup: $exportFile"
-            }
-            else {
-                $errContent = Get-Content $errorFile -ErrorAction SilentlyContinue
-                Write-Log "reg.exe export returned exit code $($result.ExitCode). Detail: $errContent" -Level WARN
-            }
-        }
-        catch {
-            Write-Log "Failed to export registry for Office ${versionLabel}: $_" -Level WARN
-        }
-    }
-    else {
-        Write-Log "DRYRUN: Would export registry key: $regExportPath -> $exportFile" -Level DRYRUN
-    }
-}
-
-# ============================================================
-# REGION: Back Up Outlook AppData (NK2, Signatures, XML, etc.)
-# ============================================================
-
-Write-SectionHeader "Backing Up Outlook AppData Files"
-
-$AppDataBackupDir = Join-Path $LogDir "AppDataBackup"
-
-if ($OutlookAppDataPath -and (Test-Path $OutlookAppDataPath)) {
-    if ($PSCmdlet.ShouldProcess($AppDataBackupDir, "Back up Outlook AppData folder")) {
-        try {
-            New-Item -ItemType Directory -Path $AppDataBackupDir -Force | Out-Null
-
-            $allFiles    = Get-ChildItem -Path $OutlookAppDataPath -File -ErrorAction SilentlyContinue
-            $backedUp    = 0
-            $skippedOST  = 0
-
-            foreach ($f in $allFiles) {
-                if ($f.Extension -ieq ".ost") {
-                    if ($SkipOSTBackup) {
-                        Write-Log "Skipping OST (SkipOSTBackup active): $($f.Name)" -Level SKIP
-                        $skippedOST++
-                        continue
-                    }
-                    $sizeMB = [Math]::Round($f.Length / 1MB, 2)
-                    if ($sizeMB -gt 500) {
-                        Write-Log "Large OST file detected ($sizeMB MB) -- backup may take several minutes: $($f.Name)" -Level WARN
-                    }
-                }
-                Copy-Item -Path $f.FullName -Destination $AppDataBackupDir -ErrorAction SilentlyContinue
-                $backedUp++
-            }
-
-            Write-Log "AppData backup complete: $backedUp file(s) copied to $AppDataBackupDir" -Level SUCCESS
-
-            if ($skippedOST -gt 0) {
-                Write-Log "$skippedOST OST file(s) skipped -- will re-sync from Exchange/M365 after reset." -Level SKIP
-                Add-TicketNote "OST file(s) not backed up -- will re-download from Exchange/M365 on next Outlook launch."
-            }
-            Add-TicketNote "AppData backup: $AppDataBackupDir ($backedUp files copied)"
-        }
-        catch {
-            Write-Log "AppData backup encountered an error: $_" -Level WARN
-            Add-TicketNote "WARNING: AppData backup partially failed. Review log for details."
-        }
-    }
-    else {
-        Write-Log "DRYRUN: Would back up Outlook AppData from $OutlookAppDataPath to $AppDataBackupDir" -Level DRYRUN
-    }
-}
-else {
-    Write-Log "Outlook AppData path not found -- skipping AppData backup." -Level SKIP
-    Add-TicketNote "Outlook AppData path not found; no AppData backup taken."
-}
-
-# ============================================================
-# REGION: Remove Corrupt Profile Registry Keys
-# ============================================================
-
-Write-SectionHeader "Removing Corrupt Outlook Profile Registry Keys"
-
-if (-not $TargetProfileKey) {
-    Write-Log "No target profile key found -- skipping removal step." -Level SKIP
-    Add-TicketNote "Profile removal skipped: '$ProfileName' not found in registry."
-}
-else {
-    if ($PSCmdlet.ShouldProcess($TargetProfileKey, "Remove Outlook profile registry key")) {
-        try {
-            Remove-Item -Path $TargetProfileKey -Recurse -Force -ErrorAction Stop
-            Write-Log "Removed profile registry key: $TargetProfileKey" -Level ACTION
-            Add-TicketNote "Removed registry key: $TargetProfileKey"
-        }
-        catch {
-            Write-Log "Failed to remove profile key '$TargetProfileKey': $_" -Level ERROR
-            Add-TicketNote "ERROR: Failed to remove profile registry key. Manual intervention may be required."
-            throw
-        }
-    }
-    else {
-        Write-Log "DRYRUN: Would remove registry key: $TargetProfileKey" -Level DRYRUN
-    }
-}
-
-# Clear the DefaultProfile value so Outlook prompts properly for new profile setup
-foreach ($versionPath in $OutlookVersionKeys) {
-    $outlookKey    = ($versionPath -replace "\\Profiles$", "")
-    $defaultProfObj = Get-ItemProperty -Path $outlookKey -Name "DefaultProfile" -ErrorAction SilentlyContinue
-    $defaultProf    = if ($defaultProfObj) { $defaultProfObj.DefaultProfile } else { $null }
-    if ($defaultProf) {
-        if ($PSCmdlet.ShouldProcess("$outlookKey -> DefaultProfile", "Clear DefaultProfile value")) {
-            try {
-                Remove-ItemProperty -Path $outlookKey -Name "DefaultProfile" -ErrorAction Stop
-                Write-Log "Cleared DefaultProfile value in: $outlookKey" -Level ACTION
-                Add-TicketNote "Cleared DefaultProfile registry value."
-            }
-            catch {
-                Write-Log "Could not clear DefaultProfile value: $_" -Level WARN
-            }
-        }
-        else {
-            Write-Log "DRYRUN: Would clear DefaultProfile value in $outlookKey" -Level DRYRUN
-        }
-    }
-}
-
-# ============================================================
-# REGION: Recreate Clean Default Profile
-# ============================================================
-
-Write-SectionHeader "Recreating Clean Outlook Profile"
-
-# Determine the Office version to write the new profile under.
-# Use the highest installed version found; fall back to 16.0 (O365/2016+).
-$TargetOfficeVersion = $null
-if ($OutlookVersionKeys.Count -gt 0) {
-    $TargetOfficeVersion = $OutlookVersionKeys |
-        ForEach-Object { ($_ -split "\\") | Where-Object { $_ -match "^\d+\.\d+$" } | Select-Object -First 1 } |
-        Sort-Object { [version]$_ } -Descending |
-        Select-Object -First 1
-}
-
-if (-not $TargetOfficeVersion) {
-    $TargetOfficeVersion = "16.0"
-    Write-Log "Could not determine Office version from existing keys -- defaulting to 16.0." -Level WARN
-}
-
-Write-Log "Recreating profile under Office version key: $TargetOfficeVersion" -Level INFO
-
-# Build the correct registry paths based on whether we are using HKCU or HKU
-if ($TargetUser -eq $env:USERNAME) {
-    $OutlookParentKey = "HKCU:\Software\Microsoft\Office\$TargetOfficeVersion\Outlook"
-    $NewProfilesPath  = "HKCU:\Software\Microsoft\Office\$TargetOfficeVersion\Outlook\Profiles"
-}
-else {
-    $OutlookParentKey = "HKU:\$TargetUserSID\Software\Microsoft\Office\$TargetOfficeVersion\Outlook"
-    $NewProfilesPath  = "HKU:\$TargetUserSID\Software\Microsoft\Office\$TargetOfficeVersion\Outlook\Profiles"
-}
-$NewProfilePath = Join-Path $NewProfilesPath $ProfileName
-
-if ($PSCmdlet.ShouldProcess($NewProfilePath, "Create new clean Outlook profile registry key")) {
+# =========================================================================================
+Write-MSPSection -Title 'New profile'
+# =========================================================================================
+$newKey = Join-Path $profilesKey $NewProfileName
+$created = $false
+if ($PSCmdlet.ShouldProcess($newKey, 'Create empty profile')) {
     try {
-        # Ensure parent keys exist
-        if (-not (Test-Path $OutlookParentKey)) {
-            New-Item -Path $OutlookParentKey -Force | Out-Null
-        }
-        if (-not (Test-Path $NewProfilesPath)) {
-            New-Item -Path $NewProfilesPath -Force | Out-Null
-        }
-
-        # Create the profile key and the required MAPI service subkey structure
-        New-Item -Path $NewProfilePath -Force | Out-Null
-
-        @(
-            "$NewProfilePath\9375CFF0413111d3B88A00104B2A6676",
-            "$NewProfilePath\9375CFF0413111d3B88A00104B2A6676\00000001"
-        ) | ForEach-Object {
-            if (-not (Test-Path $_)) { New-Item -Path $_ -Force | Out-Null }
-        }
-
-        # Set DefaultProfile so Outlook uses this profile on next launch
-        Set-ItemProperty -Path $OutlookParentKey -Name "DefaultProfile" -Value $ProfileName -Type String -Force
-
-        Write-Log "New profile key created: $NewProfilePath" -Level SUCCESS
-        Write-Log "DefaultProfile set to: $ProfileName" -Level SUCCESS
-        Add-TicketNote "New clean profile created: '$ProfileName' (Office $TargetOfficeVersion)"
-        Add-TicketNote "DefaultProfile registry value set to: $ProfileName"
+        $null = New-Item -Path $newKey -ErrorAction Stop
+        $created = $true
+        Add-MSPFinding -Check 'Create profile' -Category 'Change' -Status PASS -Detail ('Created empty profile "{0}".' -f $NewProfileName)
     }
     catch {
-        Write-Log "Failed to create new profile key: $_" -Level ERROR
-        Add-TicketNote "ERROR: Failed to create new profile registry key. Manual intervention may be required."
-        throw
+        $exitCode = 2
+        Add-MSPFinding -Check 'Create profile' -Category 'Change' -Status FAIL -Detail ('Could not create the profile key: {0}. The default profile was not changed.' -f $_.Exception.Message)
     }
+}
+if ($created -and $PSCmdlet.ShouldProcess(('{0} DefaultProfile' -f $outlookKey), ('Set to {0}' -f $NewProfileName))) {
+    try {
+        Set-ItemProperty -LiteralPath $outlookKey -Name DefaultProfile -Value $NewProfileName -Type String -ErrorAction Stop
+        Add-MSPFinding -Check 'Default profile' -Category 'Change' -Status PASS -Detail ('Default profile: "{0}" -> "{1}".' -f $(if ($oldDefault) { $oldDefault } else { 'not set' }), $NewProfileName)
+    }
+    catch {
+        $exitCode = 2
+        Add-MSPFinding -Check 'Default profile' -Category 'Change' -Status FAIL -Detail ('Could not set the default profile: {0}' -f $_.Exception.Message) `
+            -Recommendation 'Set it by hand: Control Panel > Mail (Microsoft Outlook) > Show Profiles > "Always use this profile".'
+    }
+}
+
+# =========================================================================================
+Write-MSPSection -Title 'Check and next steps'
+# =========================================================================================
+$nowDefault = [string](Get-ItemProperty -LiteralPath $outlookKey -Name DefaultProfile -ErrorAction SilentlyContinue).DefaultProfile
+$stillThere = @($profiles | Where-Object { -not (Test-Path -LiteralPath (Join-Path $profilesKey $_)) })
+if ($nowDefault -eq $NewProfileName -and (Test-Path -LiteralPath $newKey)) {
+    Add-MSPFinding -Check 'New profile is default' -Category 'After' -Status PASS -Detail ('"{0}" exists and is the default.' -f $NewProfileName)
 }
 else {
-    Write-Log "DRYRUN: Would create new profile key at: $NewProfilePath" -Level DRYRUN
-    Write-Log "DRYRUN: Would set DefaultProfile to: $ProfileName" -Level DRYRUN
+    $exitCode = 2
+    Add-MSPFinding -Check 'New profile is default' -Category 'After' -Status FAIL -Detail ('Default profile is "{0}".' -f $nowDefault)
 }
-
-# ============================================================
-# REGION: Post-Reset Verification
-# ============================================================
-
-Write-SectionHeader "Post-Reset Verification"
-
-$VerificationPassed = $true
-
-if (-not $WhatIfPreference) {
-    # Verify new profile key exists
-    if (Test-Path $NewProfilePath) {
-        Write-Log "VERIFIED: New profile key exists at $NewProfilePath" -Level SUCCESS
-        Add-TicketNote "Verification PASSED: New profile key is present in registry."
-    }
-    else {
-        Write-Log "VERIFICATION FAILED: New profile key not found at $NewProfilePath" -Level ERROR
-        Add-TicketNote "Verification FAILED: New profile key is missing. Manual review required."
-        $VerificationPassed = $false
-    }
-
-    # Verify DefaultProfile value
-    $verifyDefaultObj = Get-ItemProperty -Path $OutlookParentKey -Name "DefaultProfile" -ErrorAction SilentlyContinue
-    $verifyDefault    = if ($verifyDefaultObj) { $verifyDefaultObj.DefaultProfile } else { $null }
-    if ($verifyDefault -eq $ProfileName) {
-        Write-Log "VERIFIED: DefaultProfile = '$ProfileName'" -Level SUCCESS
-    }
-    else {
-        Write-Log "WARNING: DefaultProfile mismatch. Expected '$ProfileName', found '$verifyDefault'" -Level WARN
-        Add-TicketNote "WARNING: DefaultProfile value mismatch. Expected '$ProfileName', found '$verifyDefault'."
-    }
-
-    # Verify old corrupt profile key is gone
-    if ($TargetProfileKey -and (Test-Path $TargetProfileKey)) {
-        Write-Log "WARNING: Old profile key is still present -- removal may have failed." -Level WARN
-        Add-TicketNote "WARNING: Old profile key was not fully removed. Manual check advised."
-        $VerificationPassed = $false
-    }
-    elseif ($TargetProfileKey) {
-        Write-Log "VERIFIED: Old profile key has been removed." -Level SUCCESS
-    }
+if ($stillThere.Count -eq 0) {
+    Add-MSPFinding -Check 'Old profiles kept' -Category 'After' -Status PASS -Detail ('Still present: {0}' -f ($profiles -join ', '))
 }
 else {
-    Write-Log "DRYRUN: Skipping post-reset verification in WhatIf mode." -Level DRYRUN
+    Add-MSPFinding -Check 'Old profiles kept' -Category 'After' -Status WARN -Detail ('Not found any more: {0}' -f ($stillThere -join ', ')) -Recommendation ('Restore from {0}.' -f $regFile)
 }
+Add-MSPFinding -Check 'Add the account (by hand)' -Category 'After' -Status WARN -Severity Medium `
+    -Detail ('The new profile "{0}" has no account yet. Start Outlook; when it asks, enter {1}''s email address and sign in. If Outlook shows a profile list, choose "{0}".' -f $NewProfileName, $env:USERNAME) `
+    -Recommendation 'Then re-open any PST files and re-add shared mailboxes or signatures that were set up by hand.'
+$rollback = 'reg add "{0}" /v DefaultProfile /t REG_SZ /d "{1}" /f' -f $regKey, $oldDefault
+if (-not $oldDefault) { $rollback = 'reg delete "{0}" /v DefaultProfile /f' -f $regKey }
+Add-MSPFinding -Check 'Rollback' -Category 'After' -Status INFO `
+    -Detail ('With Outlook closed: {0}   (or: reg import "{1}"). Details: {2}' -f $rollback, $regFile, (Join-Path $backupDir 'previous-default-profile.txt'))
 
-# ============================================================
-# REGION: Generate Ticket Documentation
-# ============================================================
-
-Write-SectionHeader "Generating Ticket Documentation"
-
-$ResultLabel = if ($VerificationPassed) { "SUCCESS" } else { "COMPLETED WITH WARNINGS -- review log" }
-
-Add-TicketNote ""
-Add-TicketNote "POST-RESET STATUS"
-Add-TicketNote "Overall Result: $ResultLabel"
-Add-TicketNote ""
-Add-TicketNote "NEXT STEPS FOR TECHNICIAN"
-Add-TicketNote "1. Ask the user to launch Outlook."
-Add-TicketNote "2. Outlook will prompt to configure a new profile or auto-detect Exchange/M365."
-Add-TicketNote "3. Have the user sign in with their M365 or Exchange credentials if prompted."
-Add-TicketNote "4. Allow Outlook to complete initial sync (may take several minutes for large mailboxes)."
-Add-TicketNote "5. Verify Send/Receive works, calendar loads, and Contacts appear."
-Add-TicketNote "6. If additional accounts (IMAP/POP) were configured, these must be re-added manually."
-Add-TicketNote "7. Confirm user signatures and AutoComplete are restored (backed up in AppDataBackup)."
-Add-TicketNote ""
-Add-TicketNote "BACKUP FILES RETAINED AT:"
-Add-TicketNote "  $LogDir"
-Add-TicketNote "  (Retain for minimum 30 days per escalation policy)"
-Add-TicketNote ""
-Add-TicketNote "Full execution log: $LogFile"
-
-# Write ticket notes to file
-if (Test-Path $LogDir) {
-    $TicketHeader = @"
-================================================================
-  OUTLOOK PROFILE RESET -- TICKET DOCUMENTATION
-  Generated : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-  Script    : Reset-OutlookProfile.ps1 v$ScriptVersion
-  Machine   : $($env:COMPUTERNAME)
-================================================================
-
-"@
-    Set-Content -Path $TicketSummary -Value ($TicketHeader + ($script:TicketLines -join "`n"))
-    Write-Log "Ticket notes saved: $TicketSummary" -Level SUCCESS
-}
-
-# ============================================================
-# REGION: Final Console Summary
-# ============================================================
-
-Write-Host ""
-Write-Host "================================================================" -ForegroundColor Cyan
-Write-Host "  OUTLOOK PROFILE RESET COMPLETE" -ForegroundColor Cyan
-Write-Host "================================================================" -ForegroundColor Cyan
-Write-Host "  User     : $TargetUser"
-Write-Host "  Profile  : $ProfileName"
-Write-Host "  Machine  : $($env:COMPUTERNAME)"
-Write-Host "  Result   : $ResultLabel" -ForegroundColor $(if ($VerificationPassed) { "Green" } else { "Yellow" })
-Write-Host ""
-Write-Host "  Backup & Logs : $LogDir"
-Write-Host "  Ticket Notes  : $TicketSummary"
-Write-Host ""
-Write-Host "  NEXT STEP: Have the user launch Outlook and sign in."
-Write-Host "             Allow time for initial mailbox sync."
-Write-Host "================================================================" -ForegroundColor Cyan
-Write-Host ""
-
-if ($WhatIfPreference) {
-    Write-Host "  *** DRYRUN MODE -- No changes were made to this system ***" -ForegroundColor Magenta
-    Write-Host ""
-}
+Complete-MSPRun -OutputPath $OutputPath
+exit $exitCode

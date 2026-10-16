@@ -17,7 +17,9 @@
     How far back to search. Defaults to 30 days.
 
 .PARAMETER ReportDir
-    Directory where CSV exports are saved. Defaults to the script's directory.
+    Directory where CSV exports are saved. Defaults to %TEMP%\MSP-Toolkit\ for the account running
+    the script. The CSVs contain account names: never save them into the toolkit folder, a
+    repository or a USB stick that travels between clients.
 
 .PARAMETER NoCSV
     Switch to suppress CSV output and print console only.
@@ -32,13 +34,39 @@
     Requires: Windows Server 2016 (with Jan 2025 CU) or 2019+ for enriched event metadata.
     Must be run on a Domain Controller with access to the Security Event Log.
     Incorporates Microsoft open-source scripts from https://github.com/microsoft/Kerberos-Crypto
+    (Get-KerbEncryptionUsage.ps1 and List-AccountKeys.ps1).
     Original script authors: Will Aftring (wiaftrin) - Microsoft
+
+    License notice for the incorporated Microsoft code (required by its MIT License):
+
+        MIT License
+
+        Copyright (c) Microsoft Corporation.
+
+        Permission is hereby granted, free of charge, to any person obtaining a copy
+        of this software and associated documentation files (the "Software"), to deal
+        in the Software without restriction, including without limitation the rights
+        to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+        copies of the Software, and to permit persons to whom the Software is
+        furnished to do so, subject to the following conditions:
+
+        The above copyright notice and this permission notice shall be included in all
+        copies or substantial portions of the Software.
+
+        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+        IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+        FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+        AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+        LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+        OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+        SOFTWARE.
 #>
 
 [CmdletBinding()]
 param(
     [DateTime]$Since      = (Get-Date).AddDays(-30),
-    [string]  $ReportDir  = $(if ($PSScriptRoot) { $PSScriptRoot } else { $PWD.Path }),
+    # Default outside the toolkit folder: the CSVs hold account names (client data).
+    [string]  $ReportDir  = (Join-Path $env:TEMP 'MSP-Toolkit'),
     [switch]  $NoCSV
 )
 
@@ -67,9 +95,10 @@ $DCName      = "$env:COMPUTERNAME.$DomainName"
 
 $MIN_PROPERTY_COUNT = 21
 
-# AES-SHA1 key string differs between WS 2022 and WS 2025+
+# AES-SHA1 key string differs between WS 2022 and WS 2025+: 2022 logs "AES-SHA1" (expanded
+# below into the two SHA96 key types); 2025 already logs "AES128-SHA96"/"AES256-SHA96", so it
+# needs no mapping.
 $AES_SHA1_FILTER_2022 = "AES-SHA1"
-$AES_SHA1_FILTER_2025 = "SHA96"
 
 $XPathQuery = @"
 <QueryList>
@@ -142,7 +171,7 @@ class AccountKeyRecord {
 
 #region ── Helper: Raw Event Query ───────────────────────────────────────────
 
-function Get-SecurityEvents {
+function Get-SecurityEvent {
     param([string]$Query)
     $results = $null
     try {
@@ -187,7 +216,7 @@ Write-Host "  Querying Security Event Log on $DCName ..." -ForegroundColor Cyan
 Write-Host "  Time window: $($Since.ToString('yyyy-MM-dd HH:mm')) → now" -ForegroundColor Cyan
 Write-Host ""
 
-[array]$rawEvents = @(Get-SecurityEvents -Query $XPathQuery)
+[array]$rawEvents = @(Get-SecurityEvent -Query $XPathQuery)
 
 if ($null -eq $rawEvents -or $rawEvents.Count -eq 0) {
     Write-Warning "No 4768/4769 events found. Ensure Kerberos auditing is enabled and you are running on a DC with Windows Server 2016 (Jan 2025 CU+) or 2019+."
@@ -248,7 +277,7 @@ foreach ($evt in $rawEvents) {
 
 #region ── Step 3: Parse AccountKeyRecord Records (Key Inventory) ─────────────
 
-function Parse-KeyString([string]$rawKeys) {
+function ConvertFrom-KeyString([string]$rawKeys) {
     $tmp = [System.Collections.Generic.List[string]]::new()
     foreach ($k in ($rawKeys.Split(",") | ForEach-Object { $_.Trim() })) {
         if ($k -eq $AES_SHA1_FILTER_2022) {
@@ -269,7 +298,7 @@ foreach ($evt in $rawEvents) {
     $rec.Time        = $evt.TimeCreated
 
     [string]$rawKeys = $evt.Properties[16].Value
-    $rec.Keys        = Parse-KeyString -rawKeys $rawKeys
+    $rec.Keys        = ConvertFrom-KeyString -rawKeys $rawKeys
     $rec.KeysDisplay = $rec.Keys -join "; "
 
     if ($evt.Id -eq 4769) {
@@ -627,4 +656,4 @@ if (-not $NoCSV) {
     Write-Host ""
 }
 
-#endregion
+#endregion

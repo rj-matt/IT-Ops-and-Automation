@@ -15,6 +15,12 @@
       7  bash helper unit tests in WSL (as a normal user and as root; bash 3.2 too if built),
          cross-checked from PowerShell: JSON escaping round-trip, ID parity, schema validation
       8  PowerShell helper unit tests (tests/Test-MSPToolkitCommon.ps1) on 5.1 and 7
+      9  Runtime smoke tests of the Windows scripts on this PC, results validated against schema 2.0.
+         PASSIVE BY DEFAULT: only cases that stay on this PC run (local diagnostics, remediation
+         with -WhatIf, non-interactive refusal checks). Cases that send traffic beyond this PC
+         (ping sweep, reverse DNS of neighbors, LAN port scan, router/SSDP checks, Microsoft
+         Update online search, connectivity probes) are listed as NOT RUN unless
+         -AllowActiveNetwork is given.
     _archive\ is never scanned.
 
 .PARAMETER Path
@@ -25,6 +31,13 @@
 
 .PARAMETER TestUser
     Non-root WSL account used to run tests as a normal user. Default: msptest.
+
+.PARAMETER AllowActiveNetwork
+    Also run the runtime cases that send network traffic beyond this PC (see step 9). The local
+    subnet and the cases are printed first. Only use with approval for that network.
+
+.PARAMETER SkipRuntime
+    Skip step 9 (runtime smoke tests).
 
 .EXAMPLE
     .\tests\Invoke-ToolkitTests.ps1
@@ -44,7 +57,9 @@
 param(
     [string[]]$Path = @(),
     [string]$Distro = 'Ubuntu',
-    [string]$TestUser = 'msptest'
+    [string]$TestUser = 'msptest',
+    [switch]$AllowActiveNetwork,
+    [switch]$SkipRuntime
 )
 
 $ErrorActionPreference = 'Stop'
@@ -301,6 +316,89 @@ if ($pwsh) {
     $out = & $pwsh -NoProfile -File $unit 2>&1
     if ($LASTEXITCODE -eq 0) { Add-Result 'PowerShell helper unit tests (7)' PASS ((@($out) | Select-Object -Last 1) -join '') }
     else { Add-Result 'PowerShell helper unit tests (7)' FAIL ((@($out) | Where-Object { "$_" -match 'FAIL|passed' }) -join "`n") }
+}
+
+# --- 9 Runtime smoke tests (passive unless -AllowActiveNetwork) ---------------------------
+function Get-ProfileDefault {
+    <# Current Outlook default profile, to prove D3 changed nothing during its refusal test. #>
+    foreach ($v in '16.0', '15.0') {
+        $p = Get-ItemProperty -LiteralPath ('HKCU:\Software\Microsoft\Office\{0}\Outlook' -f $v) -Name DefaultProfile -ErrorAction SilentlyContinue
+        if ($p) { return [string]$p.DefaultProfile }
+    }
+    return ''
+}
+
+if ($SkipRuntime) { Add-Result 'Runtime smoke tests' 'NOT RUN' '-SkipRuntime' }
+else {
+    $r = 'security-operations\diagnostics'
+    $ep = 'security-operations\diagnostics\endpoint-posture'
+    $net = 'core-infrastructure\networking\diagnostics'
+    $si = 'endpoint-systems\diagnostics\system-info'
+    # Expect: allowed exit codes. Active: sends traffic beyond this PC (gated by -AllowActiveNetwork).
+    $cases = @(
+        @{ Name = 'A1 endpoint security'; Script = "$ep\Get-EndpointSecurityStatus.ps1"; Args = @(); Expect = @(0) }
+        @{ Name = 'A3 Wi-Fi (netsh, local)'; Script = "$net\Get-WiFiSecurityAudit.ps1"; Args = @(); Expect = @(0) }
+        @{ Name = 'A4 listening ports (no -ScanLan)'; Script = "$ep\Get-OpenPortScan.ps1"; Args = @(); Expect = @(0) }
+        @{ Name = 'A5 browsers'; Script = "$si\Get-BrowserSecurityCheck.ps1"; Args = @(); Expect = @(0) }
+        @{ Name = 'A6 updates (last scan, no -Online)'; Script = "$si\Get-WindowsUpdateCompliance.ps1"; Args = @(); Expect = @(0) }
+        @{ Name = 'A8 inventory'; Script = 'endpoint-systems\audit\software-inventory\Get-HomeDeviceInventory.ps1'; Args = @(); Expect = @(0) }
+        @{ Name = 'Bundle without A2/A7 + A9 report'; Script = "$r\Invoke-HomeAuditBundle.ps1"; Args = @('-Skip', 'Get-HomeNetworkMap,Get-RouterSecurityCheck', '-TechnicianName', 'Test'); Expect = @(0) }
+        @{ Name = 'D1 -WhatIf'; Script = 'endpoint-systems\remediation\safe\clear-caches\Clear-WindowsUpdateCache.ps1'; Args = @('-WhatIf'); Expect = @(0) }
+        @{ Name = 'D1 non-interactive, no -Force (must refuse)'; Script = 'endpoint-systems\remediation\safe\clear-caches\Clear-WindowsUpdateCache.ps1'; Args = @(); Expect = @(1) }
+        @{ Name = 'D2 -WhatIf -SkipConnectivityTest'; Script = 'endpoint-systems\remediation\elevated\network-resets\Reset-NetworkStack.ps1'; Args = @('-WhatIf', '-SkipConnectivityTest'); Expect = @(0) }
+        @{ Name = 'D2 -BackupOnly -SkipConnectivityTest'; Script = 'endpoint-systems\remediation\elevated\network-resets\Reset-NetworkStack.ps1'; Args = @('-BackupOnly', '-SkipConnectivityTest'); Expect = @(0); CleanBackup = $true }
+        @{ Name = 'D2 non-interactive, no -Force (must refuse)'; Script = 'endpoint-systems\remediation\elevated\network-resets\Reset-NetworkStack.ps1'; Args = @('-SkipConnectivityTest'); Expect = @(1) }
+        @{ Name = 'D3 -WhatIf'; Script = 'cloud-services\m365\remediation\Reset-OutlookProfile.ps1'; Args = @('-WhatIf'); Expect = @(0) }
+        @{ Name = 'D3 non-interactive, no -Force (must refuse)'; Script = 'cloud-services\m365\remediation\Reset-OutlookProfile.ps1'; Args = @(); Expect = @(0, 1); CheckOutlook = $true }
+        @{ Name = 'B4 -WhatIf'; Script = 'endpoint-systems\remediation\safe\restart-services\Restart-CommonServices.ps1'; Args = @('-WhatIf'); Expect = @(0) }
+        @{ Name = 'B4 non-interactive, no -Force (must refuse)'; Script = 'endpoint-systems\remediation\safe\restart-services\Restart-CommonServices.ps1'; Args = @(); Expect = @(0, 1) }
+        # Active network cases: never run without -AllowActiveNetwork.
+        @{ Name = 'A2 ping sweep of the local subnet'; Script = "$net\Get-HomeNetworkMap.ps1"; Args = @(); Expect = @(0); Active = 'ping sweep of the whole local subnet' }
+        @{ Name = 'A2 -SkipPing'; Script = "$net\Get-HomeNetworkMap.ps1"; Args = @('-SkipPing'); Expect = @(0); Active = 'reverse DNS lookups of neighbors via the DNS server' }
+        @{ Name = 'A4 -ScanLan'; Script = "$ep\Get-OpenPortScan.ps1"; Args = @('-ScanLan'); Expect = @(0); Active = 'ping sweep + TCP probes of 11 ports on every device' }
+        @{ Name = 'A7 router check'; Script = "$net\Get-RouterSecurityCheck.ps1"; Args = @('-SkipChecklistPrompt'); Expect = @(0); Active = 'TCP/HTTP to the gateway + SSDP multicast' }
+        @{ Name = 'A6 -Online'; Script = "$si\Get-WindowsUpdateCompliance.ps1"; Args = @('-Online'); Expect = @(0); Active = 'Microsoft Update online search' }
+        @{ Name = 'D2 -WhatIf with connectivity test'; Script = 'endpoint-systems\remediation\elevated\network-resets\Reset-NetworkStack.ps1'; Args = @('-WhatIf'); Expect = @(0); Active = 'ping gateway, DNS lookup, TCP to www.msftconnecttest.com' }
+    )
+    if ($AllowActiveNetwork) {
+        $route = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Sort-Object RouteMetric | Select-Object -First 1
+        $ip = if ($route) { Get-NetIPAddress -InterfaceIndex $route.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1 }
+        Write-Host ('-AllowActiveNetwork: active cases WILL send traffic on {0}/{1} (gateway {2}).' -f $ip.IPAddress, $ip.PrefixLength, $route.NextHop) -ForegroundColor Yellow
+    }
+    foreach ($case in $cases) {
+        $label = 'Runtime: {0}' -f $case.Name
+        if ($case.Active -and -not $AllowActiveNetwork) {
+            Add-Result $label 'NOT RUN' ('active network ({0}); needs -AllowActiveNetwork and approval' -f $case.Active)
+            continue
+        }
+        $script = Join-Path $root $case.Script
+        $out = Join-Path $work ('runtime-{0}' -f ($case.Name -replace '[^A-Za-z0-9]+', '-'))
+        $null = New-Item -ItemType Directory -Path $out -Force
+        $profileBefore = if ($case.CheckOutlook) { Get-ProfileDefault } else { '' }
+        # -NonInteractive: nothing may ever wait for keyboard input, and confirmation must refuse.
+        $argList = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $script) + $case.Args + @('-OutputPath', $out)
+        $console = & powershell.exe @argList 2>&1
+        $code = $LASTEXITCODE
+        ($console | Out-String) | Set-Content -LiteralPath (Join-Path $out 'console.txt') -Encoding UTF8
+        $problems = @()
+        if ($case.Expect -notcontains $code) { $problems += ('exit code {0}, expected {1}' -f $code, ($case.Expect -join ' or ')) }
+        if ($case.CheckOutlook -and (Get-ProfileDefault) -ne $profileBefore) { $problems += 'Outlook default profile CHANGED during a refusal test' }
+        $json = @(Get-ChildItem -LiteralPath $out -Filter '*.json' -File -Recurse)
+        if ($json.Count -eq 0) { $problems += 'no JSON result written' }
+        else {
+            $v = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $here 'Test-MSPResultSchema.ps1') -Path $out 2>&1
+            if ($LASTEXITCODE -ne 0) { $problems += ('schema: {0}' -f ((@($v) | Where-Object { "$_" -match 'error' } | Select-Object -First 3) -join '; ')) }
+        }
+        if ($case.CleanBackup) {
+            # Remove the backup folder this test created (its path is in the result's evidence).
+            foreach ($j in $json) {
+                $folder = ((Get-Content -LiteralPath $j.FullName -Raw | ConvertFrom-Json).Findings | Where-Object { $_.Check -eq 'Settings saved' -and $_.Status -eq 'PASS' }).Evidence.Folder
+                if ($folder -and (Split-Path $folder -Leaf) -like 'NetworkStackBackup_*' -and (Test-Path -LiteralPath $folder)) { Remove-Item -LiteralPath $folder -Recurse -Force }
+            }
+        }
+        if ($problems.Count -eq 0) { Add-Result $label PASS ('exit {0}; {1} result file(s) valid' -f $code, $json.Count) }
+        else { Add-Result $label FAIL (($problems -join "`n") + "`nconsole: " + (Join-Path $out 'console.txt')) }
+    }
 }
 
 # --- Summary -----------------------------------------------------------------------------

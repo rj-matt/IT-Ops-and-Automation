@@ -100,10 +100,17 @@ This repository exists to support those outcomes
 
 ## Script Catalog
 
-Scripts reviewed against the toolkit standards (Batch A, home network audit). Every script
-below runs on **Windows PowerShell 5.1** with **built-in modules only**, works without admin
-(admin-only checks show `SKIPPED`), logs to `%TEMP%\MSP-Toolkit\`, and supports `-OutputPath`
-for JSON/CSV results.
+Scripts reviewed against the toolkit standards (Batch A, home network audit, and the safety
+fixes for the live remediation scripts). Every script below runs on **Windows PowerShell 5.1**
+with **built-in modules only**, works without admin (admin-only checks show `SKIPPED`), logs to
+`%TEMP%\MSP-Toolkit\`, and supports `-OutputPath` for JSON/CSV results.
+
+Scripts that change something (B4, D1, D2, D3) always: show the current state and a numbered
+plan first; support `-WhatIf` (plan only, nothing changed, no admin needed); ask you to type
+**YES**; refuse to change anything in a non-interactive session (RMM job, scheduled task) unless
+`-Force` is given; record the state afterwards; and say plainly what cannot be undone.
+Exit codes: `0` done, `1` nothing changed (not admin / not confirmed / non-interactive),
+`2` a step failed.
 
 | Script | Folder | Purpose | Risk | Admin required | PS version | Modules |
 |---|---|---|---|---|---|---|
@@ -117,6 +124,10 @@ for JSON/CSV results.
 | `Get-HomeDeviceInventory.ps1` (A8) | `endpoint-systems/audit/software-inventory/` | Hardware/OS, users and last logon, installed software; flags remote-access and P2P tools | Read-Only | No (Yes for `-IncludeOtherUsers`) | 5.1 | Built-in |
 | `Export-SecurityAuditReport.ps1` (A9) | `security-operations/diagnostics/` | One self-contained HTML report from the JSON results | Read-Only (writes the report file) | No | 5.1 | Built-in |
 | `Invoke-HomeAuditBundle.ps1` | `security-operations/diagnostics/` | Runs A1-A8 in order into one timestamped folder; continues past failures; optional A9 | Read-Only | No (recommended: Yes) | 5.1 | Built-in |
+| `Restart-CommonServices.ps1` (B4) | `endpoint-systems/remediation/safe/restart-services/` | Restarts allow-listed Spooler, wuauserv, BITS; clears the DNS Client cache (Windows does not allow restarting it); before/after state | Safe | Yes (No for `-WhatIf`) | 5.1 | Built-in |
+| `Clear-WindowsUpdateCache.ps1` (D1) | `endpoint-systems/remediation/safe/clear-caches/` | Renames (never deletes) SoftwareDistribution and catroot2, restarts the update services, checks they rebuilt | Safe | Yes (No for `-WhatIf`) | 5.1 | Built-in |
+| `Reset-NetworkStack.ps1` (D2) | `endpoint-systems/remediation/elevated/network-resets/` | Pre-flight, saved copy of settings, `netsh winsock reset` + `netsh int ip reset` (exit codes checked) + DNS flush; restart required; **not fully reversible** | Elevated | Yes (No for `-WhatIf` / `-BackupOnly`) | 5.1 | Built-in |
+| `Reset-OutlookProfile.ps1` (D3) | `cloud-services/m365/remediation/` | Backs up Outlook profile settings, creates a new empty default profile, keeps the old one; never closes Outlook; account must be added by hand | Elevated | No (run as the affected user) | 5.1 | Built-in |
 | `MSPToolkit.Common.psm1` | `endpoint-systems/utilities/` | Shared helper source (embedded into each script; not run directly) | Read-Only | - | 5.1 | - |
 | `Sync-MSPEmbeddedHelper.ps1` | `endpoint-systems/utilities/` | Regenerates / verifies (`-Check`) the embedded helper copies | Safe (repo files only) | No | 5.1 | - |
 
@@ -281,6 +292,13 @@ Category/Check text on every platform so their IDs match. Export file names:
 check plus a tamper test, the bash helper unit tests in WSL (as a normal user and as root, under
 bash 5 and bash 3.2.57 when built at `/opt/bash-3.2`), a JSON escaping round-trip into PowerShell,
 finding-ID parity between bash and PowerShell, schema validation, and the PowerShell helper unit
-tests. Limit it with `-Path folder1,folder2`. Validate any result folder with
-`.\tests\Test-MSPResultSchema.ps1 -Path <folder>`.
+tests, then runtime smoke tests of the Windows scripts on this PC. Limit the static checks with
+`-Path folder1,folder2`; skip the runtime tests with `-SkipRuntime`. Validate any result folder
+with `.\tests\Test-MSPResultSchema.ps1 -Path <folder>`.
+
+**The harness is passive by default.** Runtime cases that would send traffic beyond the PC
+(A2 ping sweep or reverse DNS, A4 `-ScanLan`, A7 router/SSDP, A6 `-Online`, D2 connectivity
+probes) are reported as NOT RUN. Pass `-AllowActiveNetwork` only with approval for that
+network; the subnet is printed before anything is sent. Remediation scripts are only ever run
+with `-WhatIf`, `-BackupOnly`, or in non-interactive mode without `-Force` (which must refuse).
 
