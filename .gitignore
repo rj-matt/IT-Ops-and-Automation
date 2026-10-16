@@ -3,3 +3,15 @@ Thumbs.db
 Desktop.ini
 *.tmp
 *.log
+
+# Run outputs: never commit logs, exported results or client-identifying data.
+# Toolkit exports are named <Script>_<Host>_<yyyyMMdd-HHmmss>.<ext>.
+*_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9].json
+*_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]_*.csv
+HomeAudit_*/
+SecurityAuditReport_*.html
+NetworkStackBackup_*/
+# RC4 audit CSVs (<name>_<yyyyMMdd_HHmmss>.csv) contain account names.
+*RC4*_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9][0-9][0-9].csv
+msp-toolkit/
+MSP-Toolkit/
