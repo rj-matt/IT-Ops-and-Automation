@@ -21,8 +21,10 @@
          cross-checked from PowerShell: JSON escaping round-trip, ID parity, MAC vendor table
          parity, schema validation
       8  PowerShell helper unit tests (tests/Test-MSPToolkitCommon.ps1) on 5.1 and 7
-      9  Logic tests that use mocked paths and run on any platform
-         (tests/Test-ClearWindowsUpdateCacheLogic.ps1: D1 repeat runs)
+      9  Logic tests that use mocked paths and run on any platform:
+         tests/Test-ClearWindowsUpdateCacheLogic.ps1 (D1 repeat runs) and
+         tests/bash/test-scripts-mocked.sh under every bash (Linux scripts, Linux branches and
+         macOS paths not reachable here, with stub commands; no network traffic is possible)
      10  Runtime smoke tests of the scripts for THIS platform, results validated against schema
          2.0. Cases for another platform are listed as NOT RUN with the platform they need.
          PASSIVE BY DEFAULT: only cases that stay on this computer run (local diagnostics,
@@ -63,7 +65,7 @@
                     macOS/Linux: PowerShell 7 and bash
                     All: PSScriptAnalyzer (module path or %LOCALAPPDATA%\PSModules), ShellCheck
     Exit code     : 0 when every step that ran passed, 1 otherwise
-    Version       : 2.0.0
+    Version       : 2.1.0
 #>
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPositionalParameters', '', Justification = 'Add-Result (Step, Result, Detail) is called ~50 times; positional calls keep each step on one readable line.')]
 [CmdletBinding()]
@@ -448,6 +450,15 @@ foreach ($t in $logic) {
     }
 }
 
+if (-not $bashOk) { Add-Result 'Logic: bash scripts with stubbed platform commands' 'NOT RUN' $bashWhy }
+foreach ($b in $bashShells) {
+    $r = Invoke-Bash -Command ('cd {0} && {1} tests/bash/test-scripts-mocked.sh' -f (Format-BashQuote $rootBash), $b.Shell)
+    $label = 'Logic: bash scripts with stubbed platform commands ({0})' -f $b.Label
+    $last = ($r.Output -split "`n" | Where-Object { $_ -match 'passed, .* failed' } | Select-Object -Last 1)
+    if ($r.Code -eq 0) { Add-Result $label PASS $last }
+    else { Add-Result $label FAIL (($r.Output -split "`n" | Where-Object { $_ -match 'FAIL|passed|pattern' } | Select-Object -First 30) -join "`n") }
+}
+
 # --- 10 Runtime smoke tests (passive unless -AllowActiveNetwork) ---------------------------
 function Get-ProfileDefault {
     <# Current Outlook default profile, to prove D3 changed nothing during its refusal test. #>
@@ -483,6 +494,7 @@ else {
         @{ Platform = 'Windows'; Name = 'A1 endpoint security'; Script = "$ep/Get-EndpointSecurityStatus.ps1"; Args = @(); Expect = @(0) }
         @{ Platform = 'Windows'; Name = 'A3 Wi-Fi (netsh, local)'; Script = "$net/Get-WiFiSecurityAudit.ps1"; Args = @(); Expect = @(0) }
         @{ Platform = 'Windows'; Name = 'A4 listening ports (no -ScanLan)'; Script = "$ep/Get-OpenPortScan.ps1"; Args = @(); Expect = @(0) }
+        @{ Platform = 'Windows'; Name = 'A2 -Passive (neighbor table only, nothing sent)'; Script = "$net/Get-HomeNetworkMap.ps1"; Args = @('-Passive'); Expect = @(0) }
         @{ Platform = 'Windows'; Name = 'A5 browsers'; Script = "$si/Get-BrowserSecurityCheck.ps1"; Args = @(); Expect = @(0) }
         @{ Platform = 'Windows'; Name = 'A6 updates (last scan, no -Online)'; Script = "$si/Get-WindowsUpdateCompliance.ps1"; Args = @(); Expect = @(0) }
         @{ Platform = 'Windows'; Name = 'A8 inventory'; Script = 'endpoint-systems/audit/software-inventory/Get-HomeDeviceInventory.ps1'; Args = @(); Expect = @(0) }
@@ -496,12 +508,26 @@ else {
         @{ Platform = 'Windows'; Name = 'D3 non-interactive, no -Force (must refuse)'; Script = 'cloud-services/m365/remediation/Reset-OutlookProfile.ps1'; Args = @(); Expect = @(0, 1); CheckOutlook = $true }
         @{ Platform = 'Windows'; Name = 'B4 -WhatIf'; Script = 'endpoint-systems/remediation/safe/restart-services/Restart-CommonServices.ps1'; Args = @('-WhatIf'); Expect = @(0) }
         @{ Platform = 'Windows'; Name = 'B4 non-interactive, no -Force (must refuse)'; Script = 'endpoint-systems/remediation/safe/restart-services/Restart-CommonServices.ps1'; Args = @(); Expect = @(0, 1) }
+        # macOS: run with /bin/bash, the bash 3.2 that ships with macOS.
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'A1 endpoint security (macOS)'; Script = "$ep/get-endpoint-security-status-macos.sh"; Args = @(); Expect = @(0) }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'A2 --passive (neighbor table only, nothing sent)'; Script = "$net/get-home-network-map.sh"; Args = @('--passive'); Expect = @(0); MustContain = 'Passive: nothing is sent' }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'A3 Wi-Fi (macOS, local)'; Script = "$net/get-wifi-security-audit-macos.sh"; Args = @(); Expect = @(0) }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'A4 listening ports (no --scan-lan)'; Script = "$ep/get-open-port-scan.sh"; Args = @(); Expect = @(0) }
+        # Linux: the same, with the Linux scripts.
+        @{ Platform = 'Linux'; Name = 'A1 endpoint security (Linux)'; Script = "$ep/get-endpoint-security-status-linux.sh"; Args = @(); Expect = @(0) }
+        @{ Platform = 'Linux'; Name = 'A2 --passive (neighbor table only, nothing sent)'; Script = "$net/get-home-network-map.sh"; Args = @('--passive'); Expect = @(0); MustContain = 'Passive: nothing is sent' }
+        @{ Platform = 'Linux'; Name = 'A3 Wi-Fi (Linux, local)'; Script = "$net/get-wifi-security-audit-linux.sh"; Args = @(); Expect = @(0) }
+        @{ Platform = 'Linux'; Name = 'A4 listening ports (no --scan-lan)'; Script = "$ep/get-open-port-scan.sh"; Args = @(); Expect = @(0) }
         # Active network cases: never run without -AllowActiveNetwork.
         @{ Platform = 'Windows'; Name = 'A2 ping sweep of the local subnet'; Script = "$net/Get-HomeNetworkMap.ps1"; Args = @(); Expect = @(0); Active = 'ping sweep of the whole local subnet + reverse DNS' }
         @{ Platform = 'Windows'; Name = 'A2 -SkipPing'; Script = "$net/Get-HomeNetworkMap.ps1"; Args = @('-SkipPing'); Expect = @(0); Active = 'reverse DNS lookups of neighbors via the DNS server' }
         @{ Platform = 'Windows'; Name = 'A4 -ScanLan'; Script = "$ep/Get-OpenPortScan.ps1"; Args = @('-ScanLan'); Expect = @(0); Active = 'ping sweep + TCP probes of 11 ports on every device' }
         @{ Platform = 'Windows'; Name = 'A7 router check'; Script = "$net/Get-RouterSecurityCheck.ps1"; Args = @('-SkipChecklistPrompt'); Expect = @(0); Active = 'TCP/HTTP to the gateway + SSDP multicast' }
         @{ Platform = 'Windows'; Name = 'A6 -Online'; Script = "$si/Get-WindowsUpdateCompliance.ps1"; Args = @('-Online'); Expect = @(0); Active = 'Microsoft Update online search' }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'A2 ping sweep (macOS)'; Script = "$net/get-home-network-map.sh"; Args = @(); Expect = @(0); Active = 'ping sweep of the whole local subnet + hostname lookups' }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'A4 --scan-lan (macOS)'; Script = "$ep/get-open-port-scan.sh"; Args = @('--scan-lan'); Expect = @(0); Active = 'ping sweep + TCP probes of 11 ports on every device' }
+        @{ Platform = 'Linux'; Name = 'A2 ping sweep (Linux)'; Script = "$net/get-home-network-map.sh"; Args = @(); Expect = @(0); Active = 'ping sweep of the whole local subnet + hostname lookups' }
+        @{ Platform = 'Linux'; Name = 'A4 --scan-lan (Linux)'; Script = "$ep/get-open-port-scan.sh"; Args = @('--scan-lan'); Expect = @(0); Active = 'ping sweep + TCP probes of 11 ports on every device' }
         @{ Platform = 'Windows'; Name = 'D2 -WhatIf with connectivity test'; Script = 'endpoint-systems/remediation/elevated/network-resets/Reset-NetworkStack.ps1'; Args = @('-WhatIf'); Expect = @(0); Active = 'ping gateway, DNS lookup, TCP to www.msftconnecttest.com' }
     )
     if ($AllowActiveNetwork) {

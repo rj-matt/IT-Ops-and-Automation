@@ -5,6 +5,9 @@
 # bash 3.2. Comment lines are ignored.
 #
 #   bash tests/bash/check-bash32-compat.sh FILE...    exit 1 if anything is found
+#
+# Files named *-linux.sh only run on Linux, so GNU-only commands (stat -c, date -d ...) are
+# allowed there; the bash 3.2 checks still apply (some Linux systems are tested with 3.2 too).
 set -u
 
 found=0
@@ -37,6 +40,9 @@ for f in "$@"; do
     check "$f" 'shopt[[:space:]]+-s[[:space:]]+(globstar|lastpipe|autocd|direxpand)' 'shopt option added in bash 4'
     check "$f" '\$\{[A-Za-z_][A-Za-z0-9_]*:[^}]*:-[0-9]' 'negative substring length (bash 4.2)'
     check "$f" 'read[[:space:]]+(-[a-zA-Z]*[[:space:]]+)*-i[[:space:]]' 'read -i (bash 4)'
+    # Not a bash 4 feature, but an easy porting slip: PowerShell writes it''s, bash prints its.
+    check "$f" "[A-Za-z]''[a-z]" "PowerShell-style '' quote escape (bash drops it; use '\\'' or double quotes)"
+    case "$f" in *-linux.sh) continue ;; esac
     check "$f" '(^|[;&|[:space:]])(timeout|readlink[[:space:]]+-f|realpath|sed[[:space:]]+-i|stat[[:space:]]+-c|date[[:space:]]+-d|grep[[:space:]]+-P)([[:space:]]|$)' 'GNU-only command/flag (missing or different on macOS)'
 done
 

@@ -9,10 +9,10 @@ the schema and shared-helper changes in sections 2 and 5, which every Batch A sc
 
 | ID | Script (PowerShell / bash) | Folder | Risk | Windows | macOS | Linux |
 |---|---|---|---|---|---|---|
-| A1 | Get-EndpointSecurityStatus / get-endpoint-security-status-{macos,linux}.sh | security-operations/diagnostics/endpoint-posture/ | Read-Only | needs fixes (minor) | missing | missing |
-| A2 | Get-HomeNetworkMap / get-home-network-map.sh | core-infrastructure/networking/diagnostics/ | Read-Only | needs fixes (probe cap, VPN fallback) | missing | missing |
-| A3 | Get-WiFiSecurityAudit / get-wifi-security-audit-{macos,linux}.sh | core-infrastructure/networking/diagnostics/ | Read-Only | needs fixes (minor) | missing | missing |
-| A4 | Get-OpenPortScan / get-open-port-scan.sh | security-operations/diagnostics/endpoint-posture/ | Read-Only | needs fixes (probe cap, VPN fallback) | missing | missing |
+| A1 | Get-EndpointSecurityStatus / get-endpoint-security-status-{macos,linux}.sh | security-operations/diagnostics/endpoint-posture/ | Read-Only | built (A-1; Windows run pending) | good (A-1; run on macOS 26) | built (A-1; stub-tested only) |
+| A2 | Get-HomeNetworkMap / get-home-network-map.sh | core-infrastructure/networking/diagnostics/ | Read-Only | built (A-1; `-Passive` added; Windows run pending) | good (A-1; passive run on macOS 26) | built (A-1; stub-tested only) |
+| A3 | Get-WiFiSecurityAudit / get-wifi-security-audit-{macos,linux}.sh | core-infrastructure/networking/diagnostics/ | Read-Only | built (A-1; Windows run pending) | good (A-1; run on macOS 26) | built (A-1; stub-tested only) |
+| A4 | Get-OpenPortScan / get-open-port-scan.sh | security-operations/diagnostics/endpoint-posture/ | Read-Only | built (A-1; Windows run pending) | good (A-1; local part run on macOS 26) | built (A-1; stub-tested only) |
 | A5 | Get-BrowserSecurityCheck / get-browser-security-check.sh | endpoint-systems/diagnostics/system-info/ | Read-Only | needs fixes (minor) | missing | missing |
 | A6 | Get-WindowsUpdateCompliance / get-update-compliance-{macos,linux}.sh | endpoint-systems/diagnostics/system-info/ | Read-Only | needs fixes (minor) | missing | missing |
 | A7 | Get-RouterSecurityCheck / get-router-security-check.sh | core-infrastructure/networking/diagnostics/ | Read-Only | needs fixes (minor) | missing | missing |
@@ -34,7 +34,10 @@ the schema and shared-helper changes in sections 2 and 5, which every Batch A sc
 | E3 | Get-BackupRecency / get-backup-recency.sh | core-infrastructure/backups-dr/diagnostics/ | Read-Only | missing | missing | missing (SKIPPED unless a known tool is found) |
 | E4 | Get-ServerHealthReport / get-server-health-report.sh | core-infrastructure/servers/{windows,linux}/diagnostics/ | Read-Only | missing | N/A | missing |
 
-Nothing is rated **good** yet: the schema change (section 2) reaches every Batch A script.
+Nothing was rated **good** at Phase 2: the schema change (section 2) reaches every Batch A script.
+Updated after step A-1 (A1-A4): "good" = built to standard and run on that platform; "built" =
+built to standard, logic tested with stubbed commands, not yet run on a real machine of that
+platform. The A-1 Windows changes were parse- and analyzer-checked on pwsh 7 only.
 
 **Planned macOS/Linux splits** (single shared `.sh` otherwise): A1, A3, A6, C3. In each, the two
 platforms share almost no commands (FileVault/SIP/Gatekeeper vs LUKS/ufw/firewalld; `system_profiler`/`wdutil`

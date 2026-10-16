@@ -101,9 +101,10 @@ This repository exists to support those outcomes
 ## Script Catalog
 
 Scripts reviewed against the toolkit standards (Batch A, home network audit, and the safety
-fixes for the live remediation scripts). Every script below runs on **Windows PowerShell 5.1**
-with **built-in modules only**, works without admin (admin-only checks show `SKIPPED`), logs to
-`%TEMP%\MSP-Toolkit\`, and supports `-OutputPath` for JSON/CSV results.
+fixes for the live remediation scripts). Every Windows script below runs on **Windows PowerShell
+5.1** with **built-in modules only**, works without admin (admin-only checks show `SKIPPED`), logs
+to `%TEMP%\MSP-Toolkit\`, and supports `-OutputPath` for JSON/CSV results. The macOS and Linux
+scripts are listed after them.
 
 Scripts that change something (B4, D1, D2, D3) always: show the current state and a numbered
 plan first; support `-WhatIf` (plan only, nothing changed, no admin needed); ask you to type
@@ -115,7 +116,7 @@ Exit codes: `0` done, `1` nothing changed (not admin / not confirmed / non-inter
 | Script | Folder | Purpose | Risk | Admin required | PS version | Modules |
 |---|---|---|---|---|---|---|
 | `Get-EndpointSecurityStatus.ps1` (A1) | `security-operations/diagnostics/endpoint-posture/` | Antivirus, firewall, BitLocker, updates, local admins, UAC, SMBv1, Secure Boot, RDP | Read-Only | No (admin adds TPM, authoritative BitLocker/SMBv1) | 5.1 | Built-in |
-| `Get-HomeNetworkMap.ps1` (A2) | `core-infrastructure/networking/diagnostics/` | Devices on the local subnet: IP, MAC, vendor hint, hostname, device type; flags unidentified devices | Read-Only (ping + ARP) | No | 5.1 | Built-in |
+| `Get-HomeNetworkMap.ps1` (A2) | `core-infrastructure/networking/diagnostics/` | Devices on the local subnet: IP, MAC, vendor hint, hostname, device type; flags unidentified devices. `-Passive` sends nothing (neighbor table only) | Read-Only (ping + ARP) | No | 5.1 | Built-in |
 | `Get-WiFiSecurityAudit.ps1` (A3) | `core-infrastructure/networking/diagnostics/` | Current Wi-Fi security, saved profiles (no keys), nearby networks | Read-Only | No | 5.1 | Built-in (netsh) |
 | `Get-OpenPortScan.ps1` (A4) | `security-operations/diagnostics/endpoint-posture/` | Listening ports with owning process; optional `-ScanLan` check of 11 risky ports on local devices | Read-Only | No | 5.1 | Built-in |
 | `Get-BrowserSecurityCheck.ps1` (A5) | `endpoint-systems/diagnostics/system-info/` | Chrome/Edge/Brave/Firefox versions, extensions, update-blocking policies; no credential access | Read-Only | No (Yes for `-AllUsers`) | 5.1 | Built-in |
@@ -139,6 +140,29 @@ never reuses or overwrites an earlier `.old` or `.old-<timestamp>` folder. The `
 are only needed to undo the reset. **Once Windows Update has installed updates successfully
 again, they can be deleted** (as administrator) to free disk space. The script lists any it
 finds from earlier runs.
+
+### macOS and Linux scripts
+
+Same checks, same check names and finding IDs, same JSON/CSV (schema 2.0) as the Windows versions,
+so one HTML report (A9) can combine every computer in the home. Written for **bash 3.2** (the
+version macOS ships) with **only tools that come with the OS** (no Homebrew, jq or Python). They
+work without root; checks that need it show `SKIPPED` with the sudo command. They never call sudo
+themselves. Logs go to `${TMPDIR:-/tmp}/msp-toolkit/`; results to `--output <folder>`; `--help`
+shows the options.
+
+| Script | Folder | Platform | Purpose | Risk | Root (sudo) required |
+|---|---|---|---|---|---|
+| `get-endpoint-security-status-macos.sh` (A1) | `security-operations/diagnostics/endpoint-posture/` | macOS | XProtect/AV, firewall, FileVault, updates (from macOS's records, no online check), admins, guest/root/auto-login, screen lock, SIP, Gatekeeper, MDM, Remote Login, Screen Sharing | Read-Only | No (Yes adds the FileVault recovery key check) |
+| `get-endpoint-security-status-linux.sh` (A1) | `security-operations/diagnostics/endpoint-posture/` | Linux | AV/EDR, ufw/firewalld/nftables, LUKS, apt/dnf pending updates from the local cache, automatic updates, sudo members, extra UID 0, guest/auto-login, Secure Boot, SELinux/AppArmor, SSH, VNC/RDP | Read-Only | No (Yes adds root password status and the running SSH settings) |
+| `get-home-network-map.sh` (A2) | `core-infrastructure/networking/diagnostics/` | macOS, Linux | Devices on the local subnet; `--passive` sends nothing | Read-Only (ping + ARP) | No |
+| `get-wifi-security-audit-macos.sh` (A3) | `core-infrastructure/networking/diagnostics/` | macOS | Current Wi-Fi security, saved networks, nearby networks; never reads passwords | Read-Only | No (Yes adds the security type of each saved network) |
+| `get-wifi-security-audit-linux.sh` (A3) | `core-infrastructure/networking/diagnostics/` | Linux (NetworkManager) | Current Wi-Fi security, saved connections (no secrets), nearby networks from the last scan | Read-Only | No |
+| `get-open-port-scan.sh` (A4) | `security-operations/diagnostics/endpoint-posture/` | macOS, Linux | Listening ports with owning process; optional `--scan-lan` check of 11 risky ports on local devices | Read-Only | No (on Linux, Yes shows other users' process names) |
+
+Run them with `bash <script>` (no need to make them executable, and macOS's quarantine flag on
+downloaded files does not apply to a script passed to bash). On macOS, macOS hides Wi-Fi names
+from Terminal unless it has Location Services permission; the A3 ratings still work and the
+name-matching checks say so. None of these scripts need Full Disk Access.
 
 Scripts not listed here have not yet been reviewed against the standards (Batches B-E).
 Superseded scripts and unsigned binaries are in `_archive/` (see `_archive/README.md`).
@@ -316,9 +340,11 @@ under it for real, not only parse-checked. Limit the static checks with `-Path f
 skip the runtime tests with `-SkipRuntime`. Validate any result folder with
 `tests/Test-MSPResultSchema.ps1 -Path <folder>`.
 
-**The harness is passive by default.** Runtime cases that would send traffic beyond the PC
-(A2 ping sweep or reverse DNS, A4 `-ScanLan`, A7 router/SSDP, A6 `-Online`, D2 connectivity
-probes) are reported as NOT RUN. Pass `-AllowActiveNetwork` only with approval for that
+**The harness is passive by default.** Runtime cases that would send traffic beyond the computer
+(A2 ping sweep or hostname lookups, A4 `-ScanLan` / `--scan-lan`, A7 router/SSDP, A6 `-Online`, D2
+connectivity probes) are reported as NOT RUN; A2 runs only with `-Passive` / `--passive`. The
+stubbed bash tests (`tests/bash/test-scripts-mocked.sh`) also cover the sweep and port-check code
+paths, against stub `ping`/`nc` commands and the documentation-only range 198.51.100.0/24. Pass `-AllowActiveNetwork` only with approval for that
 network; the subnet is printed before anything is sent. Remediation scripts are only ever run
 with `-WhatIf`, `-BackupOnly`, or in non-interactive mode without `-Force` (which must refuse).
 

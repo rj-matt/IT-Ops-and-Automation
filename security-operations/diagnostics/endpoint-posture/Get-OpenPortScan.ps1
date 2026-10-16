@@ -23,7 +23,7 @@
     for is fine; a hotel, office or coffee-shop network is not.
 
 .PARAMETER OutputPath
-    Optional folder for JSON/CSV results (toolkit schema 1.0), including ListeningPorts and
+    Optional folder for JSON/CSV results (toolkit schema 2.0), including ListeningPorts and
     LanOpenPorts tables.
 
 .PARAMETER ScanLan
@@ -59,14 +59,14 @@
                     TCP connections. Nothing is changed and no logins are attempted.
     Prerequisites : Windows PowerShell 5.1 | Admin: No (admin shows more process paths) |
                     Modules: built-in only (NetTCPIP)
-    Version       : 2.1.0
+    Version       : 2.1.1
     Limitations   : TCP only (UDP services such as SSDP/UPnP are covered by Get-RouterSecurityCheck.ps1).
                     "Reachable from the network" means the port is bound to a network address;
                     Windows Firewall may still block it (see Get-EndpointSecurityStatus.ps1).
                     The LAN scan shows what devices expose INSIDE the home network, not what is
                     exposed to the internet. Devices that are asleep or on a guest network are
                     not seen. Version 1 scanned remote PCs over WinRM with no subnet limit; that
-                    mode was removed.
+                    mode was removed. macOS/Linux version: get-open-port-scan.sh.
 #>
 [CmdletBinding()]
 param(
@@ -1410,7 +1410,7 @@ function Get-MSPMacVendor {
 #endregion MSPHelper:Net
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '2.1.0'
+$ScriptVersion = '2.1.1'
 Initialize-MSPRun -ScriptName 'Get-OpenPortScan' -ScriptVersion $ScriptVersion -CheckId 'A4' -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'Listening ports on this PC; optional local-network port check (read-only)'
 

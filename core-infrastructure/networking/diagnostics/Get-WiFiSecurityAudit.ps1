@@ -21,7 +21,7 @@
     script never changes the setting.
 
 .PARAMETER OutputPath
-    Optional folder for JSON/CSV results (toolkit schema 1.0).
+    Optional folder for JSON/CSV results (toolkit schema 2.0).
 
 .PARAMETER HomeSsid
     Name of the client's home Wi-Fi. Use when the PC is wired or connected elsewhere, so the
@@ -40,11 +40,12 @@
     Risk Level    : Read-Only -- reads Wi-Fi status only. Never reads or shows Wi-Fi passwords; changes nothing.
     Prerequisites : Windows PowerShell 5.1 | Admin: No | Modules: none (uses netsh) |
                     Wi-Fi adapter with WLAN AutoConfig service running
-    Version       : 1.1.0
+    Version       : 1.1.1
     Limitations   : netsh output is parsed in English; on other display languages some fields
                     may show as unknown. Nearby networks come from Windows' last scan, not a
                     new active scan. Cannot verify router-side settings (WPS, guest isolation):
                     see Get-RouterSecurityCheck.ps1. Replaces _archive\...\Check-WifiSecurity.ps1.
+                    macOS/Linux versions: get-wifi-security-audit-macos.sh / -linux.sh.
 #>
 [CmdletBinding()]
 param(
@@ -667,7 +668,7 @@ function Complete-MSPRun {
 #endregion MSPHelper:Core
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '1.1.0'
+$ScriptVersion = '1.1.1'
 Initialize-MSPRun -ScriptName 'Get-WiFiSecurityAudit' -ScriptVersion $ScriptVersion -CheckId 'A3' -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'Wi-Fi security audit (read-only; passwords are never read)'
 

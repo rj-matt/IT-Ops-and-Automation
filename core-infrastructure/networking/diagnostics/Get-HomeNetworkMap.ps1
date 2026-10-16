@@ -10,8 +10,8 @@
       2. Pings every address in that subnet in parallel (runspaces; 32 at a time, 500 ms timeout).
       3. Reads the Windows neighbor (ARP) table. Devices that ignore ping still answer ARP, so
          they are found too.
-      4. Looks up hostnames (reverse DNS / NetBIOS via Windows) and a vendor hint from a small
-         built-in MAC prefix table. No internet lookups are made.
+      4. Looks up hostnames (reverse DNS / NetBIOS via Windows; skipped with -SkipNameLookup)
+         and a vendor hint from a small built-in MAC prefix table. No internet lookups are made.
       5. Guesses the device type from hostname and vendor, and flags unidentified devices.
 
     Safety limits: only the directly attached subnet is ever contacted. Subnets larger than /22
@@ -19,7 +19,7 @@
     (4,094 addresses) is ever scanned. No ports are scanned (see Get-OpenPortScan.ps1 -ScanLan).
 
 .PARAMETER OutputPath
-    Optional folder for JSON/CSV results (toolkit schema 1.0), including a Devices table.
+    Optional folder for JSON/CSV results (toolkit schema 2.0), including a Devices table.
 
 .PARAMETER TimeoutMs
     Ping timeout per address in milliseconds (200-2000). Default 500.
@@ -28,7 +28,16 @@
     Maximum simultaneous pings (1-32). Default 32.
 
 .PARAMETER SkipPing
-    Passive mode: read the existing neighbor (ARP) table only; send no pings. Finds fewer devices.
+    Read the existing neighbor (ARP) table only; send no pings. Finds fewer devices. Hostname
+    lookups still go to the DNS server unless -SkipNameLookup (or -Passive) is also given.
+
+.PARAMETER SkipNameLookup
+    Do not look up hostnames (no reverse DNS / NetBIOS queries). Devices are identified by MAC
+    vendor only, so more of them show as unidentified.
+
+.PARAMETER Passive
+    Same as -SkipPing -SkipNameLookup: sends nothing on the network at all. Lists only devices
+    this PC already has in its neighbor (ARP) table. Same as --passive on macOS/Linux.
 
 .PARAMETER AllowLargeSubnet
     Permit subnets from /22 up to /20. Use only when the client's network really is that large.
@@ -42,8 +51,8 @@
     Same, and saves JSON/CSV including the device list.
 
 .EXAMPLE
-    .\Get-HomeNetworkMap.ps1 -SkipPing
-    Lists only devices this PC has already talked to; sends no new traffic.
+    .\Get-HomeNetworkMap.ps1 -Passive
+    Lists only devices this PC has already talked to; sends no network traffic at all.
 
 .NOTES
     Purpose       : Inventory what is connected to the client's home network.
@@ -51,12 +60,13 @@
     Scope         : The local IPv4 subnet of the active adapter only. Prints scope before sending anything.
     Risk Level    : Read-Only -- sends ICMP echo (ping) and ARP to local addresses; changes nothing.
     Prerequisites : Windows PowerShell 5.1 | Admin: No | Modules: built-in only (NetTCPIP)
-    Version       : 1.1.0
+    Version       : 1.2.0
     Limitations   : Devices that are asleep, on a separate guest/IoT network, or on another
                     subnet are not seen. Vendor is a hint from a small table; "Unknown" does not
                     mean malicious. Phones/tablets often use private (randomized) MAC addresses,
                     so they cannot be identified by vendor. IPv6-only devices are not listed.
-                    Replaces _archive\...\Get-SubnetMap.ps1.
+                    Replaces _archive\...\Get-SubnetMap.ps1. macOS/Linux version:
+                    get-home-network-map.sh (same checks and finding IDs).
 #>
 [CmdletBinding()]
 param(
@@ -64,6 +74,8 @@ param(
     [ValidateRange(200, 2000)][int]$TimeoutMs = 500,
     [ValidateRange(1, 32)][int]$ThrottleLimit = 32,
     [switch]$SkipPing,
+    [switch]$SkipNameLookup,
+    [switch]$Passive,
     [switch]$AllowLargeSubnet
 )
 
@@ -1400,7 +1412,7 @@ function Get-MSPMacVendor {
 #endregion MSPHelper:Net
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '1.1.0'
+$ScriptVersion = '1.2.0'
 Initialize-MSPRun -ScriptName 'Get-HomeNetworkMap' -ScriptVersion $ScriptVersion -CheckId 'A2' -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'Local network device map (read-only)'
 
@@ -1441,16 +1453,20 @@ if (-not $subnet) {
 $hostList = Get-MSPSubnetHostList -Subnet $subnet
 $firstHost = $hostList[0]
 $lastHost = $hostList[-1]
-$method = 'ICMP ping ({0} ms timeout, up to {1} at a time) + neighbor (ARP) table + reverse DNS' -f $TimeoutMs, $ThrottleLimit
-if ($SkipPing) { $method = 'Passive: existing neighbor (ARP) table + reverse DNS only (no pings sent)' }
+if ($Passive) { $SkipPing = [switch]$true; $SkipNameLookup = [switch]$true }
+$method = 'ICMP ping ({0} ms timeout, up to {1} at a time) + neighbor (ARP) table' -f $TimeoutMs, $ThrottleLimit
+if ($SkipPing) { $method = 'Existing neighbor (ARP) table only (no pings sent)' }
+if ($SkipNameLookup) { $method += '; no hostname lookups' } else { $method += ' + reverse DNS' }
+if ($SkipPing -and $SkipNameLookup) { $method = 'Passive: existing neighbor (ARP) table only; nothing is sent on the network' }
 
-Write-Host '  Only the range below is contacted. No ports are scanned.' -ForegroundColor White
+if ($SkipPing -and $SkipNameLookup) { Write-Host '  Passive: nothing is sent; only this PC''s neighbor (ARP) table is read.' -ForegroundColor White }
+else { Write-Host '  Only the range below is contacted. No ports are scanned.' -ForegroundColor White }
 Write-Host ('    Adapter : {0} ({1})' -f $subnet.InterfaceAlias, $subnet.InterfaceDescription)
 Write-Host ('    This PC : {0}/{1}' -f $subnet.IPAddress, $subnet.PrefixLength)
 Write-Host ('    Range   : {0} - {1}  ({2} addresses, subnet {3})' -f $firstHost, $lastHost, $subnet.HostCount, $subnet.Cidr)
 Write-Host ('    Gateway : {0}' -f $subnet.Gateway)
 Write-Host ('    Method  : {0}' -f $method)
-Write-Host ('    Note    : hostname lookups go to this PC''s DNS server(s): {0}' -f ($subnet.DnsServers -join ', ')) -ForegroundColor DarkGray
+if (-not $SkipNameLookup) { Write-Host ('    Note    : hostname lookups go to this PC''s DNS server(s): {0}' -f ($subnet.DnsServers -join ', ')) -ForegroundColor DarkGray }
 Write-MSPLog -Message ('Scope: {0} ({1}) range {2}-{3} gateway {4}; {5}' -f $subnet.Cidr, $subnet.InterfaceAlias, $firstHost, $lastHost, $subnet.Gateway, $method)
 
 Add-MSPFinding -Check 'Scan scope' -Category 'Scope' -Status INFO `
@@ -1481,7 +1497,8 @@ Invoke-MSPCheck -Name 'Device discovery' -Category 'Discovery' -ScriptBlock {
     }
     $script:devices = @(Get-MSPLiveHost -Subnet $subnet -TimeoutMs $TimeoutMs -ThrottleLimit $ThrottleLimit -SkipPing:$SkipPing)
 
-    Write-Host ('  Found {0} device(s). Looking up names...' -f $script:devices.Count) -ForegroundColor Gray
+    if ($SkipNameLookup) { Write-Host ('  Found {0} device(s). Hostname lookups skipped.' -f $script:devices.Count) -ForegroundColor Gray }
+    else { Write-Host ('  Found {0} device(s). Looking up names...' -f $script:devices.Count) -ForegroundColor Gray }
     $dnsScript = {
         param($ip)
         try {
@@ -1493,6 +1510,7 @@ Invoke-MSPCheck -Name 'Device discovery' -Category 'Discovery' -ScriptBlock {
         }
     }
     $lookupIps = @($script:devices | Where-Object { -not $_.IsSelf } | ForEach-Object { $_.IPAddress })
+    if ($SkipNameLookup) { $lookupIps = @() }
     $names = @{}
     foreach ($r in (Invoke-MSPRunspacePool -InputObject $lookupIps -ScriptBlock $dnsScript -ThrottleLimit 16 -TimeoutSeconds 60 -Activity 'Hostname lookup')) {
         $names[$r.IP] = $r.Name

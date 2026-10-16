@@ -20,7 +20,8 @@
 #   Core   Run setup, logging, findings, console summary, ticket block, JSON/CSV export,
 #          root / Full Disk Access checks, time-limited commands
 #   Net    Local IPv4 subnet of the active non-VPN adapter, IPv4 math, DNS servers in use,
-#          neighbor (ARP) table, ping and TCP probes, parallel runner capped at 32
+#          neighbor (ARP) table, listening sockets, MAC vendor hint, ping and TCP probes,
+#          parallel runner capped at 32
 #
 # Every section depends on Core. The sync tool always embeds Core first.
 # The PowerShell equivalent is MSPToolkit.Common.psm1; both write the same result schema.
@@ -36,7 +37,7 @@
 #
 # Risk Level    : Read-Only (defining functions has no side effects)
 # Prerequisites : bash 3.2+ | root: No | Dependencies: none beyond the OS
-# Version       : 1.0.0
+# Version       : 1.1.0
 
 #region MSPHelper:Core
 # --- Run state ------------------------------------------------------------------------------
@@ -1132,5 +1133,527 @@ msp_parallel() {
         wait "${pids[$first]}" 2>/dev/null
         first=$((first + 1))
     done
+}
+# --- Listening sockets ----------------------------------------------------------------------
+msp_listening_tcp() {
+    # Listening TCP sockets of this computer, one "port|address|pid|process" per line (IPv4 and
+    # IPv6 rows are listed separately). Reads the local socket table only; sends nothing.
+    # macOS: netstat -anv shows the owning process of every socket without root.
+    # Linux: ss shows the process only for the current user's sockets unless run as root.
+    local procs
+    procs=$(ps -axo pid=,comm= 2>/dev/null)
+    {
+        if [ "$MSP_PLATFORM" = 'macOS' ]; then
+            netstat -anv -p tcp 2>/dev/null | awk '$1 ~ /^tcp/ && $6 == "LISTEN" {
+                n = split($4, parts, "."); port = parts[n]; addr = substr($4, 1, length($4) - length(port) - 1)
+                pid = ""
+                # macOS 13+: "process:pid" after the buffer sizes (the name may contain spaces).
+                for (i = 11; i <= NF; i++) if ($i ~ /:[0-9]+$/) { pid = $i; sub(/.*:/, "", pid); break }
+                # Older macOS: a numeric pid column.
+                if (pid == "" && $9 ~ /^[0-9]+$/) pid = $9
+                print port "|" addr "|" pid
+            }'
+        elif msp_have ss; then
+            ss -ltnp 2>/dev/null | awk '$1 == "LISTEN" {
+                local_ = $4; n = split(local_, parts, ":"); port = parts[n]
+                addr = substr(local_, 1, length(local_) - length(port) - 1)
+                gsub(/[][]/, "", addr); sub(/%.*/, "", addr)
+                pid = ""
+                if (match($0, /pid=[0-9]+/)) pid = substr($0, RSTART + 4, RLENGTH - 4)
+                print port "|" addr "|" pid
+            }'
+        elif msp_have netstat; then
+            netstat -ltn 2>/dev/null | awk '$1 ~ /^tcp/ && $NF == "LISTEN" {
+                n = split($4, parts, ":"); port = parts[n]; addr = substr($4, 1, length($4) - length(port) - 1)
+                print port "|" addr "|"
+            }'
+        else
+            return 1
+        fi
+    } | while IFS='|' read -r port addr pid; do
+        [ -n "$port" ] || continue
+        name=''
+        if [ -n "$pid" ]; then
+            name=$(printf '%s\n' "$procs" | awk -v p="$pid" '$1 == p { $1 = ""; sub(/^ /, ""); print; exit }')
+            name=${name##*/}
+        fi
+        printf '%s|%s|%s|%s\n' "$port" "$addr" "$pid" "$name"
+    done
+}
+
+msp_is_loopback() {
+    # True for 127.x.x.x, ::1 and localhost-only bindings.
+    case "$1" in 127.* | ::1 | localhost) return 0 ;; esac
+    return 1
+}
+
+# --- MAC vendor hint ------------------------------------------------------------------------
+# Same table as $script:MSPOuiData in MSPToolkit.Common.psm1 (OUI = first 3 bytes; curated
+# common home/SMB vendors only). tests/Invoke-ToolkitTests.ps1 checks that both give the same
+# answer for every entry. Vendor is a HINT, never proof: unknown here does not mean suspicious.
+# No internet lookups are made. Format: OUI|Vendor|Device hint
+msp__oui_data() {
+    cat <<'MSP_OUI'
+00:50:56|VMware|Virtual machine
+00:0C:29|VMware|Virtual machine
+00:05:69|VMware|Virtual machine
+08:00:27|Oracle VirtualBox|Virtual machine
+00:15:5D|Microsoft Hyper-V|Virtual machine
+52:54:00|QEMU/KVM|Virtual machine
+B8:27:EB|Raspberry Pi|Single-board computer
+DC:A6:32|Raspberry Pi|Single-board computer
+E4:5F:01|Raspberry Pi|Single-board computer
+D8:3A:DD|Raspberry Pi|Single-board computer
+2C:CF:67|Raspberry Pi|Single-board computer
+00:03:93|Apple|Apple device
+00:0A:95|Apple|Apple device
+00:17:F2|Apple|Apple device
+00:1B:63|Apple|Apple device
+00:1E:C2|Apple|Apple device
+00:25:00|Apple|Apple device
+28:CF:E9|Apple|Apple device
+3C:07:54|Apple|Apple device
+40:6C:8F|Apple|Apple device
+7C:D1:C3|Apple|Apple device
+A4:5E:60|Apple|Apple device
+AC:BC:32|Apple|Apple device
+D0:23:DB|Apple|Apple device
+F0:18:98|Apple|Apple device
+F4:5C:89|Apple|Apple device
+BC:52:B7|Apple|Apple device
+8C:85:90|Apple|Apple device
+60:FB:42|Apple|Apple device
+88:66:A5|Apple|Apple device
+F0:99:BF|Apple|Apple device
+44:65:0D|Amazon|Smart speaker / streaming / IoT
+74:C2:46|Amazon|Smart speaker / streaming / IoT
+F0:D2:F1|Amazon|Smart speaker / streaming / IoT
+FC:65:DE|Amazon|Smart speaker / streaming / IoT
+68:54:FD|Amazon|Smart speaker / streaming / IoT
+84:D6:D0|Amazon|Smart speaker / streaming / IoT
+F4:F5:D8|Google|Smart speaker / Chromecast / phone
+F4:F5:E8|Google|Smart speaker / Chromecast / phone
+54:60:09|Google|Smart speaker / Chromecast / phone
+3C:5A:B4|Google|Smart speaker / Chromecast / phone
+1C:F2:9A|Google|Smart speaker / Chromecast / phone
+20:DF:B9|Google|Smart speaker / Chromecast / phone
+48:D6:D5|Google|Smart speaker / Chromecast / phone
+18:B4:30|Google Nest|Thermostat / camera / IoT
+64:16:66|Google Nest|Thermostat / camera / IoT
+00:0E:58|Sonos|Speaker
+5C:AA:FD|Sonos|Speaker
+94:9F:3E|Sonos|Speaker
+48:A6:B8|Sonos|Speaker
+B8:E9:37|Sonos|Speaker
+54:2A:1B|Sonos|Speaker
+B0:A7:37|Roku|TV / streaming
+DC:3A:5E|Roku|TV / streaming
+CC:6D:A0|Roku|TV / streaming
+08:05:81|Roku|TV / streaming
+AC:3A:7A|Roku|TV / streaming
+D8:31:34|Roku|TV / streaming
+00:17:88|Philips Hue (Signify)|Smart lighting
+EC:B5:FA|Philips Hue (Signify)|Smart lighting
+24:0A:C4|Espressif|IoT device (smart plug, bulb, sensor)
+30:AE:A4|Espressif|IoT device (smart plug, bulb, sensor)
+84:CC:A8|Espressif|IoT device (smart plug, bulb, sensor)
+A4:CF:12|Espressif|IoT device (smart plug, bulb, sensor)
+BC:DD:C2|Espressif|IoT device (smart plug, bulb, sensor)
+CC:50:E3|Espressif|IoT device (smart plug, bulb, sensor)
+24:62:AB|Espressif|IoT device (smart plug, bulb, sensor)
+3C:71:BF|Espressif|IoT device (smart plug, bulb, sensor)
+5C:CF:7F|Espressif|IoT device (smart plug, bulb, sensor)
+60:01:94|Espressif|IoT device (smart plug, bulb, sensor)
+80:7D:3A|Espressif|IoT device (smart plug, bulb, sensor)
+84:F3:EB|Espressif|IoT device (smart plug, bulb, sensor)
+A0:20:A6|Espressif|IoT device (smart plug, bulb, sensor)
+AC:67:B2|Espressif|IoT device (smart plug, bulb, sensor)
+C4:4F:33|Espressif|IoT device (smart plug, bulb, sensor)
+DC:4F:22|Espressif|IoT device (smart plug, bulb, sensor)
+EC:FA:BC|Espressif|IoT device (smart plug, bulb, sensor)
+18:FE:34|Espressif|IoT device (smart plug, bulb, sensor)
+2C:3A:E8|Espressif|IoT device (smart plug, bulb, sensor)
+68:C6:3A|Espressif|IoT device (smart plug, bulb, sensor)
+98:F4:AB|Espressif|IoT device (smart plug, bulb, sensor)
+B4:E6:2D|Espressif|IoT device (smart plug, bulb, sensor)
+D8:BF:C0|Espressif|IoT device (smart plug, bulb, sensor)
+E8:DB:84|Espressif|IoT device (smart plug, bulb, sensor)
+7C:9E:BD|Espressif|IoT device (smart plug, bulb, sensor)
+08:3A:F2|Espressif|IoT device (smart plug, bulb, sensor)
+C8:2B:96|Espressif|IoT device (smart plug, bulb, sensor)
+50:C7:BF|TP-Link|Router / Wi-Fi / smart plug
+14:CC:20|TP-Link|Router / Wi-Fi / smart plug
+98:DA:C4|TP-Link|Router / Wi-Fi / smart plug
+B0:BE:76|TP-Link|Router / Wi-Fi / smart plug
+C0:4A:00|TP-Link|Router / Wi-Fi / smart plug
+EC:08:6B|TP-Link|Router / Wi-Fi / smart plug
+F4:F2:6D|TP-Link|Router / Wi-Fi / smart plug
+60:32:B1|TP-Link|Router / Wi-Fi / smart plug
+AC:84:C6|TP-Link|Router / Wi-Fi / smart plug
+54:AF:97|TP-Link|Router / Wi-Fi / smart plug
+1C:3B:F3|TP-Link|Router / Wi-Fi / smart plug
+30:DE:4B|TP-Link|Router / Wi-Fi / smart plug
+84:16:F9|TP-Link|Router / Wi-Fi / smart plug
+00:09:5B|Netgear|Router / Wi-Fi
+00:14:6C|Netgear|Router / Wi-Fi
+00:1B:2F|Netgear|Router / Wi-Fi
+00:1E:2A|Netgear|Router / Wi-Fi
+00:22:3F|Netgear|Router / Wi-Fi
+00:24:B2|Netgear|Router / Wi-Fi
+00:26:F2|Netgear|Router / Wi-Fi
+20:4E:7F|Netgear|Router / Wi-Fi
+28:C6:8E|Netgear|Router / Wi-Fi
+2C:B0:5D|Netgear|Router / Wi-Fi
+30:46:9A|Netgear|Router / Wi-Fi
+44:94:FC|Netgear|Router / Wi-Fi
+6C:B0:CE|Netgear|Router / Wi-Fi
+84:1B:5E|Netgear|Router / Wi-Fi
+A0:40:A0|Netgear|Router / Wi-Fi
+A0:63:91|Netgear|Router / Wi-Fi
+C0:3F:0E|Netgear|Router / Wi-Fi
+E0:46:9A|Netgear|Router / Wi-Fi
+9C:D3:6D|Netgear|Router / Wi-Fi
+00:06:25|Linksys|Router / Wi-Fi
+00:0C:41|Linksys|Router / Wi-Fi
+00:12:17|Linksys|Router / Wi-Fi
+00:13:10|Linksys|Router / Wi-Fi
+00:14:BF|Linksys|Router / Wi-Fi
+00:16:B6|Linksys|Router / Wi-Fi
+00:18:39|Linksys|Router / Wi-Fi
+00:1A:70|Linksys|Router / Wi-Fi
+00:1C:10|Linksys|Router / Wi-Fi
+00:1D:7E|Linksys|Router / Wi-Fi
+00:1E:E5|Linksys|Router / Wi-Fi
+00:21:29|Linksys|Router / Wi-Fi
+00:22:6B|Linksys|Router / Wi-Fi
+00:23:69|Linksys|Router / Wi-Fi
+00:25:9C|Linksys|Router / Wi-Fi
+20:AA:4B|Linksys|Router / Wi-Fi
+58:6D:8F|Linksys|Router / Wi-Fi
+C0:C1:C0|Linksys|Router / Wi-Fi
+48:F8:B3|Linksys|Router / Wi-Fi
+00:15:6D|Ubiquiti|Router / Wi-Fi access point
+00:27:22|Ubiquiti|Router / Wi-Fi access point
+04:18:D6|Ubiquiti|Router / Wi-Fi access point
+24:A4:3C|Ubiquiti|Router / Wi-Fi access point
+44:D9:E7|Ubiquiti|Router / Wi-Fi access point
+68:72:51|Ubiquiti|Router / Wi-Fi access point
+78:8A:20|Ubiquiti|Router / Wi-Fi access point
+80:2A:A8|Ubiquiti|Router / Wi-Fi access point
+B4:FB:E4|Ubiquiti|Router / Wi-Fi access point
+DC:9F:DB|Ubiquiti|Router / Wi-Fi access point
+F0:9F:C2|Ubiquiti|Router / Wi-Fi access point
+FC:EC:DA|Ubiquiti|Router / Wi-Fi access point
+74:83:C2|Ubiquiti|Router / Wi-Fi access point
+E0:63:DA|Ubiquiti|Router / Wi-Fi access point
+18:E8:29|Ubiquiti|Router / Wi-Fi access point
+24:5A:4C|Ubiquiti|Router / Wi-Fi access point
+68:D7:9A|Ubiquiti|Router / Wi-Fi access point
+78:45:58|Ubiquiti|Router / Wi-Fi access point
+AC:8B:A9|Ubiquiti|Router / Wi-Fi access point
+D0:21:F9|Ubiquiti|Router / Wi-Fi access point
+00:1A:92|ASUS|Router / computer
+00:1D:60|ASUS|Router / computer
+00:22:15|ASUS|Router / computer
+00:23:54|ASUS|Router / computer
+00:24:8C|ASUS|Router / computer
+00:26:18|ASUS|Router / computer
+08:60:6E|ASUS|Router / computer
+10:BF:48|ASUS|Router / computer
+14:DA:E9|ASUS|Router / computer
+1C:87:2C|ASUS|Router / computer
+2C:56:DC|ASUS|Router / computer
+30:5A:3A|ASUS|Router / computer
+38:D5:47|ASUS|Router / computer
+40:16:7E|ASUS|Router / computer
+50:46:5D|ASUS|Router / computer
+54:04:A6|ASUS|Router / computer
+60:45:CB|ASUS|Router / computer
+70:4D:7B|ASUS|Router / computer
+74:D0:2B|ASUS|Router / computer
+AC:22:0B|ASUS|Router / computer
+BC:EE:7B|ASUS|Router / computer
+D8:50:E6|ASUS|Router / computer
+F4:6D:04|ASUS|Router / computer
+04:D9:F5|ASUS|Router / computer
+00:09:0F|Fortinet|Firewall
+08:5B:0E|Fortinet|Firewall
+70:4C:A5|Fortinet|Firewall
+90:6C:AC|Fortinet|Firewall
+00:06:B1|SonicWall|Firewall
+00:17:C5|SonicWall|Firewall
+C0:EA:E4|SonicWall|Firewall
+18:B1:69|SonicWall|Firewall
+00:18:0A|Cisco Meraki|Network device
+0C:8D:DB|Cisco Meraki|Network device
+34:56:FE|Cisco Meraki|Network device
+88:15:44|Cisco Meraki|Network device
+AC:17:C8|Cisco Meraki|Network device
+E0:55:3D|Cisco Meraki|Network device
+E0:CB:BC|Cisco Meraki|Network device
+00:1B:21|Intel|Computer (PC/laptop network card)
+00:1E:67|Intel|Computer (PC/laptop network card)
+00:1F:3B|Intel|Computer (PC/laptop network card)
+3C:A9:F4|Intel|Computer (PC/laptop network card)
+7C:7A:91|Intel|Computer (PC/laptop network card)
+80:86:F2|Intel|Computer (PC/laptop network card)
+A0:A8:CD|Intel|Computer (PC/laptop network card)
+B4:96:91|Intel|Computer (PC/laptop network card)
+F8:63:3F|Intel|Computer (PC/laptop network card)
+8C:8D:28|Intel|Computer (PC/laptop network card)
+34:13:E8|Intel|Computer (PC/laptop network card)
+48:51:B7|Intel|Computer (PC/laptop network card)
+5C:87:9C|Intel|Computer (PC/laptop network card)
+64:5D:86|Intel|Computer (PC/laptop network card)
+70:9C:D1|Intel|Computer (PC/laptop network card)
+9C:B6:D0|Intel|Computer (PC/laptop network card)
+A4:34:D9|Intel|Computer (PC/laptop network card)
+AC:ED:5C|Intel|Computer (PC/laptop network card)
+D0:57:7B|Intel|Computer (PC/laptop network card)
+DC:21:5C|Intel|Computer (PC/laptop network card)
+F8:94:C2|Intel|Computer (PC/laptop network card)
+00:E0:4C|Realtek|Computer (network card)
+00:14:22|Dell|Computer
+18:03:73|Dell|Computer
+18:DB:F2|Dell|Computer
+24:B6:FD|Dell|Computer
+34:17:EB|Dell|Computer
+54:BF:64|Dell|Computer
+74:86:7A|Dell|Computer
+84:7B:EB|Dell|Computer
+98:90:96|Dell|Computer
+B8:2A:72|Dell|Computer
+B8:CA:3A|Dell|Computer
+D4:81:D7|Dell|Computer
+D4:BE:D9|Dell|Computer
+F8:B1:56|Dell|Computer
+F8:BC:12|Dell|Computer
+A4:BB:6D|Dell|Computer
+6C:2B:59|Dell|Computer
+E4:54:E8|Dell|Computer
+00:1B:78|HP|Computer / printer
+00:1E:0B|HP|Computer / printer
+00:21:5A|HP|Computer / printer
+00:23:7D|HP|Computer / printer
+00:25:B3|HP|Computer / printer
+10:60:4B|HP|Computer / printer
+14:58:D0|HP|Computer / printer
+1C:C1:DE|HP|Computer / printer
+2C:44:FD|HP|Computer / printer
+30:E1:71|HP|Computer / printer
+3C:D9:2B|HP|Computer / printer
+40:B0:34|HP|Computer / printer
+64:51:06|HP|Computer / printer
+70:5A:0F|HP|Computer / printer
+80:CE:62|HP|Computer / printer
+94:57:A5|HP|Computer / printer
+9C:8E:99|HP|Computer / printer
+A0:D3:C1|HP|Computer / printer
+B0:5A:DA|HP|Computer / printer
+D4:C9:EF|HP|Computer / printer
+EC:B1:D7|HP|Computer / printer
+F4:CE:46|HP|Computer / printer
+FC:15:B4|HP|Computer / printer
+00:1E:8F|Canon|Printer
+18:0C:AC|Canon|Printer
+2C:9E:FC|Canon|Printer
+F4:81:39|Canon|Printer
+88:87:17|Canon|Printer
+00:BB:C1|Canon|Printer
+00:26:AB|Epson|Printer
+64:EB:8C|Epson|Printer
+A4:EE:57|Epson|Printer
+AC:18:26|Epson|Printer
+B0:E8:92|Epson|Printer
+38:1A:52|Epson|Printer
+44:D2:44|Epson|Printer
+9C:AE:D3|Epson|Printer
+E0:BB:9E|Epson|Printer
+DC:CD:2F|Epson|Printer
+00:1B:A9|Brother|Printer
+00:80:77|Brother|Printer
+30:05:5C|Brother|Printer
+3C:2A:F4|Brother|Printer
+00:12:FB|Samsung|Phone / TV / appliance
+00:15:99|Samsung|Phone / TV / appliance
+00:16:32|Samsung|Phone / TV / appliance
+00:1D:25|Samsung|Phone / TV / appliance
+00:21:19|Samsung|Phone / TV / appliance
+00:23:39|Samsung|Phone / TV / appliance
+08:D4:2B|Samsung|Phone / TV / appliance
+10:1D:C0|Samsung|Phone / TV / appliance
+14:49:E0|Samsung|Phone / TV / appliance
+18:3A:2D|Samsung|Phone / TV / appliance
+1C:62:B8|Samsung|Phone / TV / appliance
+24:4B:03|Samsung|Phone / TV / appliance
+28:BA:B5|Samsung|Phone / TV / appliance
+30:CD:A7|Samsung|Phone / TV / appliance
+34:23:BA|Samsung|Phone / TV / appliance
+38:01:97|Samsung|Phone / TV / appliance
+40:0E:85|Samsung|Phone / TV / appliance
+4C:BC:A5|Samsung|Phone / TV / appliance
+50:01:BB|Samsung|Phone / TV / appliance
+5C:49:7D|Samsung|Phone / TV / appliance
+64:B3:10|Samsung|Phone / TV / appliance
+78:BD:BC|Samsung|Phone / TV / appliance
+84:25:DB|Samsung|Phone / TV / appliance
+8C:71:F8|Samsung|Phone / TV / appliance
+90:F1:AA|Samsung|Phone / TV / appliance
+94:35:0A|Samsung|Phone / TV / appliance
+A0:0B:BA|Samsung|Phone / TV / appliance
+B4:79:A7|Samsung|Phone / TV / appliance
+BC:14:85|Samsung|Phone / TV / appliance
+C0:97:27|Samsung|Phone / TV / appliance
+CC:07:AB|Samsung|Phone / TV / appliance
+D0:22:BE|Samsung|Phone / TV / appliance
+E4:7C:F9|Samsung|Phone / TV / appliance
+F0:25:B7|Samsung|Phone / TV / appliance
+F4:7B:5E|Samsung|Phone / TV / appliance
+F8:04:2E|Samsung|Phone / TV / appliance
+FC:A1:3E|Samsung|Phone / TV / appliance
+00:1E:75|LG Electronics|TV / phone / appliance
+10:68:3F|LG Electronics|TV / phone / appliance
+20:3D:BD|LG Electronics|TV / phone / appliance
+34:4D:F7|LG Electronics|TV / phone / appliance
+38:8C:50|LG Electronics|TV / phone / appliance
+58:A2:B5|LG Electronics|TV / phone / appliance
+64:99:5D|LG Electronics|TV / phone / appliance
+78:5D:C8|LG Electronics|TV / phone / appliance
+88:C9:D0|LG Electronics|TV / phone / appliance
+A8:16:B2|LG Electronics|TV / phone / appliance
+C4:36:6C|LG Electronics|TV / phone / appliance
+CC:2D:8C|LG Electronics|TV / phone / appliance
+E8:5B:5B|LG Electronics|TV / phone / appliance
+00:04:1F|Sony|Game console / TV
+00:13:15|Sony|Game console / TV
+00:15:C1|Sony|Game console / TV
+00:19:C5|Sony|Game console / TV
+00:1D:0D|Sony|Game console / TV
+00:1F:A7|Sony|Game console / TV
+00:24:8D|Sony|Game console / TV
+28:0D:FC|Sony|Game console / TV
+70:9E:29|Sony|Game console / TV
+A8:E3:EE|Sony|Game console / TV
+BC:60:A7|Sony|Game console / TV
+F8:46:1C|Sony|Game console / TV
+FC:0F:E6|Sony|Game console / TV
+00:50:F2|Microsoft|Xbox / Surface
+28:18:78|Microsoft|Xbox / Surface
+30:59:B7|Microsoft|Xbox / Surface
+60:45:BD|Microsoft|Xbox / Surface
+7C:1E:52|Microsoft|Xbox / Surface
+98:5F:D3|Microsoft|Xbox / Surface
+C8:3F:26|Microsoft|Xbox / Surface
+DC:B4:C4|Microsoft|Xbox / Surface
+58:82:A8|Microsoft|Xbox / Surface
+00:17:FA|Microsoft|Xbox / Surface
+00:22:48|Microsoft|Xbox / Surface
+00:25:AE|Microsoft|Xbox / Surface
+7C:ED:8D|Microsoft|Xbox / Surface
+00:09:BF|Nintendo|Game console
+00:16:56|Nintendo|Game console
+00:17:AB|Nintendo|Game console
+00:19:1D|Nintendo|Game console
+00:1A:E9|Nintendo|Game console
+00:1B:EA|Nintendo|Game console
+00:1C:BE|Nintendo|Game console
+00:1D:BC|Nintendo|Game console
+00:1E:35|Nintendo|Game console
+00:1F:32|Nintendo|Game console
+00:21:47|Nintendo|Game console
+00:22:4C|Nintendo|Game console
+00:23:31|Nintendo|Game console
+00:24:1E|Nintendo|Game console
+00:24:44|Nintendo|Game console
+00:25:A0|Nintendo|Game console
+04:03:D6|Nintendo|Game console
+18:2A:7B|Nintendo|Game console
+2C:10:C1|Nintendo|Game console
+34:AF:2C|Nintendo|Game console
+40:F4:07|Nintendo|Game console
+58:BD:A3|Nintendo|Game console
+7C:BB:8A|Nintendo|Game console
+8C:56:C5|Nintendo|Game console
+98:B6:E9|Nintendo|Game console
+A4:C0:E1|Nintendo|Game console
+B8:AE:6E|Nintendo|Game console
+CC:FB:65|Nintendo|Game console
+D8:6B:F7|Nintendo|Game console
+DC:68:EB|Nintendo|Game console
+E0:E7:51|Nintendo|Game console
+E8:4E:CE|Nintendo|Game console
+64:B5:C6|Nintendo|Game console
+00:11:32|Synology|NAS / file server
+90:09:D0|Synology|NAS / file server
+00:08:9B|QNAP|NAS / file server
+24:5E:BE|QNAP|NAS / file server
+44:19:B6|Hikvision|Security camera / recorder
+4C:BD:8F|Hikvision|Security camera / recorder
+C0:56:E3|Hikvision|Security camera / recorder
+BC:AD:28|Hikvision|Security camera / recorder
+28:57:BE|Hikvision|Security camera / recorder
+54:C4:15|Hikvision|Security camera / recorder
+18:68:CB|Hikvision|Security camera / recorder
+C4:2F:90|Hikvision|Security camera / recorder
+A4:14:37|Hikvision|Security camera / recorder
+8C:E7:48|Hikvision|Security camera / recorder
+3C:EF:8C|Dahua|Security camera / recorder
+4C:11:BF|Dahua|Security camera / recorder
+90:02:A9|Dahua|Security camera / recorder
+14:A7:8B|Dahua|Security camera / recorder
+2C:AA:8E|Wyze|Security camera / IoT
+7C:78:B2|Wyze|Security camera / IoT
+D0:3F:27|Wyze|Security camera / IoT
+44:61:32|ecobee|Thermostat
+64:52:99|Chamberlain (myQ)|Garage door opener
+08:86:3B|Belkin|Smart plug / router
+94:10:3E|Belkin|Smart plug / router
+B4:75:0E|Belkin|Smart plug / router
+C0:56:27|Belkin|Smart plug / router
+EC:1A:59|Belkin|Smart plug / router
+28:6C:07|Xiaomi|Phone / IoT
+34:CE:00|Xiaomi|Phone / IoT
+64:09:80|Xiaomi|Phone / IoT
+78:11:DC|Xiaomi|Phone / IoT
+7C:49:EB|Xiaomi|Phone / IoT
+28:D2:44|Lenovo|Computer
+54:EE:75|Lenovo|Computer
+8C:16:45|Lenovo|Computer
+E8:6A:64|Lenovo|Computer
+98:FA:9B|Lenovo|Computer
+50:7B:9D|Lenovo|Computer
+C8:5B:76|Lenovo|Computer
+MSP_OUI
+}
+
+MSP_VENDOR=''
+MSP_VENDOR_HINT=''
+MSP_VENDOR_RANDOM=0
+msp_mac_vendor() {
+    # msp_mac_vendor MAC - sets MSP_VENDOR, MSP_VENDOR_HINT and MSP_VENDOR_RANDOM (1 = a private,
+    # randomized MAC, which phones, tablets and laptops use for Wi-Fi privacy). Sets globals
+    # instead of printing so callers avoid a subshell per device. Matches Get-MSPMacVendor.
+    local hex oui line first
+    MSP_VENDOR='Unknown'
+    MSP_VENDOR_HINT=''
+    MSP_VENDOR_RANDOM=0
+    hex=$(printf '%s' "${1-}" | tr -cd '0-9A-Fa-f' | tr 'abcdef' 'ABCDEF')
+    [ "${#hex}" -ge 6 ] || return 0
+    oui="${hex:0:2}:${hex:2:2}:${hex:4:2}"
+    line=$(msp__oui_data | awk -F'|' -v o="$oui" '$1 == o { print; exit }')
+    if [ -n "$line" ]; then
+        line=${line#*|}
+        MSP_VENDOR=${line%%|*}
+        MSP_VENDOR_HINT=${line#*|}
+        return 0
+    fi
+    # Second-lowest bit of the first byte = "locally administered" = randomized/private MAC.
+    first=$((16#${hex:0:2}))
+    if [ $((first & 2)) -eq 2 ]; then
+        MSP_VENDOR='Private/randomized MAC'
+        MSP_VENDOR_HINT='Phone, tablet or laptop using Wi-Fi privacy'
+        MSP_VENDOR_RANDOM=1
+    fi
+    return 0
 }
 #endregion MSPHelper:Net

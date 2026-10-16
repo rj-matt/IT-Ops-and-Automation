@@ -24,12 +24,17 @@
       Boot           Secure Boot; TPM (administrator only)
       Remote access  Remote Desktop enabled / Network Level Authentication
 
+    Checks that exist on every platform use the same names as the macOS and Linux versions
+    (get-endpoint-security-status-macos.sh / -linux.sh), so their finding IDs match in the
+    combined report: A1.Encryption.System-drive-encryption, A1.Updates.Pending-updates,
+    A1.Updates.Last-update-scan, A1.Accounts.Local-administrators, A1.Remote-access.Remote-Desktop ...
+
     Enterprise-only checks from version 1 (password expiry policy, audit policy, screensaver
     lock) were removed: on home PCs they produced misleading FAILs. Use Group Policy reporting
     for domain PCs.
 
 .PARAMETER OutputPath
-    Optional folder. Results are also saved there as JSON and CSV (toolkit schema 1.0) for
+    Optional folder. Results are also saved there as JSON and CSV (toolkit schema 2.0) for
     Export-SecurityAuditReport.ps1. The folder is created if it does not exist.
 
 .EXAMPLE
@@ -47,7 +52,7 @@
     Risk Level    : Read-Only -- reads settings only; nothing is changed, installed or enabled.
     Prerequisites : Windows PowerShell 5.1 | Admin: No (optional: adds TPM and authoritative
                     BitLocker/SMBv1 results) | Modules: built-in only | Permissions: local user
-    Version       : 2.1.0
+    Version       : 2.2.0
     Limitations   : Pending updates come from Windows' last update scan (date shown), not a live
                     search; use Get-WindowsUpdateCompliance.ps1 for a live check. Third-party
                     antivirus is detected via Windows Security Center only. Not an EDR.
@@ -815,7 +820,7 @@ function Get-MSPLocalAdminMember {
 #endregion MSPHelper:LocalAdmin
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '2.1.0'
+$ScriptVersion = '2.2.0'
 Initialize-MSPRun -ScriptName 'Get-EndpointSecurityStatus' -ScriptVersion $ScriptVersion -CheckId 'A1' -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'Endpoint security posture (read-only)'
 
@@ -975,7 +980,7 @@ Invoke-MSPCheck -Name 'Current network type' -Category 'Firewall' -ScriptBlock {
 # =========================================================================================
 Write-MSPSection -Title 'Disk encryption'
 # =========================================================================================
-Invoke-MSPCheck -Name 'Windows drive encryption' -Category 'Encryption' -ScriptBlock {
+Invoke-MSPCheck -Name 'System drive encryption' -Category 'Encryption' -ScriptBlock {
     $drive = $env:SystemDrive
     $deviceText = 'desktop'
     if ($isPortable) { $deviceText = 'laptop/tablet' }
@@ -1012,7 +1017,7 @@ Invoke-MSPCheck -Name 'Windows drive encryption' -Category 'Encryption' -ScriptB
     $evidence['Method'] = $method
 
     if ($isOn -eq $true) {
-        Add-MSPFinding -Check 'Windows drive encryption' -Category 'Encryption' -Status PASS -Detail ('{0} ({1}).' -f $statusText, $method) -Evidence $evidence
+        Add-MSPFinding -Check 'System drive encryption' -Category 'Encryption' -Status PASS -Detail ('{0} ({1}).' -f $statusText, $method) -Evidence $evidence
         if ($evidence.ContainsKey('RecoveryPasswordProtector') -and -not $evidence['RecoveryPasswordProtector']) {
             Add-MSPFinding -Check 'BitLocker recovery key' -Category 'Encryption' -Status WARN -Severity Medium `
                 -Detail 'No recovery password protector found on the Windows drive.' `
@@ -1024,12 +1029,12 @@ Invoke-MSPCheck -Name 'Windows drive encryption' -Category 'Encryption' -ScriptB
         if ($isPortable) { $status = 'FAIL'; $severity = 'High' }
         $advice = 'Turn on BitLocker (Pro) or Device encryption (Home, if supported) and save the recovery key.'
         if ($isHomeEdition) { $advice = 'Check Settings > Privacy & security > Device encryption. If it is not offered, upgrading to Windows Pro enables BitLocker.' }
-        Add-MSPFinding -Check 'Windows drive encryption' -Category 'Encryption' -Status $status -Severity $severity -Evidence $evidence `
+        Add-MSPFinding -Check 'System drive encryption' -Category 'Encryption' -Status $status -Severity $severity -Evidence $evidence `
             -Detail ('{0} on this {1} ({2}). If the device is lost or stolen, the data can be read.' -f $statusText, $deviceText, $method) `
             -Recommendation $advice
     }
     else {
-        Add-MSPFinding -Check 'Windows drive encryption' -Category 'Encryption' -Status INFO -Evidence $evidence `
+        Add-MSPFinding -Check 'System drive encryption' -Category 'Encryption' -Status INFO -Evidence $evidence `
             -Detail ('{0} ({1}). Re-run as administrator for a definitive answer.' -f $statusText, $method)
     }
 }
@@ -1044,7 +1049,7 @@ Invoke-MSPCheck -Name 'Pending updates' -Category 'Updates' -ScriptBlock {
     if ($wu.LastSearchSuccess) { $asOf = $wu.LastSearchSuccess.ToString('yyyy-MM-dd HH:mm') }
     $evidence = @{ LastScan = $asOf; Pending = $wu.PendingCount; SecurityPending = $wu.SecurityPendingCount }
     if (-not $wu.LastSearchSuccess -or ((Get-Date) - $wu.LastSearchSuccess).TotalDays -gt 14) {
-        Add-MSPFinding -Check 'Windows Update last scan' -Category 'Updates' -Status WARN -Severity Medium -Evidence $evidence `
+        Add-MSPFinding -Check 'Last update scan' -Category 'Updates' -Status WARN -Severity Medium -Evidence $evidence `
             -Detail ('Windows last checked for updates successfully: {0}.' -f $asOf) `
             -Recommendation 'Open Settings > Windows Update and click "Check for updates"; run Get-WindowsUpdateCompliance.ps1 for a live check.'
     }

@@ -130,6 +130,66 @@ for i in en0 en1 eth0 wlan0 wlp2s0 enp3s0; do
     check_false "physical iface $i" msp_is_virtual_iface "$i"
 done
 
+# --- MAC vendor hint ------------------------------------------------------------------------
+msp_mac_vendor 'b8:27:eb:12:34:56'
+check_eq 'vendor: table hit (lowercase input)' 'Raspberry Pi|Single-board computer|0' "$MSP_VENDOR|$MSP_VENDOR_HINT|$MSP_VENDOR_RANDOM"
+msp_mac_vendor 'B8-27-EB-12-34-56'
+check_eq 'vendor: dashes accepted' 'Raspberry Pi' "$MSP_VENDOR"
+msp_mac_vendor 'AE:11:22:00:00:01'
+check_eq 'vendor: randomized MAC' 'Private/randomized MAC|1' "$MSP_VENDOR|$MSP_VENDOR_RANDOM"
+msp_mac_vendor '00:00:00:00:00:01'
+check_eq 'vendor: unknown' 'Unknown||0' "$MSP_VENDOR|$MSP_VENDOR_HINT|$MSP_VENDOR_RANDOM"
+msp_mac_vendor ''
+check_eq 'vendor: empty' 'Unknown' "$MSP_VENDOR"
+check_true 'loopback 127.0.0.1' msp_is_loopback 127.0.0.1
+check_true 'loopback ::1' msp_is_loopback ::1
+check_false 'not loopback *' msp_is_loopback '*'
+check_false 'not loopback 0.0.0.0' msp_is_loopback 0.0.0.0
+
+# --- Listening sockets, with stubbed netstat / ss output (no real sockets read) -------------
+STUB_DIR=$(mktemp -d "${TMPDIR:-/tmp}/msp-stub.XXXXXX")
+cat >"$STUB_DIR/netstat" <<'STUB'
+#!/bin/sh
+cat <<'OUT'
+Active Internet connections (including servers)
+Proto Recv-Q Send-Q  Local Address          Foreign Address        (state)      rxbytes txbytes rhiwat shiwat process:pid state options gencnt flags flags1 usecnt rtncnt fltrs
+tcp4       0      0  127.0.0.1.10175        *.*                    LISTEN       0 0 131072 131072 Code Helper (Plu:5444 00100 00000106 0 1 800 1 0 0
+tcp6       0      0  *.22                   *.*                    LISTEN       0 0 131072 131072 launchd:1 00100 00000006 0 1 800 1 0 0
+tcp4       0      0  192.168.50.5.51000     17.1.2.3.443           ESTABLISHED  0 0 131072 131072 Safari:900 00100 00000006 0 1 800 1 0 0
+OUT
+STUB
+cat >"$STUB_DIR/ss" <<'STUB'
+#!/bin/sh
+cat <<'OUT'
+State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+LISTEN 0      4096   127.0.0.53%lo:53     0.0.0.0:*       users:(("systemd-resolve",pid=600,fd=14))
+LISTEN 0      128    0.0.0.0:22           0.0.0.0:*
+LISTEN 0      128    [::]:22              [::]:*
+LISTEN 0      5      *:631                *:*             users:(("cupsd",pid=777,fd=7))
+OUT
+STUB
+cat >"$STUB_DIR/ps" <<'STUB'
+#!/bin/sh
+printf '    1 /sbin/launchd\n 5444 /Applications/X.app/Code Helper (Plugin)\n  600 /lib/systemd/systemd-resolved\n  777 /usr/sbin/cupsd\n'
+STUB
+chmod +x "$STUB_DIR"/*
+SAVED_PATH=$PATH
+PATH="$STUB_DIR:$PATH"
+MSP_PLATFORM='macOS'
+out=$(msp_listening_tcp)
+check_eq 'listen macOS: rows (ESTABLISHED ignored)' '2' "$(printf '%s\n' "$out" | grep -c .)"
+check_eq 'listen macOS: process name with spaces' '10175|127.0.0.1|5444|Code Helper (Plugin)' "$(printf '%s\n' "$out" | head -n 1)"
+check_eq 'listen macOS: wildcard address' '22|*|1|launchd' "$(printf '%s\n' "$out" | sed -n 2p)"
+MSP_PLATFORM='Linux'
+out=$(msp_listening_tcp)
+check_eq 'listen Linux: rows (header ignored)' '4' "$(printf '%s\n' "$out" | grep -c .)"
+check_eq 'listen Linux: scoped address and pid' '53|127.0.0.53|600|systemd-resolved' "$(printf '%s\n' "$out" | head -n 1)"
+check_eq 'listen Linux: no process info without root' '22|0.0.0.0||' "$(printf '%s\n' "$out" | sed -n 2p)"
+check_eq 'listen Linux: IPv6 brackets removed' '22|::||' "$(printf '%s\n' "$out" | sed -n 3p)"
+PATH=$SAVED_PATH
+MSP_PLATFORM=''
+rm -rf "$STUB_DIR"
+
 # --- msp_run_timeout ------------------------------------------------------------------------
 start=$(date +%s)
 msp_run_timeout 1 sleep 5
@@ -247,6 +307,16 @@ if [ -n "$EMIT_DIR" ]; then
     for s in 'Remote-access tool: Kaseya' '  (Wi-Fi)  ' '' '!!!' 'café ok' 'AA:BB:CC:00:11:22' 'Firewall / stealth mode'; do
         printf '%s\t%s\n' "$s" "$(msp_id_part "$s")" >>"$EMIT_DIR/id-cases.txt"
     done
+    # Vendor cases: "MAC<TAB>Vendor|Hint|true/false" for every table entry plus edge cases,
+    # compared with Get-MSPMacVendor.
+    : >"$EMIT_DIR/vendor-cases.txt"
+    { msp__oui_data | cut -d'|' -f1 | sed 's/$/:01:02:03/'; printf '%s\n' 'AE:11:22:33:44:55' '02:00:00:00:00:00' '00:00:00:00:00:01' 'zz' 'b8-27-eb-aa-bb-cc'; } |
+        while IFS= read -r mac; do
+            msp_mac_vendor "$mac"
+            r=false
+            [ "$MSP_VENDOR_RANDOM" -eq 1 ] && r=true
+            printf '%s\t%s|%s|%s\n' "$mac" "$MSP_VENDOR" "$MSP_VENDOR_HINT" "$r" >>"$EMIT_DIR/vendor-cases.txt"
+        done
 fi
 rm -rf "$RUN_TMP"
 
