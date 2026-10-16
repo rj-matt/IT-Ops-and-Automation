@@ -82,3 +82,143 @@ Automation is most effective when it:
 
 This repository exists to support those outcomes
 
+---
+
+## Script Catalog
+
+Scripts reviewed against the toolkit standards (Batch A, home network audit). Every script
+below runs on **Windows PowerShell 5.1** with **built-in modules only**, works without admin
+(admin-only checks show `SKIPPED`), logs to `%TEMP%\MSP-Toolkit\`, and supports `-OutputPath`
+for JSON/CSV results.
+
+| Script | Folder | Purpose | Risk | Admin required | PS version | Modules |
+|---|---|---|---|---|---|---|
+| `Get-EndpointSecurityStatus.ps1` (A1) | `security-operations/diagnostics/endpoint-posture/` | Antivirus, firewall, BitLocker, updates, local admins, UAC, SMBv1, Secure Boot, RDP | Read-Only | No (admin adds TPM, authoritative BitLocker/SMBv1) | 5.1 | Built-in |
+| `Get-HomeNetworkMap.ps1` (A2) | `core-infrastructure/networking/diagnostics/` | Devices on the local subnet: IP, MAC, vendor hint, hostname, device type; flags unidentified devices | Read-Only (ping + ARP) | No | 5.1 | Built-in |
+| `Get-WiFiSecurityAudit.ps1` (A3) | `core-infrastructure/networking/diagnostics/` | Current Wi-Fi security, saved profiles (no keys), nearby networks | Read-Only | No | 5.1 | Built-in (netsh) |
+| `Get-OpenPortScan.ps1` (A4) | `security-operations/diagnostics/endpoint-posture/` | Listening ports with owning process; optional `-ScanLan` check of 11 risky ports on local devices | Read-Only | No | 5.1 | Built-in |
+| `Get-BrowserSecurityCheck.ps1` (A5) | `endpoint-systems/diagnostics/system-info/` | Chrome/Edge/Brave/Firefox versions, extensions, update-blocking policies; no credential access | Read-Only | No (Yes for `-AllUsers`) | 5.1 | Built-in |
+| `Get-WindowsUpdateCompliance.ps1` (A6) | `endpoint-systems/diagnostics/system-info/` | Windows version end-of-support, last install, pending updates (COM), restart, update policies | Read-Only | No | 5.1 | Built-in |
+| `Get-RouterSecurityCheck.ps1` (A7) | `core-infrastructure/networking/diagnostics/` | Gateway, DNS, admin page HTTP vs HTTPS, UPnP (SSDP) and its port forwards, guided router checklist | Read-Only (no logins) | No | 5.1 | Built-in |
+| `Get-HomeDeviceInventory.ps1` (A8) | `endpoint-systems/audit/software-inventory/` | Hardware/OS, users and last logon, installed software; flags remote-access and P2P tools | Read-Only | No (Yes for `-IncludeOtherUsers`) | 5.1 | Built-in |
+| `Export-SecurityAuditReport.ps1` (A9) | `security-operations/diagnostics/` | One self-contained HTML report from the JSON results | Read-Only (writes the report file) | No | 5.1 | Built-in |
+| `Invoke-HomeAuditBundle.ps1` | `security-operations/diagnostics/` | Runs A1-A8 in order into one timestamped folder; continues past failures; optional A9 | Read-Only | No (recommended: Yes) | 5.1 | Built-in |
+| `MSPToolkit.Common.psm1` | `endpoint-systems/utilities/` | Shared helper source (embedded into each script; not run directly) | Read-Only | - | 5.1 | - |
+| `Sync-MSPEmbeddedHelper.ps1` | `endpoint-systems/utilities/` | Regenerates / verifies (`-Check`) the embedded helper copies | Safe (repo files only) | No | 5.1 | - |
+
+Scripts not listed here have not yet been reviewed against the standards (Batches B-E).
+Superseded scripts and unsigned binaries are in `_archive/` (see `_archive/README.md`).
+
+---
+
+## Home Network Audit Runbook
+
+Run on each PC the client wants checked, with the client present (the router checklist needs
+their router login, which **they** type).
+
+### 1. Get the scripts onto the PC
+
+Copy the toolkit **without `_archive`** (it holds superseded scripts and unsigned binaries that
+must never reach a client machine):
+
+```powershell
+robocopy "<repo>" "E:\MSP-Toolkit" *.ps1 /S /XD _archive .git
+```
+
+`git archive` and GitHub "Download ZIP" already leave `_archive` out (`.gitattributes`).
+A flat folder (all `.ps1` files side by side) also works: the bundle looks next to itself first.
+
+### 2. Allow the scripts to run (non-managed home PCs)
+
+Do **not** change the PC's execution policy (`Set-ExecutionPolicy` is not part of this runbook).
+Instead, for this session only:
+
+```powershell
+# a) Remove the "downloaded from the internet" mark from the copied files
+Get-ChildItem -Path "E:\MSP-Toolkit" -Recurse -Filter *.ps1 | Unblock-File
+
+# b) Run each script through powershell.exe with a one-time bypass
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "E:\MSP-Toolkit\security-operations\diagnostics\Invoke-HomeAuditBundle.ps1"
+```
+
+`-ExecutionPolicy Bypass` on the `powershell.exe` command line applies to that one process
+only; nothing persists after it closes. Open PowerShell with **Run as administrator** for
+complete results (BitLocker, TPM, SMBv1, other users).
+
+### 3. Run the audit
+
+One command (A1-A8, results in one folder, HTML report at the end):
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\security-operations\diagnostics\Invoke-HomeAuditBundle.ps1 -ScanLan -IncludeRouterChecklist -TechnicianName "Your Name" -ClientName "Smith household"
+```
+
+Useful options: `-HomeSsid "<wifi name>"` (PC is wired), `-OnlineUpdateSearch` (live Windows
+Update query), `-ApprovedRemoteTool ScreenConnect,Kaseya` (our own RMM tools are not flagged),
+`-AllUsers` (admin: other users' browsers/software), `-Skip Get-HomeNetworkMap`,
+`-OutputPath E:\Results` (default `%TEMP%\MSP-Toolkit`). The bundle prints the results folder at the end.
+
+Or run scripts one at a time (prefix each with `powershell.exe -NoProfile -ExecutionPolicy Bypass -File`):
+
+| # | Command | Expected runtime | Admin |
+|---|---|---|---|
+| 1 | `.\security-operations\diagnostics\endpoint-posture\Get-EndpointSecurityStatus.ps1 -OutputPath <folder>` | 5-30 s | Recommended |
+| 2 | `.\core-infrastructure\networking\diagnostics\Get-HomeNetworkMap.ps1 -OutputPath <folder>` | 15-60 s (/24) | No |
+| 3 | `.\core-infrastructure\networking\diagnostics\Get-WiFiSecurityAudit.ps1 -OutputPath <folder>` | < 5 s | No |
+| 4 | `.\security-operations\diagnostics\endpoint-posture\Get-OpenPortScan.ps1 -ScanLan -OutputPath <folder>` | < 5 s; 30-90 s with `-ScanLan` | No |
+| 5 | `.\endpoint-systems\diagnostics\system-info\Get-BrowserSecurityCheck.ps1 -OutputPath <folder>` | < 5 s | No (Yes for `-AllUsers`) |
+| 6 | `.\endpoint-systems\diagnostics\system-info\Get-WindowsUpdateCompliance.ps1 -OutputPath <folder>` | 5-15 s; 1-5 min with `-Online` | No |
+| 7 | `.\core-infrastructure\networking\diagnostics\Get-RouterSecurityCheck.ps1 -OutputPath <folder>` | ~15 s + checklist with the client | No |
+| 8 | `.\endpoint-systems\audit\software-inventory\Get-HomeDeviceInventory.ps1 -OutputPath <folder>` | 5-10 s | No |
+| 9 | `.\security-operations\diagnostics\Export-SecurityAuditReport.ps1 -InputPath <folder> -TechnicianName "Your Name"` | < 5 s | No |
+
+To combine several PCs into one report, copy each PC's results folder under one parent folder
+and run step 9 with `-InputPath <parent> -Recurse`.
+
+Network scans (2, 4 with `-ScanLan`, 7) print their scope before sending anything and never
+leave the PC's own subnet. Only scan networks the client owns and has asked us to audit.
+
+---
+
+## How to Read the Output
+
+Every script ends with a **SUMMARY** line and a **COPY FOR TICKET** block (plain text; paste it
+into the ticket as-is).
+
+| Status | Meaning | What to do |
+|---|---|---|
+| `PASS` | The check passed. | Nothing. |
+| `WARN` | Not ideal, or needs confirming with the client (for example remote-access software). | Read the `->` line under it; confirm or fix. |
+| `FAIL` | A real security problem was found. | Fix it or put it in the remediation plan. Severity says how urgent. |
+| `INFO` | Facts for context (versions, counts, scope). | Nothing. |
+| `SKIPPED` | Not checked, usually "requires administrator". | Re-run as administrator if that area matters. |
+| `ERROR` | The **check itself** could not run (missing component, access denied). This is **not** a failure of the PC. | Note it; escalate with the log file if it matters for the ticket. |
+
+Severity (`Critical`, `High`, `Medium`, `Low`) is how much a WARN/FAIL matters, and is what the
+HTML report uses to order the remediation plan. Results never change a script's exit code:
+exit 0 means the script ran; non-zero means the script itself could not run.
+
+Normal and not a problem: ports 135/139/445 on a Windows PC (INFO), "Unknown" vendor for a
+device (many vendors are not in the built-in table), "Private/randomized MAC" for phones, and
+browser versions marked "estimated" (confirm in the browser's About page).
+
+Each run writes a log to `%TEMP%\MSP-Toolkit\<Script>_<Computer>_<timestamp>.log`.
+
+---
+
+## Maintaining the Shared Helpers
+
+Each script carries a generated copy of the helper code it needs (so it runs alone from a USB
+stick), between `#region MSPToolkit (generated)` markers labelled
+"DO NOT EDIT — regenerate with Sync-MSPEmbeddedHelper.ps1".
+
+1. Edit `endpoint-systems/utilities/MSPToolkit.Common.psm1` only.
+2. Run `.\endpoint-systems\utilities\Sync-MSPEmbeddedHelper.ps1` to regenerate every copy.
+3. Before committing, run `.\endpoint-systems\utilities\Sync-MSPEmbeddedHelper.ps1 -Check`.
+   It exits **1** if any embedded copy was hand-edited (hash mismatch) or is out of date.
+
+Output schema (JSON, `SchemaVersion` 1.0): `ScriptName`, `ScriptVersion`, `RiskLevel`, `Computer`,
+`User`, `IsAdmin`, `PSVersion`, `StartTime`, `EndTime`, `Parameters`, `Summary` (counts per
+status), `Findings[]` (`Id`, `Category`, `Check`, `Status`, `Severity`, `Target`, `Detail`,
+`Recommendation`, `Evidence`) and `Data` (tables such as the device list).
+
