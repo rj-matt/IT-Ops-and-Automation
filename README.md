@@ -237,13 +237,50 @@ Each script carries a generated copy of the helper code it needs (so it runs alo
 stick), between `#region MSPToolkit (generated)` markers labelled
 "DO NOT EDIT — regenerate with Sync-MSPEmbeddedHelper.ps1".
 
-1. Edit `endpoint-systems/utilities/MSPToolkit.Common.psm1` only.
-2. Run `.\endpoint-systems\utilities\Sync-MSPEmbeddedHelper.ps1` to regenerate every copy.
-3. Before committing, run `.\endpoint-systems\utilities\Sync-MSPEmbeddedHelper.ps1 -Check`.
-   It exits **1** if any embedded copy was hand-edited (hash mismatch) or is out of date.
+There are two helper sources, one per script language:
 
-Output schema (JSON, `SchemaVersion` 1.0): `ScriptName`, `ScriptVersion`, `RiskLevel`, `Computer`,
-`User`, `IsAdmin`, `PSVersion`, `StartTime`, `EndTime`, `Parameters`, `Summary` (counts per
-status), `Findings[]` (`Id`, `Category`, `Check`, `Status`, `Severity`, `Target`, `Detail`,
-`Recommendation`, `Evidence`) and `Data` (tables such as the device list).
+| Scripts | Helper source | Sections |
+|---|---|---|
+| `*.ps1` | `endpoint-systems/utilities/MSPToolkit.Common.psm1` | Core (also runs on PowerShell 7 for macOS/Linux), Net, Updates, LocalAdmin, Software |
+| `*.sh` | `endpoint-systems/utilities/msp-toolkit-common.sh` (bash 3.2 compatible) | Core, Net |
+
+1. Edit the helper source only, never a generated region.
+2. Run `.\endpoint-systems\utilities\Sync-MSPEmbeddedHelper.ps1` to regenerate every copy
+   (`.ps1` as UTF-8 with BOM + CRLF; `.sh` as UTF-8 without BOM + LF).
+3. Before committing, run `.\endpoint-systems\utilities\Sync-MSPEmbeddedHelper.ps1 -Check`.
+   It exits **1** if any embedded copy was hand-edited (hash mismatch) or is out of date, or if a
+   `.sh` file has CR line endings or a BOM. `.gitattributes` keeps `*.sh` at LF on every checkout.
+
+### Output schema (SchemaVersion 2.0)
+
+PowerShell and bash scripts write the same JSON, so one report can merge Windows, macOS and Linux
+results. The HTML report (A9) also still reads 1.0 files from before the change.
+
+| Field | Example / meaning |
+|---|---|
+| `SchemaVersion` | `"2.0"` |
+| `CheckId` | Catalog ID, identical on every platform: `"A1"` |
+| `ScriptName`, `Version` | `"get-endpoint-security-status-macos"`, `"1.0.0"` |
+| `Platform`, `OSVersion`, `Shell` | `"macOS"`, `"macOS 15.1"`, `"bash 3.2.57"` |
+| `Host`, `User`, `IsAdmin`, `RiskLevel` | Short host name; account; elevated (admin/root) true/false; Read-Only/Safe/Elevated/Destructive |
+| `Parameters` | Object of strings |
+| `Timestamp`, `EndTime` | ISO 8601 local time with offset: `"2026-10-16T14:05:09+02:00"` |
+| `Summary` | Counts for PASS, WARN, FAIL, INFO, SKIPPED, ERROR |
+| `Findings[]` | `Id`, `Category`, `Check`, `Status`, `Severity`, `Target`, `Detail`, `Recommendation`, `Evidence` |
+| `Data` | Named tables (arrays of objects), also exported as CSV |
+
+Finding IDs are `<CheckId>.<Category>.<Check>` with every run of non-alphanumeric characters
+replaced by `-` (`A8.Software.Remote-access-tool-Kaseya`). Equivalent checks use the same
+Category/Check text on every platform so their IDs match. Export file names:
+`<ScriptName>_<Host>_<yyyyMMdd-HHmmss>.json`, `..._findings.csv`, `..._<Table>.csv`.
+
+### Development checks (not for client machines)
+
+`.\tests\Invoke-ToolkitTests.ps1` runs everything: PowerShell parser (5.1 and 7), PSScriptAnalyzer
+(Write-Host allowed), `bash -n`, ShellCheck, a bash 4+ / GNU-only construct scan, the embedded-helper
+check plus a tamper test, the bash helper unit tests in WSL (as a normal user and as root, under
+bash 5 and bash 3.2.57 when built at `/opt/bash-3.2`), a JSON escaping round-trip into PowerShell,
+finding-ID parity between bash and PowerShell, schema validation, and the PowerShell helper unit
+tests. Limit it with `-Path folder1,folder2`. Validate any result folder with
+`.\tests\Test-MSPResultSchema.ps1 -Path <folder>`.
 

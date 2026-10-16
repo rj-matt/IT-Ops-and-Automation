@@ -39,7 +39,7 @@
                     un-pauses or changes anything.
     Prerequisites : Windows PowerShell 5.1 | Admin: No | Modules: none (Windows Update COM API) |
                     -Online needs internet access
-    Version       : 1.0.0
+    Version       : 1.1.0
     Limitations   : The lifecycle table is built in (dates as published by Microsoft, last
                     reviewed 2026-10); update the table when new versions ship. Windows 10
                     Extended Security Updates (ESU) enrolment cannot be detected reliably, so it
@@ -54,26 +54,75 @@ param(
 
 #region MSPToolkit (generated) Sections=Core,Updates
 # DO NOT EDIT — regenerate with Sync-MSPEmbeddedHelper.ps1
-# Source: endpoint-systems/utilities/MSPToolkit.Common.psm1 | Sections: Core,Updates | SHA256: cc459de75fd0270a27326b25704ccdb41d249da020c6191e26801788d8a11a29
+# Source: endpoint-systems/utilities/MSPToolkit.Common.psm1 | Sections: Core,Updates | SHA256: 3f0ac4564ace989f613f8dd6ba9a54394efc3488f6a3120e9eeeba05778d7342
 #region MSPHelper:Core
 # --- Run state ---------------------------------------------------------------------------
 # One toolkit script = one "run": one log file, one findings list, one optional export.
 $script:MSPRun = $null
-$script:MSPSchemaVersion = '1.0'
+$script:MSPSchemaVersion = '2.0'
 $script:MSPStatusOrder = @('PASS', 'WARN', 'FAIL', 'INFO', 'SKIPPED', 'ERROR')
 $script:MSPSeverityRank = @{ 'Critical' = 0; 'High' = 1; 'Medium' = 2; 'Low' = 3; 'Info' = 4 }
 
-function Test-MSPIsAdmin {
-    <# True when this PowerShell process is elevated ("Run as administrator"). #>
+function Get-MSPPlatform {
+    <# 'Windows', 'macOS' or 'Linux'. Windows PowerShell 5.1 has no $IsWindows; its edition is 'Desktop'. #>
+    if ($PSVersionTable.PSEdition -ne 'Core') { return 'Windows' }
+    if (Get-Variable -Name IsWindows -ValueOnly -ErrorAction SilentlyContinue) { return 'Windows' }
+    if (Get-Variable -Name IsMacOS -ValueOnly -ErrorAction SilentlyContinue) { return 'macOS' }
+    return 'Linux'
+}
+
+function Get-MSPOSVersion {
+    <# Short OS description, matching what the bash helper reports ("macOS 15.1", PRETTY_NAME on Linux). #>
+    param([string]$Platform = (Get-MSPPlatform))
     try {
+        if ($Platform -eq 'Windows') {
+            $cv = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop
+            $build = [int]$cv.CurrentBuildNumber
+            # ProductName still says "Windows 10" on Windows 11; the build number decides.
+            $name = [string]$cv.ProductName
+            if ($build -ge 22000) { $name = $name -replace 'Windows 10', 'Windows 11' }
+            $release = [string]$cv.DisplayVersion
+            if (-not $release) { $release = [string]$cv.ReleaseId }
+            return (('{0} {1} (build {2}.{3})' -f $name, $release, $build, $cv.UBR) -replace '\s+', ' ')
+        }
+        if ($Platform -eq 'macOS') {
+            return ('macOS {0}' -f ([string](& sw_vers -productVersion 2>$null)).Trim())
+        }
+        $line = Get-Content -LiteralPath '/etc/os-release' -ErrorAction Stop | Where-Object { $_ -like 'PRETTY_NAME=*' } | Select-Object -First 1
+        if ($line) { return ($line -replace '^PRETTY_NAME=', '').Trim('"') }
+    }
+    catch {
+        Write-Verbose ('OS version lookup failed: {0}' -f $_.Exception.Message)
+    }
+    return $Platform
+}
+
+function Get-MSPLogFolder {
+    <# Windows: %TEMP%\MSP-Toolkit. macOS/Linux: ${TMPDIR:-/tmp}/msp-toolkit (same folder the bash scripts use). #>
+    if ((Get-MSPPlatform) -eq 'Windows') { return (Join-Path -Path $env:TEMP -ChildPath 'MSP-Toolkit') }
+    $base = $env:TMPDIR
+    if (-not $base) { $base = '/tmp' }
+    return (Join-Path -Path $base -ChildPath 'msp-toolkit')
+}
+
+function Test-MSPIsAdmin {
+    <# True when elevated: "Run as administrator" on Windows, root (sudo) on macOS/Linux. #>
+    try {
+        if ((Get-MSPPlatform) -ne 'Windows') { return ([string](& id -u) -eq '0') }
         $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
         $principal = New-Object Security.Principal.WindowsPrincipal($identity)
         return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
     }
     catch {
-        # If Windows cannot tell us, assume not elevated: admin-only checks are SKIPPED, nothing breaks.
+        # If the OS cannot tell us, assume not elevated: admin-only checks are SKIPPED, nothing breaks.
         return $false
     }
+}
+
+function Get-MSPAdminTerm {
+    <# The word technicians see for elevation on this platform. #>
+    if ((Get-MSPPlatform) -eq 'Windows') { return 'administrator' }
+    return 'root (sudo)'
 }
 
 function Write-MSPLog {
@@ -104,25 +153,33 @@ function Format-MSPParameter {
 
 function Initialize-MSPRun {
     <#
-        Starts a run: creates the log in %TEMP%\MSP-Toolkit, records start time, computer, user,
+        Starts a run: creates the log (see Get-MSPLogFolder), records start time, host, user,
         version and parameters, and prints the banner. Call once at the top of every script.
+        -CheckId is the catalog ID (A1, B2, ...), identical for the Windows, macOS and Linux
+        versions of a script so reports can line their results up.
+        -AdminSections names the parts that need elevation, so the banner says so up front.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$ScriptName,
         [Parameter(Mandatory)][string]$ScriptVersion,
+        [Parameter(Mandatory)][ValidatePattern('^[A-Za-z][A-Za-z0-9-]*$')][string]$CheckId,
         [Parameter(Mandatory)][ValidateSet('Read-Only', 'Safe', 'Elevated', 'Destructive')][string]$RiskLevel,
         [System.Collections.IDictionary]$Parameters = @{},
-        [string]$Description = ''
+        [string]$Description = '',
+        [string[]]$AdminSections = @()
     )
     $start = Get-Date
+    $platform = Get-MSPPlatform
+    # Short host name on every platform (macOS can report "name.local").
+    $hostName = ([Environment]::MachineName -split '\.')[0]
     $logPath = $null
     try {
-        $logDir = Join-Path -Path $env:TEMP -ChildPath 'MSP-Toolkit'
+        $logDir = Get-MSPLogFolder
         if (-not (Test-Path -LiteralPath $logDir)) {
             $null = New-Item -ItemType Directory -Path $logDir -Force -ErrorAction Stop
         }
-        $logPath = Join-Path -Path $logDir -ChildPath ('{0}_{1}_{2}.log' -f $ScriptName, $env:COMPUTERNAME, $start.ToString('yyyyMMdd-HHmmss'))
+        $logPath = Join-Path -Path $logDir -ChildPath ('{0}_{1}_{2}.log' -f $ScriptName, $hostName, $start.ToString('yyyyMMdd-HHmmss'))
     }
     catch {
         $logPath = $null
@@ -137,14 +194,22 @@ function Initialize-MSPRun {
         $paramCopy[$key] = [string]$value
     }
 
+    $user = [Environment]::UserName
+    if ($platform -eq 'Windows') { $user = '{0}\{1}' -f $env:USERDOMAIN, $env:USERNAME }
+    $shell = 'PowerShell {0}' -f $PSVersionTable.PSVersion
+    if ($PSVersionTable.PSEdition -ne 'Core') { $shell = 'Windows PowerShell {0}' -f $PSVersionTable.PSVersion }
+
     $script:MSPRun = [pscustomobject]@{
+        CheckId       = $CheckId
         ScriptName    = $ScriptName
         ScriptVersion = $ScriptVersion
         RiskLevel     = $RiskLevel
-        Computer      = $env:COMPUTERNAME
-        User          = ('{0}\{1}' -f $env:USERDOMAIN, $env:USERNAME)
+        Platform      = $platform
+        OSVersion     = (Get-MSPOSVersion -Platform $platform)
+        Shell         = $shell
+        Host          = $hostName
+        User          = $user
         IsAdmin       = (Test-MSPIsAdmin)
-        PSVersion     = $PSVersionTable.PSVersion.ToString()
         StartTime     = $start
         EndTime       = $null
         Parameters    = $paramCopy
@@ -153,26 +218,33 @@ function Initialize-MSPRun {
         Findings      = New-Object System.Collections.Generic.List[object]
         Data          = [ordered]@{}
     }
+    $run = $script:MSPRun
 
-    Write-MSPLog -Message ('===== START {0} v{1} =====' -f $ScriptName, $ScriptVersion)
-    Write-MSPLog -Message ('Computer={0}; User={1}; Administrator={2}; PowerShell={3}; Risk={4}' -f `
-            $script:MSPRun.Computer, $script:MSPRun.User, $script:MSPRun.IsAdmin, $script:MSPRun.PSVersion, $RiskLevel)
+    Write-MSPLog -Message ('===== START {0} v{1} ({2}) =====' -f $ScriptName, $ScriptVersion, $CheckId)
+    Write-MSPLog -Message ('Host={0}; User={1}; Elevated={2}; Platform={3}; OS={4}; Shell={5}; Risk={6}' -f `
+            $run.Host, $run.User, $run.IsAdmin, $run.Platform, $run.OSVersion, $run.Shell, $RiskLevel)
     Write-MSPLog -Message ('Parameters: {0}' -f (Format-MSPParameter -Parameters $paramCopy))
 
+    $adminTerm = Get-MSPAdminTerm
     $adminText = 'No'
-    if ($script:MSPRun.IsAdmin) { $adminText = 'Yes' }
+    if ($run.IsAdmin) { $adminText = 'Yes' }
     $bar = '=' * 72
     Write-Host ''
     Write-Host $bar -ForegroundColor Cyan
-    Write-Host (' {0} v{1}   [Risk: {2}]' -f $ScriptName, $ScriptVersion, $RiskLevel) -ForegroundColor Cyan
+    Write-Host (' {0} v{1}   [{2}]   [Risk: {3}]' -f $ScriptName, $ScriptVersion, $CheckId, $RiskLevel) -ForegroundColor Cyan
     if ($Description) { Write-Host (' {0}' -f $Description) -ForegroundColor Gray }
-    Write-Host (' Computer: {0}   User: {1}   Administrator: {2}' -f $script:MSPRun.Computer, $script:MSPRun.User, $adminText) -ForegroundColor Gray
+    Write-Host (' Computer: {0} ({1})' -f $run.Host, $run.OSVersion) -ForegroundColor Gray
+    Write-Host (' User    : {0}   Elevated ({1}): {2}' -f $run.User, $adminTerm, $adminText) -ForegroundColor Gray
     Write-Host (' Started : {0}' -f $start.ToString('yyyy-MM-dd HH:mm:ss')) -ForegroundColor Gray
     if ($logPath) { Write-Host (' Log     : {0}' -f $logPath) -ForegroundColor Gray }
     Write-Host $bar -ForegroundColor Cyan
-    if (-not $script:MSPRun.IsAdmin) {
-        Write-Host ' Not running as administrator. Checks that need it will show SKIPPED;' -ForegroundColor DarkGray
-        Write-Host ' everything else still runs. For full results, use "Run as administrator".' -ForegroundColor DarkGray
+    if (-not $run.IsAdmin) {
+        Write-Host (' Not running as {0}. Checks that need it will show SKIPPED;' -f $adminTerm) -ForegroundColor DarkGray
+        Write-Host ' everything else still runs.' -ForegroundColor DarkGray
+        if ($AdminSections.Count -gt 0) {
+            Write-Host (' Needs {0}: {1}' -f $adminTerm, ($AdminSections -join ', ')) -ForegroundColor DarkGray
+        }
+        if ($platform -eq 'Windows') { Write-Host ' For full results, use "Run as administrator".' -ForegroundColor DarkGray }
     }
 }
 
@@ -195,6 +267,14 @@ function Get-MSPStatusColor {
         'ERROR' { return 'Magenta' }
         default { return 'White' }
     }
+}
+
+function ConvertTo-MSPIdPart {
+    <# "Remote-access tool: Kaseya" -> "Remote-access-tool-Kaseya". Must match msp_id_part in the bash helper. #>
+    param([AllowEmptyString()][string]$Text)
+    $part = ($Text -replace '[^A-Za-z0-9]+', '-').Trim('-')
+    if (-not $part) { $part = 'General' }
+    return $part
 }
 
 function Add-MSPFinding {
@@ -225,10 +305,11 @@ function Add-MSPFinding {
             default { $Severity = 'Info' }
         }
     }
-    if (-not $Target) { $Target = $script:MSPRun.Computer }
+    if (-not $Target) { $Target = $script:MSPRun.Host }
     if (-not $Id) {
-        # Stable ID so reports can de-duplicate the same check across runs and devices.
-        $Id = ('{0}:{1}:{2}' -f $script:MSPRun.ScriptName, $Category, $Check) -replace '[^A-Za-z0-9:]+', '-'
+        # Stable, platform-neutral ID (<CheckId>.<Category>.<Check>) so reports can line up the
+        # same check across runs and across Windows/macOS/Linux. The bash helper builds it the same way.
+        $Id = '{0}.{1}.{2}' -f $script:MSPRun.CheckId, (ConvertTo-MSPIdPart -Text $Category), (ConvertTo-MSPIdPart -Text $Check)
     }
 
     $finding = [pscustomobject]@{
@@ -265,14 +346,16 @@ function ConvertTo-MSPFriendlyError {
         $exception = $exception.InnerException
     }
     $message = $exception.Message
-    if ($exception -is [System.UnauthorizedAccessException] -or $message -match 'Access is denied|access denied|Unauthorized') {
-        return 'Windows denied access to this information for the current account. Running as administrator may allow it.'
+    $os = 'Windows'
+    if ((Get-MSPPlatform) -ne 'Windows') { $os = 'The operating system' }
+    if ($exception -is [System.UnauthorizedAccessException] -or $message -match 'Access is denied|access denied|Unauthorized|Permission denied') {
+        return ('{0} denied access to this information for the current account. Running as {1} may allow it.' -f $os, (Get-MSPAdminTerm))
     }
     if ($exception -is [System.Management.Automation.CommandNotFoundException]) {
-        return ('A Windows command this check needs ({0}) is not available on this computer. This is normal on some Windows editions or versions.' -f $ErrorRecord.CategoryInfo.TargetName)
+        return ('A command this check needs ({0}) is not available on this computer. This is normal on some editions or versions.' -f $ErrorRecord.CategoryInfo.TargetName)
     }
     if ($message -match 'Invalid namespace|Invalid class|Not supported|not supported') {
-        return 'This Windows component is not present on this computer (common on Windows Server or older/limited editions).'
+        return 'This component is not present on this computer (common on Windows Server or older/limited editions).'
     }
     if ($message -match 'timed out|timeout') {
         return 'The check took too long to answer and was stopped.'
@@ -283,11 +366,27 @@ function ConvertTo-MSPFriendlyError {
     return ('The check could not complete: {0}' -f $message.Trim())
 }
 
+function Skip-MSPCheck {
+    <#
+        Ends the current Invoke-MSPCheck with SKIPPED instead of ERROR, for "could not be checked
+        here, and that is expected" cases (for example: only a VPN adapter has a gateway).
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Reason,
+        [string]$Recommendation = ''
+    )
+    $exception = New-Object System.OperationCanceledException($Reason)
+    $marker = @{ MSPSkip = $true; Reason = $Reason; Recommendation = $Recommendation }
+    $record = New-Object System.Management.Automation.ErrorRecord($exception, 'MSPCheckSkipped', [System.Management.Automation.ErrorCategory]::NotEnabled, $marker)
+    throw $record
+}
+
 function Invoke-MSPCheck {
     <#
         Runs one check safely:
           - If -RequiresAdmin and not elevated: records SKIPPED with a plain-language note instead of failing.
-          - Any error inside the check becomes an ERROR finding; the script keeps going.
+          - Skip-MSPCheck inside the check records SKIPPED with its reason.
+          - Any other error inside the check becomes an ERROR finding; the script keeps going.
         Anything the script block outputs is passed back to the caller.
     #>
     [CmdletBinding()]
@@ -299,10 +398,11 @@ function Invoke-MSPCheck {
         [string]$AdminReason = ''
     )
     if ($RequiresAdmin -and -not $script:MSPRun.IsAdmin) {
-        $detail = 'Skipped: requires administrator.'
+        $detail = 'Skipped: requires {0}.' -f (Get-MSPAdminTerm)
         if ($AdminReason) { $detail = '{0} {1}' -f $detail, $AdminReason }
-        Add-MSPFinding -Check $Name -Category $Category -Status SKIPPED -Severity Info -Detail $detail `
-            -Recommendation 'Re-run from PowerShell opened with "Run as administrator" to include this check.'
+        $how = 'Re-run with sudo to include this check.'
+        if ($script:MSPRun.Platform -eq 'Windows') { $how = 'Re-run from PowerShell opened with "Run as administrator" to include this check.' }
+        Add-MSPFinding -Check $Name -Category $Category -Status SKIPPED -Severity Info -Detail $detail -Recommendation $how
         return
     }
     Write-MSPLog -Message ('Check start: {0}' -f $Name)
@@ -312,6 +412,12 @@ function Invoke-MSPCheck {
         & $ScriptBlock
     }
     catch {
+        $marker = $_.TargetObject
+        if ($marker -is [System.Collections.IDictionary] -and $marker['MSPSkip']) {
+            Write-MSPLog -Message ('Check skipped "{0}": {1}' -f $Name, $marker['Reason'])
+            Add-MSPFinding -Check $Name -Category $Category -Status SKIPPED -Severity Info -Detail $marker['Reason'] -Recommendation $marker['Recommendation']
+            return
+        }
         $friendly = ConvertTo-MSPFriendlyError -ErrorRecord $_
         Write-MSPLog -Level ERROR -Message ('Check error in "{0}": {1}: {2} | {3}' -f $Name, $_.Exception.GetType().FullName, $_.Exception.Message, $_.InvocationInfo.PositionMessage)
         Add-MSPFinding -Check $Name -Category $Category -Status ERROR -Severity Info -Detail $friendly `
@@ -354,8 +460,8 @@ function Get-MSPTicketText {
     if ($run.IsAdmin) { $adminText = 'Yes' }
 
     $lines = New-Object System.Collections.Generic.List[string]
-    $lines.Add(('[MSP Toolkit] {0} v{1} | Risk: {2}' -f $run.ScriptName, $run.ScriptVersion, $run.RiskLevel))
-    $lines.Add(('Computer: {0} | User: {1} | Admin: {2} | Run: {3} ({4}s)' -f $run.Computer, $run.User, $adminText, $run.StartTime.ToString('yyyy-MM-dd HH:mm'), $duration))
+    $lines.Add(('[MSP Toolkit] {0} {1} v{2} | Risk: {3}' -f $run.CheckId, $run.ScriptName, $run.ScriptVersion, $run.RiskLevel))
+    $lines.Add(('Computer: {0} ({1}) | User: {2} | Elevated: {3} | Run: {4} ({5}s)' -f $run.Host, $run.OSVersion, $run.User, $adminText, $run.StartTime.ToString('yyyy-MM-dd HH:mm'), $duration))
     $lines.Add(('Result: PASS {0} | WARN {1} | FAIL {2} | INFO {3} | SKIPPED {4} | ERROR {5}' -f `
                 $counts['PASS'], $counts['WARN'], $counts['FAIL'], $counts['INFO'], $counts['SKIPPED'], $counts['ERROR']))
 
@@ -369,7 +475,7 @@ function Get-MSPTicketText {
                 break
             }
             $target = ''
-            if ($f.Target -and $f.Target -ne $run.Computer) { $target = ' [{0}]' -f $f.Target }
+            if ($f.Target -and $f.Target -ne $run.Host) { $target = ' [{0}]' -f $f.Target }
             $text = '  - [{0}/{1}] {2}{3}: {4}' -f $f.Status, $f.Severity, $f.Check, $target, $f.Detail
             if ($f.Recommendation) { $text = '{0} Action: {1}' -f $text, $f.Recommendation }
             $lines.Add($text)
@@ -452,27 +558,37 @@ function Get-MSPResultObject {
             Evidence       = $f.Evidence
         }
     }
+    # Field order and names are shared with the bash helper (msp_json_result).
     return [ordered]@{
         SchemaVersion = $script:MSPSchemaVersion
+        CheckId       = $run.CheckId
         ScriptName    = $run.ScriptName
-        ScriptVersion = $run.ScriptVersion
-        RiskLevel     = $run.RiskLevel
-        Computer      = $run.Computer
+        Version       = $run.ScriptVersion
+        Platform      = $run.Platform
+        OSVersion     = $run.OSVersion
+        Shell         = $run.Shell
+        Host          = $run.Host
         User          = $run.User
         IsAdmin       = $run.IsAdmin
-        PSVersion     = $run.PSVersion
-        StartTime     = $run.StartTime.ToString('o')
-        EndTime       = $endTime.ToString('o')
+        RiskLevel     = $run.RiskLevel
         Parameters    = $run.Parameters
+        Timestamp     = (ConvertTo-MSPIsoTime -Time $run.StartTime)
+        EndTime       = (ConvertTo-MSPIsoTime -Time $endTime)
         Summary       = (Get-MSPSummaryCount)
         Findings      = @($findings)
         Data          = $run.Data
     }
 }
 
+function ConvertTo-MSPIsoTime {
+    <# ISO 8601 local time with offset, to the second (2026-10-16T14:05:09+02:00), as the bash helper writes it. #>
+    param([Parameter(Mandatory)][datetime]$Time)
+    return $Time.ToString('yyyy-MM-ddTHH:mm:sszzz')
+}
+
 function Export-MSPResult {
     <#
-        Writes <Script>_<Computer>_<yyyyMMdd-HHmmss>.json (full result), ..._findings.csv
+        Writes <Script>_<Host>_<yyyyMMdd-HHmmss>.json (full result), ..._findings.csv
         (one row per finding) and ..._<Table>.csv for each attached data table.
     #>
     [CmdletBinding()]
@@ -482,16 +598,18 @@ function Export-MSPResult {
         $null = New-Item -ItemType Directory -Path $OutputPath -Force -ErrorAction Stop
     }
     $folder = (Resolve-Path -LiteralPath $OutputPath).ProviderPath
-    $base = '{0}_{1}_{2}' -f $run.ScriptName, $run.Computer, $run.StartTime.ToString('yyyyMMdd-HHmmss')
+    $base = '{0}_{1}_{2}' -f $run.ScriptName, $run.Host, $run.StartTime.ToString('yyyyMMdd-HHmmss')
 
     $jsonPath = Join-Path -Path $folder -ChildPath ('{0}.json' -f $base)
     $json = Get-MSPResultObject | ConvertTo-Json -Depth 8
     [System.IO.File]::WriteAllText($jsonPath, $json, (New-Object System.Text.UTF8Encoding($false)))
 
+    # Same columns, in the same order, as the bash helper's findings CSV.
     $csvPath = Join-Path -Path $folder -ChildPath ('{0}_findings.csv' -f $base)
-    $timestamp = $run.StartTime.ToString('o')
-    $run.Findings | Select-Object @{ n = 'ScriptName'; e = { $run.ScriptName } }, @{ n = 'Computer'; e = { $run.Computer } },
-    @{ n = 'Timestamp'; e = { $timestamp } }, Id, Category, Check, Status, Severity, Target, Detail, Recommendation |
+    $timestamp = ConvertTo-MSPIsoTime -Time $run.StartTime
+    $run.Findings | Select-Object @{ n = 'CheckId'; e = { $run.CheckId } }, @{ n = 'ScriptName'; e = { $run.ScriptName } },
+    @{ n = 'Platform'; e = { $run.Platform } }, @{ n = 'Host'; e = { $run.Host } }, @{ n = 'Timestamp'; e = { $timestamp } },
+    Id, Category, Check, Status, Severity, Target, Detail, Recommendation |
         Export-Csv -LiteralPath $csvPath -NoTypeInformation -Encoding UTF8
 
     $dataPaths = @()
@@ -633,8 +751,8 @@ function Get-MSPPendingReboot {
 #endregion MSPHelper:Updates
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '1.0.0'
-Initialize-MSPRun -ScriptName 'Get-WindowsUpdateCompliance' -ScriptVersion $ScriptVersion -RiskLevel 'Read-Only' `
+$ScriptVersion = '1.1.0'
+Initialize-MSPRun -ScriptName 'Get-WindowsUpdateCompliance' -ScriptVersion $ScriptVersion -CheckId 'A6' -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'Windows Update compliance and end-of-support check (read-only)'
 
 # --- Microsoft lifecycle table -------------------------------------------------------------

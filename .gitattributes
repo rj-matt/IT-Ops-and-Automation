@@ -1,3 +1,10 @@
 # Archived/untrusted files never ship in packaged copies (git archive, "Download ZIP").
 _archive/ export-ignore
 _archive/** export-ignore
+
+# bash scripts keep LF line endings on every checkout: a CR breaks bash and the #! line.
+*.sh text eol=lf
+
+# Development-only folders are left out of packaged copies (git archive, "Download ZIP").
+tests/ export-ignore
+docs/ export-ignore
