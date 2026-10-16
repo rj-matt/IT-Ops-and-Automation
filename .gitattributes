@@ -8,3 +8,4 @@ _archive/** export-ignore
 # Development-only folders are left out of packaged copies (git archive, "Download ZIP").
 tests/ export-ignore
 docs/ export-ignore
+CLAUDE.md export-ignore
