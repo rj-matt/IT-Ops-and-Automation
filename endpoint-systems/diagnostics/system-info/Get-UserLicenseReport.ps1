@@ -62,13 +62,11 @@
 
 .NOTES
     Script Path:    cloud-services/m365/diagnostics/Get-UserLicenseReport.ps1
-    Version:        1.0.0
+    Version:        1.0.1
     Last Updated:   2025-07-01
     Author:         MSP Automation Engineering
     Intended For:   Tier 1–3 Technicians
 #>
-
-Connect-MgGraph -Scopes 'User.Read.All','Directory.Read.All' -UseDeviceCode
 
 [CmdletBinding(DefaultParameterSetName = 'AllUsers')]
 param (

@@ -335,6 +335,10 @@ and PowerShell, schema validation, the PowerShell helper unit tests, logic tests
 | macOS | `pwsh -NoProfile -File tests/Invoke-ToolkitTests.ps1` | Windows PowerShell 5.1 steps; Windows/Linux runtime cases; bash tests as root (never uses sudo) |
 | Linux | `pwsh -NoProfile -File tests/Invoke-ToolkitTests.ps1` | Windows PowerShell 5.1 steps; Windows/macOS runtime cases; bash 3.2 unless built at `/opt/bash-3.2` |
 
+PSScriptAnalyzer findings in scripts not yet brought to standard (Batches B-D) are listed in
+`tests/pssa-known-issues.txt` and reported as known, so a clean run is all green and any new
+finding fails. Remove a script's lines from that file when its batch is reworked.
+
 On a Mac, `/bin/bash` is the real bash 3.2.57 that ships with macOS, so the bash scripts are run
 under it for real, not only parse-checked. Limit the static checks with `-Path folder1,folder2`;
 skip the runtime tests with `-SkipRuntime`. Validate any result folder with

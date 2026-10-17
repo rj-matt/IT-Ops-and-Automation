@@ -10,7 +10,9 @@
     the reason; a step that needs another platform says which, instead of failing.
 
       1  PowerShell parser on every .ps1/.psm1 (5.1 on Windows; 7 everywhere pwsh is installed)
-      2  PSScriptAnalyzer (PSAvoidUsingWriteHost excluded: console tools print to the screen on purpose)
+      2  PSScriptAnalyzer (PSAvoidUsingWriteHost excluded: console tools print to the screen on purpose).
+         Findings listed in tests/pssa-known-issues.txt (scripts not yet reworked) are reported as
+         known; only new findings fail.
       3  bash -n on every .sh: macOS /bin/bash 3.2 and a newer bash if installed; Linux bash (and
          /opt/bash-3.2 if built); Windows: bash in WSL
       4  ShellCheck on every .sh
@@ -65,7 +67,7 @@
                     macOS/Linux: PowerShell 7 and bash
                     All: PSScriptAnalyzer (module path or %LOCALAPPDATA%\PSModules), ShellCheck
     Exit code     : 0 when every step that ran passed, 1 otherwise
-    Version       : 2.1.0
+    Version       : 2.2.0
 #>
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPositionalParameters', '', Justification = 'Add-Result (Step, Result, Detail) is called ~50 times; positional calls keep each step on one readable line.')]
 [CmdletBinding()]
@@ -232,20 +234,57 @@ if ($pwsh) {
 else { Add-Result 'Parse (PowerShell 7)' 'NOT RUN' 'pwsh not installed' }
 
 # --- 2 PSScriptAnalyzer ------------------------------------------------------------------
+# Findings in scripts not yet brought to standard are listed in tests/pssa-known-issues.txt
+# (file|rule|max count). They are reported as known, not failed, so any NEW finding stands out.
+# Remove a file's lines from that list when its batch is reworked.
 if ($pssa) {
     Import-Module $pssa -ErrorAction Stop
-    $issues = foreach ($f in $psFiles) {
+    $raw = foreach ($f in $psFiles) {
         Invoke-ScriptAnalyzer -Path $f.FullName -ExcludeRule PSAvoidUsingWriteHost |
-            ForEach-Object { '{0}:{1} [{2}] {3}' -f (Get-Relative $f.FullName), $_.Line, $_.RuleName, ($_.Message -split "`n")[0] }
+            ForEach-Object { [pscustomobject]@{ File = (Get-Relative $f.FullName); Line = $_.Line; Rule = $_.RuleName; Message = ($_.Message -split "`n")[0] } }
     }
-    $issues = @($issues)
+    $raw = @($raw)
+    $known = @{}
+    $baselineFile = Join-Path $here 'pssa-known-issues.txt'
+    if (Test-Path -LiteralPath $baselineFile) {
+        foreach ($line in [System.IO.File]::ReadAllLines($baselineFile)) {
+            if ($line -match '^\s*(#|$)') { continue }
+            $parts = $line.Split('|')
+            if ($parts.Count -eq 3) { $known['{0}|{1}' -f $parts[0].Trim(), $parts[1].Trim()] = [int]$parts[2] }
+        }
+    }
+    $newIssues = New-Object System.Collections.Generic.List[string]
+    $knownCount = 0
+    $lowerable = New-Object System.Collections.Generic.List[string]
+    foreach ($g in ($raw | Group-Object -Property File, Rule)) {
+        $first = $g.Group[0]
+        $key = '{0}|{1}' -f $first.File, $first.Rule
+        $allowed = 0
+        if ($known.ContainsKey($key)) { $allowed = $known[$key] }
+        if ($g.Count -le $allowed) {
+            $knownCount += $g.Count
+            if ($g.Count -lt $allowed) { $lowerable.Add(('{0}: {1} now, list says {2}' -f $key, $g.Count, $allowed)) }
+        }
+        else {
+            foreach ($i in $g.Group) { $newIssues.Add(('{0}:{1} [{2}] {3}' -f $i.File, $i.Line, $i.Rule, $i.Message)) }
+            if ($allowed -gt 0) { $newIssues.Add(('  ({0}: {1} found, {2} known)' -f $key, $g.Count, $allowed)) }
+        }
+    }
+    $scanned = @($psFiles | ForEach-Object { Get-Relative $_.FullName })
+    foreach ($key in $known.Keys) {
+        if ($scanned -notcontains $key.Split('|')[0]) { continue }
+        if (-not ($raw | Where-Object { ('{0}|{1}' -f $_.File, $_.Rule) -eq $key })) { $lowerable.Add(('{0}: fixed, remove the line' -f $key)) }
+    }
+    $raw | ForEach-Object { '{0}:{1} [{2}] {3}' -f $_.File, $_.Line, $_.Rule, $_.Message } | Set-Content -LiteralPath (Join-Path $work 'pssa.txt') -Encoding UTF8
     $label = 'PSScriptAnalyzer (PowerShell {0})' -f $PSVersionTable.PSVersion.Major
-    if ($issues.Count -gt 0) {
-        $byFile = $issues | ForEach-Object { ($_ -split ':')[0] } | Group-Object | Sort-Object Count -Descending | ForEach-Object { '{0} ({1})' -f $_.Name, $_.Count }
-        $issues | Set-Content -LiteralPath (Join-Path $work 'pssa.txt') -Encoding UTF8
-        Add-Result $label FAIL (('{0} finding(s): {1}' -f $issues.Count, ($byFile -join '; ')) + "`nFull list: " + (Join-Path $work 'pssa.txt'))
+    $note = ''
+    if ($knownCount -gt 0) { $note = ('; {0} known finding(s) in scripts not yet reworked (tests/pssa-known-issues.txt)' -f $knownCount) }
+    if ($lowerable.Count -gt 0) { $note += ("`nKnown-issues list can be tightened: " + ($lowerable -join '; ')) }
+    if ($newIssues.Count -gt 0) {
+        $newCount = @($newIssues | Where-Object { -not $_.StartsWith('  (') }).Count
+        Add-Result $label FAIL (('{0} NEW finding(s){1}' -f $newCount, $note) + "`n" + (($newIssues | Select-Object -First 30) -join "`n") + "`nFull list: " + (Join-Path $work 'pssa.txt'))
     }
-    else { Add-Result $label PASS ('{0} file(s), PSAvoidUsingWriteHost excluded' -f $psFiles.Count) }
+    else { Add-Result $label PASS ('{0} file(s), no new findings{1}' -f $psFiles.Count, $note) }
 }
 else { Add-Result 'PSScriptAnalyzer' 'NOT RUN' 'module not found' }
 
