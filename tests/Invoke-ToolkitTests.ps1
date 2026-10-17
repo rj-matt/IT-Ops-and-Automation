@@ -24,7 +24,8 @@
          parity, schema validation
       8  PowerShell helper unit tests (tests/Test-MSPToolkitCommon.ps1) on 5.1 and 7
       9  Logic tests that use mocked paths and run on any platform:
-         tests/Test-ClearWindowsUpdateCacheLogic.ps1 (D1 repeat runs) and
+         tests/Test-ClearWindowsUpdateCacheLogic.ps1 (D1 repeat runs),
+         tests/Test-ExportSecurityAuditReportIds.ps1 (A9 old/new finding IDs) and
          tests/bash/test-scripts-mocked.sh under every bash (Linux scripts, Linux branches and
          macOS paths not reachable here, with stub commands; no network traffic is possible)
      10  Runtime smoke tests of the scripts for THIS platform, results validated against schema
@@ -479,6 +480,7 @@ foreach ($h in $hosts) {
 # --- 9 Logic tests (mocked paths, any platform) --------------------------------------------
 $logic = @(
     @{ Name = 'D1 repeat runs: backup names never reused or overwritten'; File = 'Test-ClearWindowsUpdateCacheLogic.ps1' }
+    @{ Name = 'A9 reports a check once across result versions and platforms'; File = 'Test-ExportSecurityAuditReportIds.ps1' }
 )
 foreach ($t in $logic) {
     foreach ($h in $hosts) {

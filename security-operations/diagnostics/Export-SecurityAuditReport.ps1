@@ -4,7 +4,7 @@
     network audit scripts: executive summary, prioritized remediation, per-device findings.
 
 .DESCRIPTION
-    Reads every toolkit JSON file (schema 1.0) in -InputPath, for example the folder written by
+    Reads every toolkit JSON file (schema 1.0 or 2.0) in -InputPath, for example the folder written by
     Invoke-HomeAuditBundle.ps1, and writes a single HTML file with no external links, scripts or
     images, so it can be emailed, printed or saved as PDF from the browser.
 
@@ -21,6 +21,12 @@
                             in coverage, not problems found.
 
     When the same script ran more than once on the same computer, only the newest result is used.
+
+    Results from older script versions are matched to the current check names, so the same
+    check is one remediation item whatever version or platform produced it: schema 1.0 IDs
+    (Get-EndpointSecurityStatus:Encryption:...) become 2.0 IDs (A1.Encryption....), and checks
+    renamed since (A1 2.2.0: "Windows drive encryption" -> "System drive encryption", "Windows
+    Update last scan" -> "Last update scan") are reported under the new name.
 
 .PARAMETER InputPath
     Folder containing the JSON result files.
@@ -50,9 +56,9 @@
     Scope         : Reads JSON files in -InputPath; writes one HTML file. No system or network access.
     Risk Level    : Read-Only -- reads result files and writes the report file only.
     Prerequisites : Windows PowerShell 5.1 | Admin: No | Modules: none
-    Version       : 1.1.0
+    Version       : 1.2.0
     Limitations   : Reports only what the scripts found at the time they ran; it is not a
-                    penetration test. Files that are not toolkit schema 1.0 are skipped (listed
+                    penetration test. Files that are not toolkit schema 1.0 or 2.0 are skipped (listed
                     in the console and log). Router settings marked "Not verified" were not seen.
 #>
 [CmdletBinding()]
@@ -679,7 +685,7 @@ function Complete-MSPRun {
 #endregion MSPHelper:Core
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '1.1.0'
+$ScriptVersion = '1.2.0'
 Initialize-MSPRun -ScriptName 'Export-SecurityAuditReport' -ScriptVersion $ScriptVersion -CheckId 'A9' -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'HTML security audit report from toolkit JSON results'
 
@@ -695,6 +701,46 @@ $auditScripts = [ordered]@{
     'Get-HomeDeviceInventory'     = 'Device and software inventory'
 }
 $severityRank = @{ 'Critical' = 0; 'High' = 1; 'Medium' = 2; 'Low' = 3; 'Info' = 4 }
+
+# Catalog IDs of the Windows scripts, for schema 1.0 files (which do not record a CheckId).
+$scriptCheckIds = @{
+    'Get-EndpointSecurityStatus'  = 'A1'
+    'Get-HomeNetworkMap'          = 'A2'
+    'Get-WiFiSecurityAudit'       = 'A3'
+    'Get-OpenPortScan'            = 'A4'
+    'Get-BrowserSecurityCheck'    = 'A5'
+    'Get-WindowsUpdateCompliance' = 'A6'
+    'Get-RouterSecurityCheck'     = 'A7'
+    'Get-HomeDeviceInventory'     = 'A8'
+}
+
+# Checks renamed in a later script version: '<CheckId>|<Category>|<old Check>' = new Check.
+# Older results are reported under the new name so a report mixing versions (or platforms)
+# shows each check once. Add a line here whenever a check is renamed.
+$renamedChecks = @{
+    'A1|Encryption|Windows drive encryption' = 'System drive encryption'   # A1 2.2.0, matches macOS/Linux
+    'A1|Updates|Windows Update last scan'    = 'Last update scan'          # A1 2.2.0, matches macOS/Linux
+}
+
+function Get-NormalizedFinding {
+    <#
+        Current ID and check name for a finding from any result version. Generated IDs
+        (schema 1.0 "<Script>:<Category>:<Check>", schema 2.0 "<CheckId>.<Category>.<Check>") are
+        rebuilt in the 2.0 form from the current check name; IDs a script set on purpose (for
+        example A2.Unidentified.<MAC>) are kept as they are.
+    #>
+    param([string]$Id, [string]$Category, [string]$Check, [string]$ScriptName, [string]$CheckId)
+    if (-not $CheckId -and $scriptCheckIds.ContainsKey($ScriptName)) { $CheckId = $scriptCheckIds[$ScriptName] }
+    $legacyId = ('{0}:{1}:{2}' -f $ScriptName, $Category, $Check) -replace '[^A-Za-z0-9:]+', '-'
+    $generated = ($Id -eq $legacyId)
+    if ($CheckId) { $generated = $generated -or ($Id -eq ('{0}.{1}.{2}' -f $CheckId, (ConvertTo-MSPIdPart -Text $Category), (ConvertTo-MSPIdPart -Text $Check))) }
+    $newCheck = $Check
+    $key = '{0}|{1}|{2}' -f $CheckId, $Category, $Check
+    if ($renamedChecks.ContainsKey($key)) { $newCheck = $renamedChecks[$key] }
+    $newId = $Id
+    if ($generated -and $CheckId) { $newId = '{0}.{1}.{2}' -f $CheckId, (ConvertTo-MSPIdPart -Text $Category), (ConvertTo-MSPIdPart -Text $newCheck) }
+    return [pscustomobject]@{ Id = $newId; Check = $newCheck; Changed = ($newId -ne $Id -or $newCheck -ne $Check) }
+}
 
 function ConvertTo-Html5Text {
     <# HTML-encodes any value. Every piece of data from the JSON files goes through this. #>
@@ -778,14 +824,17 @@ if ($superseded -gt 0) {
 
 # --- Flatten findings ----------------------------------------------------------------------
 $allFindings = New-Object System.Collections.Generic.List[object]
+$normalizedCount = 0
 foreach ($run in $runs) {
     foreach ($f in @($run.Findings)) {
+        $current = Get-NormalizedFinding -Id ([string]$f.Id) -Category ([string]$f.Category) -Check ([string]$f.Check) -ScriptName ([string]$run.ScriptName) -CheckId ([string]$run.CheckId)
+        if ($current.Changed) { $normalizedCount++ }
         $allFindings.Add([pscustomobject]@{
                 Computer       = [string]$run.Computer
                 ScriptName     = [string]$run.ScriptName
-                Id             = [string]$f.Id
+                Id             = $current.Id
                 Category       = [string]$f.Category
-                Check          = [string]$f.Check
+                Check          = $current.Check
                 Status         = [string]$f.Status
                 Severity       = [string]$f.Severity
                 Target         = [string]$f.Target
@@ -795,6 +844,10 @@ foreach ($run in $runs) {
     }
 }
 $computers = @($runs | ForEach-Object { $_.Computer } | Select-Object -Unique | Sort-Object)
+if ($normalizedCount -gt 0) {
+    Add-MSPFinding -Check 'Older result formats' -Category 'Input' -Status INFO `
+        -Detail ('{0} finding(s) from older script versions were matched to the current check names and IDs.' -f $normalizedCount)
+}
 $issues = @($allFindings | Where-Object { $_.Status -in @('FAIL', 'WARN') })
 
 # Remediation items: the same check (Id) on several devices/targets becomes one item.
