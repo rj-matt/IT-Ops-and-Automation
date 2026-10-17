@@ -1,6 +1,8 @@
 # Archived/untrusted files never ship in packaged copies (git archive, "Download ZIP").
 _archive/ export-ignore
 _archive/** export-ignore
+# ...and do not count in GitHub's language statistics.
+_archive/** linguist-vendored
 
 # bash scripts keep LF line endings on every checkout: a CR breaks bash and the #! line.
 *.sh text eol=lf
