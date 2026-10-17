@@ -554,11 +554,17 @@ else {
         @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'A2 --passive (neighbor table only, nothing sent)'; Script = "$net/get-home-network-map.sh"; Args = @('--passive'); Expect = @(0); MustContain = 'Passive: nothing is sent' }
         @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'A3 Wi-Fi (macOS, local)'; Script = "$net/get-wifi-security-audit-macos.sh"; Args = @(); Expect = @(0) }
         @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'A4 listening ports (no --scan-lan)'; Script = "$ep/get-open-port-scan.sh"; Args = @(); Expect = @(0) }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'A5 browsers (macOS)'; Script = "$si/get-browser-security-check.sh"; Args = @(); Expect = @(0) }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'A6 updates (macOS, last check, no --online)'; Script = "$si/get-update-compliance-macos.sh"; Args = @(); Expect = @(0) }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'A8 inventory (macOS)'; Script = 'endpoint-systems/audit/software-inventory/get-home-device-inventory.sh'; Args = @(); Expect = @(0) }
         # Linux: the same, with the Linux scripts.
         @{ Platform = 'Linux'; Name = 'A1 endpoint security (Linux)'; Script = "$ep/get-endpoint-security-status-linux.sh"; Args = @(); Expect = @(0) }
         @{ Platform = 'Linux'; Name = 'A2 --passive (neighbor table only, nothing sent)'; Script = "$net/get-home-network-map.sh"; Args = @('--passive'); Expect = @(0); MustContain = 'Passive: nothing is sent' }
         @{ Platform = 'Linux'; Name = 'A3 Wi-Fi (Linux, local)'; Script = "$net/get-wifi-security-audit-linux.sh"; Args = @(); Expect = @(0) }
         @{ Platform = 'Linux'; Name = 'A4 listening ports (no --scan-lan)'; Script = "$ep/get-open-port-scan.sh"; Args = @(); Expect = @(0) }
+        @{ Platform = 'Linux'; Name = 'A5 browsers (Linux)'; Script = "$si/get-browser-security-check.sh"; Args = @(); Expect = @(0) }
+        @{ Platform = 'Linux'; Name = 'A6 updates (Linux, local package lists, no --online)'; Script = "$si/get-update-compliance-linux.sh"; Args = @(); Expect = @(0) }
+        @{ Platform = 'Linux'; Name = 'A8 inventory (Linux)'; Script = 'endpoint-systems/audit/software-inventory/get-home-device-inventory.sh'; Args = @(); Expect = @(0) }
         # Active network cases: never run without -AllowActiveNetwork.
         @{ Platform = 'Windows'; Name = 'A2 ping sweep of the local subnet'; Script = "$net/Get-HomeNetworkMap.ps1"; Args = @(); Expect = @(0); Active = 'ping sweep of the whole local subnet + reverse DNS' }
         @{ Platform = 'Windows'; Name = 'A2 -SkipPing'; Script = "$net/Get-HomeNetworkMap.ps1"; Args = @('-SkipPing'); Expect = @(0); Active = 'reverse DNS lookups of neighbors via the DNS server' }
@@ -567,6 +573,10 @@ else {
         @{ Platform = 'Windows'; Name = 'A6 -Online'; Script = "$si/Get-WindowsUpdateCompliance.ps1"; Args = @('-Online'); Expect = @(0); Active = 'Microsoft Update online search' }
         @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'A2 ping sweep (macOS)'; Script = "$net/get-home-network-map.sh"; Args = @(); Expect = @(0); Active = 'ping sweep of the whole local subnet + hostname lookups' }
         @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'A4 --scan-lan (macOS)'; Script = "$ep/get-open-port-scan.sh"; Args = @('--scan-lan'); Expect = @(0); Active = 'ping sweep + TCP probes of 11 ports on every device' }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'A7 router check (macOS)'; Script = "$net/get-router-security-check.sh"; Args = @('--skip-checklist-prompt'); Expect = @(0); Active = 'TCP/HTTP to the gateway + SSDP multicast' }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'A6 --online (macOS)'; Script = "$si/get-update-compliance-macos.sh"; Args = @('--online'); Expect = @(0); Active = 'Apple software update servers' }
+        @{ Platform = 'Linux'; Name = 'A7 router check (Linux)'; Script = "$net/get-router-security-check.sh"; Args = @('--skip-checklist-prompt'); Expect = @(0); Active = 'TCP/HTTP to the gateway + SSDP multicast' }
+        @{ Platform = 'Linux'; Name = 'A6 --online (Linux)'; Script = "$si/get-update-compliance-linux.sh"; Args = @('--online'); Expect = @(0); Active = 'distribution package servers and the Snap Store' }
         @{ Platform = 'Linux'; Name = 'A2 ping sweep (Linux)'; Script = "$net/get-home-network-map.sh"; Args = @(); Expect = @(0); Active = 'ping sweep of the whole local subnet + hostname lookups' }
         @{ Platform = 'Linux'; Name = 'A4 --scan-lan (Linux)'; Script = "$ep/get-open-port-scan.sh"; Args = @('--scan-lan'); Expect = @(0); Active = 'ping sweep + TCP probes of 11 ports on every device' }
         @{ Platform = 'Windows'; Name = 'D2 -WhatIf with connectivity test'; Script = 'endpoint-systems/remediation/elevated/network-resets/Reset-NetworkStack.ps1'; Args = @('-WhatIf'); Expect = @(0); Active = 'ping gateway, DNS lookup, TCP to www.msftconnecttest.com' }

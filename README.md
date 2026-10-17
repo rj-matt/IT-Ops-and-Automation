@@ -81,7 +81,13 @@ Scheduled upkeep:
   script once to confirm the current PC's build resolves. A stale table under-reports
   end-of-support: an unsupported Windows version looks supported.
 - **Approved remote tools.** Update `approved-remote-tools.txt` (next to
-  `Get-HomeDeviceInventory.ps1`) when the MSP adds or retires an RMM/remote-support product.
+  `Get-HomeDeviceInventory.ps1` and `get-home-device-inventory.sh`, which both read it) when the
+  MSP adds or retires an RMM/remote-support product.
+- **macOS and Linux support tables (A6).** `get-update-compliance-macos.sh` (`SUPPORT_TABLE`:
+  macOS majors) and `get-update-compliance-linux.sh` (`SUPPORT_TABLE`: Ubuntu, Debian, Fedora,
+  RHEL family, Mint, Pop!_OS end dates) are marked "Reviewed 2026-10". Review them every April
+  and October like the Windows table: add new releases, check end dates against each vendor's
+  release page, and update the "Reviewed" note.
 
 Deprecated or superseded scripts should be retained in designated locations rather
 than removed outright to preserve context.
@@ -158,6 +164,11 @@ shows the options.
 | `get-wifi-security-audit-macos.sh` (A3) | `core-infrastructure/networking/diagnostics/` | macOS | Current Wi-Fi security, saved networks, nearby networks; never reads passwords | Read-Only | No (Yes adds the security type of each saved network) |
 | `get-wifi-security-audit-linux.sh` (A3) | `core-infrastructure/networking/diagnostics/` | Linux (NetworkManager) | Current Wi-Fi security, saved connections (no secrets), nearby networks from the last scan | Read-Only | No |
 | `get-open-port-scan.sh` (A4) | `security-operations/diagnostics/endpoint-posture/` | macOS, Linux | Listening ports with owning process; optional `--scan-lan` check of 11 risky ports on local devices | Read-Only | No (on Linux, Yes shows other users' process names) |
+| `get-browser-security-check.sh` (A5) | `endpoint-systems/diagnostics/system-info/` | macOS, Linux | Chrome/Edge/Brave/Chromium/Firefox versions (estimated current), extensions, force-install and update-blocking policies; Safari version and extensions on macOS; no credential or history access | Read-Only | No (Yes for `--all-users`) |
+| `get-update-compliance-macos.sh` (A6) | `endpoint-systems/diagnostics/system-info/` | macOS | macOS version support (built-in table, reviewed 2026-10), last macOS update, pending updates from the last check (`--online` asks Apple), uptime, update settings and profiles | Read-Only | No |
+| `get-update-compliance-linux.sh` (A6) | `endpoint-systems/diagnostics/system-info/` | Linux (apt, dnf) | Distribution support (built-in table, reviewed 2026-10), last package update, pending (security) updates from the local lists (`--online` refreshes into a temporary folder), restart needed, automatic updates, held packages/snaps | Read-Only | No |
+| `get-router-security-check.sh` (A7) | `core-infrastructure/networking/diagnostics/` | macOS, Linux | Gateway, DNS, admin page HTTP vs HTTPS, management ports, UPnP (SSDP, needs perl) and its port forwards, guided router checklist | Read-Only (no logins) | No |
+| `get-home-device-inventory.sh` (A8) | `endpoint-systems/audit/software-inventory/` | macOS, Linux | Hardware/OS, accounts and last login, home folders, installed apps/packages; flags remote-access and P2P tools (uses `approved-remote-tools.txt`) | Read-Only | No (Linux: Yes adds serial number and empty-password check) |
 
 Run them with `bash <script>` (no need to make them executable, and macOS's quarantine flag on
 downloaded files does not apply to a script passed to bash). On macOS, macOS hides Wi-Fi names

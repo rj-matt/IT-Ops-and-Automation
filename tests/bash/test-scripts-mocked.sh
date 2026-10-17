@@ -58,7 +58,7 @@ new_env() {
     # The signed-in user is "alice" (uid 1000); her groups come from the fake /etc/group.
     stub "$BIN" id 'case "$1" in -u) echo 1000 ;; -un) echo alice ;; -Gn) awk -F: -v u="${2:-alice}" '"'"'BEGIN { printf "%s", u } { n = split($4, m, ","); for (i = 1; i <= n; i++) if (m[i] == u) printf " %s", $1 } END { print "" }'"'"' "'"$FAKE"'/etc/group" 2>/dev/null ;; *) echo "uid=1000(alice)" ;; esac'
     # GNU forms used by -linux.sh scripts, mapped onto whatever date/stat this computer has.
-    stub "$BIN" date "case \"\$1\" in -d) e=\${2#@}; shift 2; if $REAL_DATE -d @0 >/dev/null 2>&1; then exec $REAL_DATE -d @\$e \"\$@\"; else exec $REAL_DATE -r \$e \"\$@\"; fi ;; *) exec $REAL_DATE \"\$@\" ;; esac"
+    stub "$BIN" date "case \"\$1\" in -d) v=\$2; shift 2; if $REAL_DATE -d @0 >/dev/null 2>&1; then exec $REAL_DATE -d \"\$v\" \"\$@\"; fi; case \"\$v\" in @*) e=\${v#@} ;; *) e=\$($REAL_DATE -j -f '%Y-%m-%d %H:%M:%S' \"\$v\" +%s 2>/dev/null || $REAL_DATE -j -f '%Y-%m-%d' \"\$v\" +%s 2>/dev/null || $REAL_DATE -j -f '%a %b %d %H:%M:%S %Y' \"\$v\" +%s 2>/dev/null) ;; esac; [ -n \"\$e\" ] || exit 1; exec $REAL_DATE -r \$e \"\$@\" ;; *) exec $REAL_DATE \"\$@\" ;; esac"
     stub "$BIN" stat "if [ \"\$1\" = -c ]; then shift 2; if $REAL_STAT -c %Y / >/dev/null 2>&1; then exec $REAL_STAT -c %Y \"\$@\"; else exec $REAL_STAT -f %m \"\$@\"; fi; else exec $REAL_STAT \"\$@\"; fi"
     # Anything that would send traffic fails loudly and leaves a marker.
     for c in ping nc curl wget dig nslookup host avahi-resolve; do
@@ -78,7 +78,7 @@ run_script() {
     # fake root, and stdin closed.
     local env=$1 script=$2 out=$3
     shift 3
-    PATH="$WORK/$env/bin:$PATH" MSP_TEST_ROOT="$WORK/$env/root" TMPDIR="$WORK/$env" NO_COLOR=1 \
+    PATH="$WORK/$env/bin:$PATH" MSP_TEST_ROOT="$WORK/$env/root" TMPDIR="$WORK/$env" NO_COLOR=1 HOME=/home/alice \
         "$BASH" "$REPO/$script" "$@" </dev/null >"$out" 2>&1
     printf '%s\n' "$?" >"$out.rc"
 }
@@ -435,6 +435,216 @@ check 'A3 mac redacted: rating still works' "$OUT" '\[PASS\] +Current Wi-Fi secu
 check 'A3 mac redacted: Location Services advice' "$OUT" 'Network name - macOS hid the network name'
 check 'A3 mac not root: saved-network security SKIPPED' "$OUT" '\[SKIPPED\] Saved network security - Skipped: requires root'
 check 'A3 mac redacted: name matching SKIPPED' "$OUT" '\[SKIPPED\] Home network in scan - Skipped: macOS hid the names'
+
+# =========================================================================================
+# A5 get-browser-security-check.sh (Linux branch)
+# =========================================================================================
+A5=endpoint-systems/diagnostics/system-info/get-browser-security-check.sh
+new_env a5-linux
+stub "$BIN" dpkg-query 'case "$*" in *google-chrome-stable*) echo "install ok installed 120.0.6099.71-1" ;; *) exit 1 ;; esac'
+stub "$BIN" ps 'true'
+mkdir -p "$FAKE/usr/lib/firefox/defaults/pref" "$FAKE/etc/opt/chrome/policies/managed" "$FAKE/etc/firefox/policies"
+printf '[App]\nVersion=140.3.0esr\n' >"$FAKE/usr/lib/firefox/application.ini"
+printf 'pref("app.update.channel", "esr");\n' >"$FAKE/usr/lib/firefox/defaults/pref/channel-prefs.js"
+printf '{"ExtensionInstallForcelist": ["aaaabbbbccccddddeeeeffffgggghhhh;https://evil.example/update.xml"], "HomepageLocation": "https://evil.example"}\n' >"$FAKE/etc/opt/chrome/policies/managed/adware.json"
+printf '{"policies": {"DisableAppUpdate": true}}\n' >"$FAKE/etc/firefox/policies/policies.json"
+CHROME="$FAKE/home/alice/.config/google-chrome"
+mkdir -p "$CHROME/Default/Extensions/cjpalhdlnbpafiamejdnhcphjbkeiagm/1.62.0_0" "$CHROME/Profile 1/Extensions/ppppppppppppppppppppppppppppppab/2.0_0/_locales/en"
+printf '{"name":"uBlock Origin","version":"1.62.0","update_url":"https://clients2.google.com/service/update2/crx","permissions":["<all_urls>"]}\n' >"$CHROME/Default/Extensions/cjpalhdlnbpafiamejdnhcphjbkeiagm/1.62.0_0/manifest.json"
+printf '{"name":"__MSG_appName__","default_locale":"en","version":"2.0","host_permissions":["*://*/*"]}\n' >"$CHROME/Profile 1/Extensions/ppppppppppppppppppppppppppppppab/2.0_0/manifest.json"
+printf '{"appName":{"message":"Search Helper Pro"}}\n' >"$CHROME/Profile 1/Extensions/ppppppppppppppppppppppppppppppab/2.0_0/_locales/en/messages.json"
+FF="$FAKE/home/alice/.mozilla/firefox/abcd1234.default-release"
+mkdir -p "$FF"
+printf '{"schemaVersion":36,"addons":[{"id":"formautofill@mozilla.org","type":"extension","location":"app-builtin","defaultLocale":{"name":"Form Autofill"}},{"id":"coupons@shady.example","version":"3.1","type":"extension","location":"app-profile","active":true,"signedState":0,"defaultLocale":{"name":"Coupon \\"Saver\\""},"userPermissions":{"origins":["<all_urls>"]}},{"id":"en-US@dictionaries","type":"dictionary","location":"app-profile"}]}\n' >"$FF/extensions.json"
+OUT="$WORK/a5-linux.txt"
+run_script a5-linux "$A5" "$OUT" --output "$WORK/a5-linux/export"
+check 'A5 linux: exit 0' "$OUT.rc" '^0$'
+check 'A5 linux: old Chrome = FAIL' "$OUT" '\[FAIL\] +Google Chrome version - 120\.0\.6099\.71-1 is about [0-9]+ releases behind'
+check 'A5 linux: Firefox ESR rated on its branch' "$OUT" 'Mozilla Firefox version - 140\.3\.0esr .*Extended Support Release 140'
+check 'A5 linux: Chrome store extension listed' "$OUT" 'Google Chrome extensions \(alice\) - 2 extension\(s\) across 2 browser profile\(s\): uBlock Origin; Search Helper Pro'
+check 'A5 linux: __MSG_ name resolved, sideloaded = WARN' "$OUT" '\[WARN\] +Extension not from the official store: Search Helper Pro'
+check 'A5 linux: all-sites store extension noted' "$OUT" 'extensions that can read every website - uBlock Origin'
+check 'A5 linux: Firefox built-ins and dictionaries skipped' "$OUT" 'Mozilla Firefox extensions \(alice\) - 1 extension\(s\)'
+check 'A5 linux: unsigned Firefox add-on = WARN (escaped name)' "$OUT" '\[WARN\] +Extension not from the official store: Coupon "Saver"'
+check 'A5 linux: forced Chrome extension = WARN High' "$OUT" '\[WARN\] +Google Chrome: force-installed extensions - .*aaaabbbbccccddddeeeeffffgggghhhh'
+check 'A5 linux: Chrome policies listed' "$OUT" 'Google Chrome: browser policies set - .*ExtensionInstallForcelist, HomepageLocation'
+check 'A5 linux: Firefox updates disabled = FAIL' "$OUT" '\[FAIL\] +Firefox: updates disabled by policy'
+check_not 'A5 linux: no Brave/Edge results without profiles' "$OUT" 'Brave extensions|Microsoft Edge extensions'
+check_not 'A5 linux: no ERROR findings' "$OUT" '\[ERROR\]'
+check_not 'A5 linux: credential stores never touched' "$OUT" 'Login Data|logins\.json|Cookies'
+
+# =========================================================================================
+# A6 get-update-compliance-linux.sh / -macos.sh
+# =========================================================================================
+A6L=endpoint-systems/diagnostics/system-info/get-update-compliance-linux.sh
+new_env a6-old
+mkdir -p "$FAKE/etc/apt/apt.conf.d" "$FAKE/var/log" "$FAKE/var/lib/apt/lists" "$FAKE/var/run" "$FAKE/boot" "$FAKE/proc"
+printf 'PRETTY_NAME="Ubuntu 20.04.6 LTS"\nID=ubuntu\nVERSION_ID="20.04"\n' >"$FAKE/etc/os-release"
+printf '2025-01-10 10:00:00 status installed openssl:amd64 1.1.1f\n2025-02-11 09:00:00 status installed bash:amd64 5.0\n' >"$FAKE/var/log/dpkg.log"
+printf 'APT::Periodic::Update-Package-Lists "0";\n' >"$FAKE/etc/apt/apt.conf.d/10periodic"
+: >"$FAKE/var/run/reboot-required"
+printf 'linux-image-6.8.0-50-generic\n' >"$FAKE/var/run/reboot-required.pkgs"
+: >"$FAKE/boot/vmlinuz-6.8.0-mock"
+: >"$FAKE/boot/vmlinuz-6.9.0-mock"
+printf '3456000.12 100.0\n' >"$FAKE/proc/uptime"
+stub "$BIN" apt-get 'printf "Inst openssl [1.1.1f-1ubuntu2] (1.1.1f-1ubuntu2.23 Ubuntu:20.04/focal-security [amd64])\nInst vim [2:8.1] (2:8.1.2 Ubuntu:20.04/focal-updates [amd64])\n"'
+stub "$BIN" apt-mark 'echo nvidia-driver-535'
+stub "$BIN" snap 'case "$*" in *"refresh --time"*) printf "timer: 00:00~24:00/4\nhold: 2026-12-01\n" ;; *) exit 0 ;; esac'
+OUT="$WORK/a6-old.txt"
+run_script a6-old "$A6L" "$OUT" --output "$WORK/a6-old/export"
+check 'A6 linux: exit 0' "$OUT.rc" '^0$'
+check 'A6 linux: Ubuntu 20.04 past standard support = FAIL Critical' "$OUT" '\[FAIL\] +OS version support - Ubuntu 20\.04 LTS reached end of security support on 2025-05-31.*Ubuntu Pro'
+check 'A6 linux: last install from dpkg.log, >75 days = FAIL' "$OUT" '\[FAIL\] +Last update installed - No package has been installed or updated since 2025-02-11'
+check 'A6 linux: lists never refreshed = WARN' "$OUT" '\[WARN\] +Last update scan - The package lists were last refreshed: never'
+check 'A6 linux: security update = WARN High' "$OUT" '\[WARN\] +Pending security updates - 1 security update\(s\) waiting: openssl'
+check 'A6 linux: other update = INFO' "$OUT" 'Other pending updates - 1 other update'
+check 'A6 linux: reboot-required + newer kernel' "$OUT" '\[WARN\] +Restart pending - .*linux-image-6\.8\.0-50-generic.*kernel 6\.9\.0-mock is installed but 6\.8\.0-mock is running'
+check 'A6 linux: 40 days up = Uptime WARN' "$OUT" '\[WARN\] +Uptime - The computer has not restarted for 40 days'
+check 'A6 linux: automatic list refresh off = WARN' "$OUT" '\[WARN\] +Automatic updates - Automatic refresh of the package lists is turned off'
+check 'A6 linux: held package' "$OUT" '\[WARN\] +Held packages - .*nvidia-driver-535'
+check 'A6 linux: snap hold' "$OUT" '\[WARN\] +Updates paused - Snap updates are held until 2026-12-01'
+check_not 'A6 linux: no ERROR findings' "$OUT" '\[ERROR\]'
+
+new_env a6-new
+mkdir -p "$FAKE/etc/apt/apt.conf.d" "$FAKE/var/lib/apt/lists" "$FAKE/proc" "$FAKE/var/lib/dpkg" "$FAKE/usr/bin"
+printf 'PRETTY_NAME="Debian GNU/Linux 13 (trixie)"\nID=debian\nVERSION_ID="13"\n' >"$FAKE/etc/os-release"
+: >"$FAKE/var/lib/apt/lists/deb.debian.org_debian_dists_trixie_InRelease"
+: >"$FAKE/var/lib/dpkg/status"
+: >"$FAKE/usr/bin/unattended-upgrade"
+printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' >"$FAKE/etc/apt/apt.conf.d/20auto-upgrades"
+printf '86400.00 1.0\n' >"$FAKE/proc/uptime"
+stub "$BIN" apt-get 'true'
+stub "$BIN" apt-mark 'true'
+OUT="$WORK/a6-new.txt"
+run_script a6-new "$A6L" "$OUT"
+check 'A6 linux: Debian 13 supported = PASS' "$OUT" '\[PASS\] +OS version support - Debian 13 \(trixie\) is supported until 2030-06-30'
+check 'A6 linux: nothing pending = PASS' "$OUT" '\[PASS\] +Pending updates - None'
+check 'A6 linux: automatic updates on = PASS' "$OUT" '\[PASS\] +Update policies'
+new_env a6-unknown
+mkdir -p "$FAKE/etc"
+printf 'PRETTY_NAME="Gentoo Linux"\nID=gentoo\n' >"$FAKE/etc/os-release"
+OUT="$WORK/a6-unknown.txt"
+run_script a6-unknown "$A6L" "$OUT"
+check 'A6 linux: distribution not in table = WARN Low' "$OUT" '\[WARN\] +OS version support - Gentoo Linux is not in this script'"'"'s support table'
+check 'A6 linux: no apt/dnf = SKIPPED' "$OUT" '\[SKIPPED\] Pending updates'
+
+A6M=endpoint-systems/diagnostics/system-info/get-update-compliance-macos.sh
+new_env a6-mac-old
+stub "$BIN" uname 'case "$1" in -s) echo Darwin ;; -n) echo mockmac ;; *) echo Darwin ;; esac'
+stub "$BIN" sw_vers 'case "$1" in -productVersion) echo 13.6.7 ;; -buildVersion) echo 22G720 ;; esac'
+OUT="$WORK/a6-mac-old.txt"
+run_script a6-mac-old "$A6M" "$OUT"
+check 'A6 mac: Ventura = FAIL Critical' "$OUT" '\[FAIL\] +OS version support - macOS Ventura \(13\.6\.7\) no longer receives security updates'
+stub "$BIN" sw_vers 'case "$1" in -productVersion) echo 15.7 ;; -buildVersion) echo 24G100 ;; esac'
+run_script a6-mac-old "$A6M" "$OUT.15"
+check 'A6 mac: Sequoia = PASS, oldest supported' "$OUT.15" '\[PASS\] +OS version support - macOS Sequoia \(15\.7\) still receives security updates, but it is the oldest'
+stub "$BIN" sw_vers 'case "$1" in -productVersion) echo 28.0 ;; -buildVersion) echo 27A1 ;; esac'
+run_script a6-mac-old "$A6M" "$OUT.28"
+check 'A6 mac: newer than table = WARN Low' "$OUT.28" '\[WARN\] +OS version support - macOS 28 is newer than this script'
+
+# =========================================================================================
+# A7 get-router-security-check.sh (Linux branch; every network command is a stub)
+# =========================================================================================
+A7=core-infrastructure/networking/diagnostics/get-router-security-check.sh
+new_env a7-router
+linux_net 'default via 198.51.100.1 dev eth0 metric 100' '2: eth0    inet 198.51.100.23/24 scope global eth0'
+stub "$BIN" resolvectl 'printf "Global:\nLink 2 (eth0): 198.51.100.1 203.0.113.53\n"'
+stub "$BIN" nc 'ip=; port=; for a in "$@"; do ip=$port; port=$a; done; case "$ip:$port" in 198.51.100.1:80|198.51.100.1:443|198.51.100.1:23) exit 0 ;; *) exit 1 ;; esac'
+# perl answers the SSDP discovery: the router (an Internet Gateway Device) and a TV.
+stub "$BIN" perl 'printf "198.51.100.1\tST=urn:schemas-upnp-org:device:InternetGatewayDevice:1;LOCATION=http://198.51.100.1:5000/rootDesc.xml;SERVER=Linux UPnP/1.0 MiniUPnPd\n198.51.100.77\tST=urn:dial-multiscreen-org:service:dial:1;LOCATION=http://198.51.100.77:8008/dd.xml;SERVER=Linux\n203.0.113.9\tST=upnp:rootdevice;LOCATION=http://203.0.113.9/x;SERVER=x\n"'
+cat >"$BIN/curl" <<'STUB'
+#!/bin/sh
+# curl stub: writes canned headers/bodies for the router; records every URL requested.
+hdr=/dev/null; out=/dev/null; url=; data=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -D) hdr=$2; shift 2 ;;
+        -o) out=$2; shift 2 ;;
+        --data-binary) data=$2; shift 2 ;;
+        -m | -A | -H | -r | --noproxy) shift 2 ;;
+        http*) url=$1; shift ;;
+        *) shift ;;
+    esac
+done
+echo "$url" >>"$(dirname "$0")/../curl-urls"
+case "$url" in
+    http://198.51.100.1:80/) printf 'HTTP/1.1 302 Found\r\nLocation: https://198.51.100.1/\r\nServer: lighttpd\r\n\r\n' >"$hdr"; : >"$out" ;;
+    https://198.51.100.1:443/) printf 'HTTP/1.1 200 OK\r\nServer: lighttpd\r\n\r\n' >"$hdr"; printf '<html><head><title>NETGEAR Router R7000</title></head></html>' >"$out" ;;
+    http://198.51.100.1:5000/rootDesc.xml) printf 'HTTP/1.1 200 OK\r\n\r\n' >"$hdr"; printf '<?xml version="1.0"?><root><device><friendlyName>R7000</friendlyName><manufacturer>NETGEAR</manufacturer><modelName>R7000</modelName><serviceList><service><serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType><serviceId>urn:upnp-org:serviceId:WANIPConn1</serviceId><controlURL>/ctl/IPConn</controlURL></service></serviceList></device></root>' >"$out" ;;
+    http://198.51.100.1:5000/ctl/IPConn)
+        case "$data" in
+            *GetExternalIPAddress*) printf 'HTTP/1.1 200 OK\r\n\r\n' >"$hdr"; printf '<s:Envelope><s:Body><u:GetExternalIPAddressResponse><NewExternalIPAddress>10.0.0.2</NewExternalIPAddress></u:GetExternalIPAddressResponse></s:Body></s:Envelope>' >"$out" ;;
+            *'<NewPortMappingIndex>0<'*) printf 'HTTP/1.1 200 OK\r\n\r\n' >"$hdr"; printf '<s:Envelope><s:Body><u:R><NewRemoteHost></NewRemoteHost><NewExternalPort>3389</NewExternalPort><NewProtocol>TCP</NewProtocol><NewInternalPort>3389</NewInternalPort><NewInternalClient>198.51.100.40</NewInternalClient><NewEnabled>1</NewEnabled><NewPortMappingDescription>RDP</NewPortMappingDescription><NewLeaseDuration>0</NewLeaseDuration></u:R></s:Body></s:Envelope>' >"$out" ;;
+            *) printf 'HTTP/1.1 500 Internal Server Error\r\n\r\n' >"$hdr"; : >"$out" ;;
+        esac ;;
+    *) exit 7 ;;
+esac
+exit 0
+STUB
+chmod +x "$BIN/curl"
+OUT="$WORK/a7-router.txt"
+run_script a7-router "$A7" "$OUT" --output "$WORK/a7-router/export"
+check 'A7: exit 0' "$OUT.rc" '^0$'
+check 'A7: scope printed' "$OUT" 'Router  : 198\.51\.100\.1   \(this computer 198\.51\.100\.23, subnet 198\.51\.100\.0/24\)'
+check 'A7: router DNS = PASS' "$OUT" '\[PASS\] +DNS 198\.51\.100\.1 - Local DNS: the router'
+check 'A7: unknown public DNS = WARN' "$OUT" '\[WARN\] +DNS 203\.0\.113\.53 - Unrecognised public DNS server'
+check 'A7: HTTP redirects to HTTPS = PASS' "$OUT" '\[PASS\] +Admin page encryption - Admin page uses HTTPS \(https://198\.51\.100\.1:443/\)'
+check 'A7: router identified' "$OUT" 'Router identification - Admin page reports: lighttpd \| NETGEAR Router R7000|Router identification - Admin page reports: NETGEAR Router R7000 \| lighttpd'
+check 'A7: Telnet on the router = FAIL' "$OUT" '\[FAIL\] +Router Telnet'
+check 'A7: UPnP on = WARN' "$OUT" '\[WARN\] +Router UPnP - UPnP is ON \(198\.51\.100\.1 answered'
+check 'A7: other UPnP device (off-subnet answer ignored)' "$OUT" 'UPnP devices - 1 other device\(s\) .*198\.51\.100\.77$'
+check 'A7: model from UPnP description' "$OUT" 'Router model \(UPnP\) - R7000 / NETGEAR'
+check 'A7: private external address = double NAT WARN' "$OUT" '\[WARN\] +Internet address - .*private \(10\.0\.0\.2\)'
+check 'A7: RDP port forward = WARN High' "$OUT" '\[WARN\] +UPnP port forward 3389/TCP - Internet port 3389/TCP is forwarded to 198\.51\.100\.40:3389'
+check 'A7: no terminal -> checklist not asked' "$OUT" 'Checklist questions are not being asked'
+check 'A7: checklist items recorded as not verified' "$OUT" 'Checklist: AdminPassword - Not verified'
+check_not 'A7: nothing outside the router contacted' "$WORK/a7-router/curl-urls" '203\.0\.113|198\.51\.100\.(77|40)'
+check_not 'A7: no ERROR findings' "$OUT" '\[ERROR\]'
+json=$(find "$WORK/a7-router/export" -name '*.json' 2>/dev/null | head -n 1)
+[ -n "$json" ] && check 'A7: checklist ID matches Windows' "$json" '"Id": "A7\.Checklist\.Checklist-AdminPassword"'
+
+new_env a7-vpn
+linux_net 'default via 10.8.0.1 dev tun0 metric 50' '5: tun0    inet 10.8.0.5/24 scope global tun0'
+OUT="$WORK/a7-vpn.txt"
+run_script a7-vpn "$A7" "$OUT" --skip-checklist-prompt
+check 'A7 VPN only: SKIPPED, router not contacted' "$OUT" '\[SKIPPED\] Gateway - Only a VPN or virtual adapter'
+check_not 'A7 VPN only: no admin page probing' "$OUT" 'Admin page encryption'
+
+# =========================================================================================
+# A8 get-home-device-inventory.sh (Linux branch)
+# =========================================================================================
+A8=endpoint-systems/audit/software-inventory/get-home-device-inventory.sh
+new_env a8-linux
+mkdir -p "$FAKE/sys/class/dmi/id" "$FAKE/proc" "$FAKE/home/alice" "$FAKE/home/bob" "$FAKE/home/carol"
+printf 'LENOVO\n' >"$FAKE/sys/class/dmi/id/sys_vendor"
+printf 'ThinkPad X1\n' >"$FAKE/sys/class/dmi/id/product_name"
+printf 'model name\t: Mock CPU 3000\n' >"$FAKE/proc/cpuinfo"
+printf 'MemTotal:       16777216 kB\n' >"$FAKE/proc/meminfo"
+printf '1000.0 1.0\n' >"$FAKE/proc/uptime"
+mkdir -p "$FAKE/etc"
+printf 'root:x:0:0:root:/root:/bin/bash\nalice:x:1000:1000:Alice,,,:/home/alice:/bin/bash\nbob:x:1001:1001:Bob:/home/bob:/bin/bash\nsvc:x:1002:1002::/home/svc:/usr/sbin/nologin\n' >"$FAKE/etc/passwd"
+printf 'sudo:x:27:alice\n' >"$FAKE/etc/group"
+stub "$BIN" dpkg-query 'printf "anydesk|7.0.0|package|\nbash|5.2|package|\ntransmission-gtk|4.0.5|package|\nx11vnc|0.9.16|package|\n"'
+stub "$BIN" snap 'printf "Name Version Rev Tracking Publisher Notes\nfirefox 131.0 1 latest/stable mozilla -\n"'
+stub "$BIN" ps 'printf "/usr/bin/gnome-shell\n/home/alice/Downloads/rustdesk\n/usr/bin/bash\n"'
+stub "$BIN" last 'case "$*" in *bob*) echo "bob      tty2         :0               Mon Jan  6 10:00:00 2025 - Mon Jan  6 11:00:00 2025  (01:00)" ;; *) echo "alice    tty2         :0               Fri Oct 16 09:00:00 2026   still logged in" ;; esac'
+OUT="$WORK/a8-linux.txt"
+run_script a8-linux "$A8" "$OUT" --approved-remote-tool AnyDesk --output "$WORK/a8-linux/export"
+check 'A8 linux: exit 0' "$OUT.rc" '^0$'
+check 'A8 linux: approved list from the command line' "$OUT" 'Approved remote tools - AnyDesk \(from --approved-remote-tool\)'
+check 'A8 linux: device details' "$OUT" 'Device - LENOVO ThinkPad X1 \(S/N \(needs sudo\)\)'
+check 'A8 linux: accounts (nologin skipped, admin marked)' "$OUT" 'Local accounts - 2 local account\(s\): alice \(admin\), bob'
+check 'A8 linux: unused account = WARN' "$OUT" '\[WARN\] +Account "bob" unused - Account "bob" last signed in 2025-01-06'
+check 'A8 linux: empty-password check needs sudo' "$OUT" '\[SKIPPED\] Account passwords'
+check 'A8 linux: orphaned home folder' "$OUT" 'Orphaned profiles - Home folder /home/carol has no matching account'
+check 'A8 linux: software count (packages + snaps)' "$OUT" 'Installed software - 5 package'
+check 'A8 linux: approved tool = INFO' "$OUT" '\[INFO\] +Remote-access tool: AnyDesk - installed: anydesk 7\.0\.0 \(approved remote tool\)'
+check 'A8 linux: portable RustDesk running = WARN High' "$OUT" '\[WARN\] +Remote-access tool: RustDesk - running now: rustdesk; NOT installed'
+check 'A8 linux: x11vnc = VNC WARN' "$OUT" '\[WARN\] +Remote-access tool: VNC \(UltraVNC/TightVNC/RealVNC/TigerVNC\) - installed: x11vnc'
+check 'A8 linux: default Transmission = INFO' "$OUT" '\[INFO\] +Peer-to-peer software: transmission-gtk - .*default Ubuntu desktop'
+check_not 'A8 linux: no ERROR findings' "$OUT" '\[ERROR\]'
+json=$(find "$WORK/a8-linux/export" -name '*.json' 2>/dev/null | head -n 1)
+[ -n "$json" ] && check 'A8 linux: tool ID matches Windows' "$json" '"Id": "A8\.Software\.Remote-access-tool-RustDesk"'
 
 # =========================================================================================
 for f in "$WORK"/*/network-calls; do

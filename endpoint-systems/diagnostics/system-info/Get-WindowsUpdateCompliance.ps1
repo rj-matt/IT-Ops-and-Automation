@@ -19,7 +19,7 @@
                         WSUS server, paused updates, and disabled update services.
 
 .PARAMETER OutputPath
-    Optional folder for JSON/CSV results (toolkit schema 1.0), with PendingUpdates and
+    Optional folder for JSON/CSV results (toolkit schema 2.0), with PendingUpdates and
     RecentHotfixes tables.
 
 .PARAMETER Online
@@ -39,12 +39,15 @@
                     un-pauses or changes anything.
     Prerequisites : Windows PowerShell 5.1 | Admin: No | Modules: none (Windows Update COM API) |
                     -Online needs internet access
-    Version       : 1.1.0
+    Version       : 1.2.0
     Limitations   : The lifecycle table is built in (dates as published by Microsoft, last
                     reviewed 2026-10); update the table when new versions ship. Windows 10
                     Extended Security Updates (ESU) enrolment cannot be detected reliably, so it
                     is reported as a question for the technician. Windows Server lifecycle is
                     not evaluated. Get-HotFix does not list every update type.
+                    macOS/Linux versions: get-update-compliance-macos.sh / -linux.sh. Check names
+                    "OS version" / "OS version support" (were "Windows version..." before 1.2.0)
+                    are shared with them; the HTML report maps the old names.
 #>
 [CmdletBinding()]
 param(
@@ -751,7 +754,7 @@ function Get-MSPPendingReboot {
 #endregion MSPHelper:Updates
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '1.1.0'
+$ScriptVersion = '1.2.0'
 Initialize-MSPRun -ScriptName 'Get-WindowsUpdateCompliance' -ScriptVersion $ScriptVersion -CheckId 'A6' -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'Windows Update compliance and end-of-support check (read-only)'
 
@@ -782,7 +785,7 @@ $now = Get-Date
 # =========================================================================================
 Write-MSPSection -Title 'Windows version and support'
 # =========================================================================================
-Invoke-MSPCheck -Name 'Windows version support' -Category 'Lifecycle' -ScriptBlock {
+Invoke-MSPCheck -Name 'OS version support' -Category 'Lifecycle' -ScriptBlock {
     $cv = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop
     $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
     $build = [int]$cv.CurrentBuildNumber
@@ -793,23 +796,23 @@ Invoke-MSPCheck -Name 'Windows version support' -Category 'Lifecycle' -ScriptBlo
     # ProductName still says "Windows 10" on Windows 11; the build number is authoritative.
     $caption = [string]$os.Caption
     $evidence = @{ Caption = $caption; EditionID = $editionId; DisplayVersion = $displayVersion; Build = ('{0}.{1}' -f $build, $ubr) }
-    Add-MSPFinding -Check 'Windows version' -Category 'Lifecycle' -Status INFO -Evidence $evidence `
+    Add-MSPFinding -Check 'OS version' -Category 'Lifecycle' -Status INFO -Evidence $evidence `
         -Detail ('{0} version {1} (build {2}.{3})' -f $caption, $displayVersion, $build, $ubr)
 
     if ([int]$os.ProductType -ne 1) {
-        Add-MSPFinding -Check 'Windows version support' -Category 'Lifecycle' -Status INFO -Evidence $evidence `
+        Add-MSPFinding -Check 'OS version support' -Category 'Lifecycle' -Status INFO -Evidence $evidence `
             -Detail 'This is Windows Server; this script does not evaluate Server lifecycle dates.'
         return
     }
     $entry = $lifecycle[$build]
     if (-not $entry) {
         if ($build -lt 17763) {
-            Add-MSPFinding -Check 'Windows version support' -Category 'Lifecycle' -Status FAIL -Severity Critical -Evidence $evidence `
+            Add-MSPFinding -Check 'OS version support' -Category 'Lifecycle' -Status FAIL -Severity Critical -Evidence $evidence `
                 -Detail ('Build {0} is a Windows version that has been out of support for years. It no longer receives security updates.' -f $build) `
                 -Recommendation 'Upgrade to a supported Windows 11 version, or replace the PC if it cannot run Windows 11.'
         }
         else {
-            Add-MSPFinding -Check 'Windows version support' -Category 'Lifecycle' -Status WARN -Severity Low -Evidence $evidence `
+            Add-MSPFinding -Check 'OS version support' -Category 'Lifecycle' -Status WARN -Severity Low -Evidence $evidence `
                 -Detail ('Build {0} is newer than (or not in) this script''s lifecycle table, so its end-of-support date is unknown here.' -f $build) `
                 -Recommendation 'Check the version on Microsoft''s Windows release health page; update this script''s lifecycle table.'
         }
@@ -845,15 +848,15 @@ Invoke-MSPCheck -Name 'Windows version support' -Category 'Lifecycle' -ScriptBlo
             }
             $advice = 'Upgrade to Windows 11 if the PC is eligible (PC Health Check), otherwise plan a replacement. Until then, make sure antivirus is current and the PC is not used for sensitive work.'
         }
-        Add-MSPFinding -Check 'Windows version support' -Category 'Lifecycle' -Status FAIL -Severity Critical -Evidence $evidence -Detail $detail -Recommendation $advice
+        Add-MSPFinding -Check 'OS version support' -Category 'Lifecycle' -Status FAIL -Severity Critical -Evidence $evidence -Detail $detail -Recommendation $advice
     }
     elseif ($daysLeft -le 90) {
-        Add-MSPFinding -Check 'Windows version support' -Category 'Lifecycle' -Status WARN -Severity High -Evidence $evidence `
+        Add-MSPFinding -Check 'OS version support' -Category 'Lifecycle' -Status WARN -Severity High -Evidence $evidence `
             -Detail ('{0} reaches end of support on {1:yyyy-MM-dd} ({2} days).' -f $name, $end, $daysLeft) `
             -Recommendation 'Install the latest Windows 11 feature update (Settings > Windows Update > "Download and install") before that date.'
     }
     else {
-        Add-MSPFinding -Check 'Windows version support' -Category 'Lifecycle' -Status PASS -Evidence $evidence `
+        Add-MSPFinding -Check 'OS version support' -Category 'Lifecycle' -Status PASS -Evidence $evidence `
             -Detail ('{0} is supported until {1:yyyy-MM-dd}.' -f $name, $end)
     }
 }

@@ -28,7 +28,7 @@
       run by an RMM tool) the items are recorded as "Not verified" with instructions.
 
 .PARAMETER OutputPath
-    Optional folder for JSON/CSV results (toolkit schema 1.0), with AdminPage, UpnpDevices and
+    Optional folder for JSON/CSV results (toolkit schema 2.0), with AdminPage, UpnpDevices and
     UpnpPortForwards tables.
 
 .PARAMETER SkipChecklistPrompt
@@ -57,13 +57,14 @@
                     (GetExternalIPAddress, GetGenericPortMappingEntry). No logins, no password
                     guessing, no settings changed.
     Prerequisites : Windows PowerShell 5.1 | Admin: No | Modules: built-in only (NetTCPIP)
-    Version       : 1.1.0
+    Version       : 1.1.1
     Limitations   : Cannot see settings behind the admin login (that is what the checklist is
                     for). Routers managed only by a phone app (eero, Google/Nest Wifi, Orbi) may
                     expose no admin page. Port forwards created by hand in the admin page are
                     not always listed over UPnP. A router can have UPnP on but not answer SSDP.
                     Cannot test what is reachable from the internet. "Unrecognised DNS" needs a
                     human to confirm. Replaces _archive\...\Check-GatewaySecurity.ps1.
+                    macOS/Linux version: get-router-security-check.sh (same checks and IDs).
 #>
 [CmdletBinding()]
 param(
@@ -1406,7 +1407,7 @@ function Get-MSPMacVendor {
 #endregion MSPHelper:Net
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '1.1.0'
+$ScriptVersion = '1.1.1'
 Initialize-MSPRun -ScriptName 'Get-RouterSecurityCheck' -ScriptVersion $ScriptVersion -CheckId 'A7' -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'Home router security check (read-only; no logins)'
 

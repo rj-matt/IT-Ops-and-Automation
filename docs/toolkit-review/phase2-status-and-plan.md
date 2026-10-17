@@ -13,10 +13,10 @@ the schema and shared-helper changes in sections 2 and 5, which every Batch A sc
 | A2 | Get-HomeNetworkMap / get-home-network-map.sh | core-infrastructure/networking/diagnostics/ | Read-Only | built (A-1; `-Passive` added; Windows run pending) | good (A-1; passive run on macOS 26) | built (A-1; stub-tested only) |
 | A3 | Get-WiFiSecurityAudit / get-wifi-security-audit-{macos,linux}.sh | core-infrastructure/networking/diagnostics/ | Read-Only | built (A-1; Windows run pending) | good (A-1; run on macOS 26) | built (A-1; stub-tested only) |
 | A4 | Get-OpenPortScan / get-open-port-scan.sh | security-operations/diagnostics/endpoint-posture/ | Read-Only | built (A-1; Windows run pending) | good (A-1; local part run on macOS 26) | built (A-1; stub-tested only) |
-| A5 | Get-BrowserSecurityCheck / get-browser-security-check.sh | endpoint-systems/diagnostics/system-info/ | Read-Only | needs fixes (minor) | missing | missing |
-| A6 | Get-WindowsUpdateCompliance / get-update-compliance-{macos,linux}.sh | endpoint-systems/diagnostics/system-info/ | Read-Only | needs fixes (minor) | missing | missing |
-| A7 | Get-RouterSecurityCheck / get-router-security-check.sh | core-infrastructure/networking/diagnostics/ | Read-Only | needs fixes (minor) | missing | missing |
-| A8 | Get-HomeDeviceInventory / get-home-device-inventory.sh | endpoint-systems/audit/software-inventory/ | Read-Only | needs fixes (minor) | missing | missing |
+| A5 | Get-BrowserSecurityCheck / get-browser-security-check.sh | endpoint-systems/diagnostics/system-info/ | Read-Only | built (A-2; help text/names; Windows run pending) | good (A-2; run on macOS 26) | built (A-2; stub-tested only) |
+| A6 | Get-WindowsUpdateCompliance / get-update-compliance-{macos,linux}.sh | endpoint-systems/diagnostics/system-info/ | Read-Only | built (A-2; help text/names; Windows run pending) | good (A-2; run on macOS 26) | built (A-2; stub-tested only) |
+| A7 | Get-RouterSecurityCheck / get-router-security-check.sh | core-infrastructure/networking/diagnostics/ | Read-Only | built (A-2; help text/names; Windows run pending) | built (A-2; active only: stub-tested, not run) | built (A-2; stub-tested only) |
+| A8 | Get-HomeDeviceInventory / get-home-device-inventory.sh | endpoint-systems/audit/software-inventory/ | Read-Only | built (A-2; help text/names; Windows run pending) | good (A-2; run on macOS 26) | built (A-2; stub-tested only) |
 | A9 | Export-SecurityAuditReport (PS 7 on all; also 5.1) | security-operations/diagnostics/ | Read-Only | needs fixes (Platform, device checklist) | needs fixes (does not run on pwsh/macOS) | needs fixes (does not run on pwsh/Linux) |
 | Bundle | Invoke-HomeAuditBundle / run-home-audit-bundle.sh | security-operations/diagnostics/ | Read-Only | needs fixes (minor) | missing | missing |
 | B1 | Get-ClientHealthSnapshot / get-client-health-snapshot.sh | endpoint-systems/diagnostics/system-info/ | Read-Only | needs fixes (rewrite to standard) | missing | missing |
@@ -35,7 +35,7 @@ the schema and shared-helper changes in sections 2 and 5, which every Batch A sc
 | E4 | Get-ServerHealthReport / get-server-health-report.sh | core-infrastructure/servers/{windows,linux}/diagnostics/ | Read-Only | missing | N/A | missing |
 
 Nothing was rated **good** at Phase 2: the schema change (section 2) reaches every Batch A script.
-Updated after step A-1 (A1-A4): "good" = built to standard and run on that platform; "built" =
+Updated after steps A-1 (A1-A4) and A-2 (A5-A8): "good" = built to standard and run on that platform; "built" =
 built to standard, logic tested with stubbed commands, not yet run on a real machine of that
 platform. The A-1 Windows changes were parse- and analyzer-checked on pwsh 7 only.
 

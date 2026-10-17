@@ -24,7 +24,7 @@
     administrators, Guest and the built-in Administrator are in Get-EndpointSecurityStatus.ps1.
 
 .PARAMETER OutputPath
-    Optional folder for JSON/CSV results (toolkit schema 1.0), with Device, Users, Profiles,
+    Optional folder for JSON/CSV results (toolkit schema 2.0), with Device, Users, Profiles,
     Software and FlaggedSoftware tables.
 
 .PARAMETER IncludeOtherUsers
@@ -53,12 +53,13 @@
     Scope         : Local computer only. No network scanning.
     Risk Level    : Read-Only -- reads WMI/CIM, registry and the process list; changes nothing.
     Prerequisites : Windows PowerShell 5.1 | Admin: No (Yes for -IncludeOtherUsers) | Modules: built-in only
-    Version       : 1.2.0
+    Version       : 1.2.1
     Limitations   : Microsoft Store apps and portable programs that are not running are not
                     listed. "Last logon" for local accounts comes from Windows and can be blank
                     for accounts that sign in with a Microsoft/Entra account; profile "last used"
                     is updated by Windows itself and is approximate. Name matching can miss
                     renamed tools. Replaces the local part of _archive\...\Get-DeviceInventory.ps1.
+                    macOS/Linux version: get-home-device-inventory.sh (same checks and IDs).
 #>
 [CmdletBinding()]
 param(
@@ -797,7 +798,7 @@ function Get-MSPInstalledSoftware {
 #endregion MSPHelper:Software
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '1.2.0'
+$ScriptVersion = '1.2.1'
 Initialize-MSPRun -ScriptName 'Get-HomeDeviceInventory' -ScriptVersion $ScriptVersion -CheckId 'A8' -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'Device, user and software inventory (read-only)'
 

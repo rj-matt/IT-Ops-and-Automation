@@ -26,7 +26,8 @@
     check is one remediation item whatever version or platform produced it: schema 1.0 IDs
     (Get-EndpointSecurityStatus:Encryption:...) become 2.0 IDs (A1.Encryption....), and checks
     renamed since (A1 2.2.0: "Windows drive encryption" -> "System drive encryption", "Windows
-    Update last scan" -> "Last update scan") are reported under the new name.
+    Update last scan" -> "Last update scan"; A6 1.2.0: "Windows version (support)" -> "OS version
+    (support)") are reported under the new name.
 
 .PARAMETER InputPath
     Folder containing the JSON result files.
@@ -720,6 +721,8 @@ $scriptCheckIds = @{
 $renamedChecks = @{
     'A1|Encryption|Windows drive encryption' = 'System drive encryption'   # A1 2.2.0, matches macOS/Linux
     'A1|Updates|Windows Update last scan'    = 'Last update scan'          # A1 2.2.0, matches macOS/Linux
+    'A6|Lifecycle|Windows version'           = 'OS version'                # A6 1.2.0, matches macOS/Linux
+    'A6|Lifecycle|Windows version support'   = 'OS version support'        # A6 1.2.0, matches macOS/Linux
 }
 
 function Get-NormalizedFinding {

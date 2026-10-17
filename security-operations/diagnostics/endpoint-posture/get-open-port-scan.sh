@@ -50,7 +50,7 @@ MSP_SCRIPT_FILE=$0
 
 #region MSPToolkit (generated) Sections=Core,Net
 # DO NOT EDIT — regenerate with Sync-MSPEmbeddedHelper.ps1
-# Source: endpoint-systems/utilities/msp-toolkit-common.sh | Sections: Core,Net | SHA256: 972c8b58b61e2a006e70b1c06064f4de42ba623a3ecc9b087393cef8301dfee7
+# Source: endpoint-systems/utilities/msp-toolkit-common.sh | Sections: Core,Net | SHA256: 5e0794b5a477128e5ac2c0279ed4ee3cb4ba5189b4d07b1b1c2f0aa4d4a630b2
 #region MSPHelper:Core
 # --- Run state ------------------------------------------------------------------------------
 # One toolkit script = one "run": one log file, one findings list, one optional export.
@@ -221,6 +221,52 @@ msp_id_part() {
     part=$(printf '%s' "${1-}" | LC_ALL=C sed 's/[^A-Za-z0-9][^A-Za-z0-9]*/-/g; s/^-//; s/-$//')
     [ -n "$part" ] || part='General'
     printf '%s' "$part"
+}
+
+msp_json_flatten() {
+    # msp_json_flatten FILE - reads JSON (FILE, or - for stdin) and prints one line per value:
+    # "<path><TAB><value>", for example  .addons[0].defaultLocale.name<TAB>uBlock Origin
+    # Strings are unescaped (\" \\ \/; newlines and tabs become spaces; \uXXXX is kept as text).
+    # Lets scripts read browser manifests, policies and plutil -convert json output without jq
+    # or python. Splitting records on '"' keeps it linear on large files (Firefox's
+    # extensions.json). Malformed JSON gives partial output, never an error.
+    awk '
+        function unescape(x) {
+            gsub(/\\\\/, "\001", x); gsub(/\\"/, "\"", x); gsub(/\\\//, "/", x)
+            gsub(/\\[nrt]/, " ", x); gsub(/\\[bf]/, "", x); gsub(/\001/, "\\", x)
+            return x
+        }
+        function path(   d, p) {
+            p = ""
+            for (d = 1; d <= depth; d++) p = p (type[d] == "o" ? "." key[d] : "[" idx[d] "]")
+            return p
+        }
+        function emit(v) { print path() "\t" v }
+        function flush_literal() { if (lit != "") { emit(lit); lit = "" } }
+        function outside(t,   i, c) {
+            for (i = 1; i <= length(t); i++) {
+                c = substr(t, i, 1)
+                if (c == "{") { depth++; type[depth] = "o"; expectkey[depth] = 1; key[depth] = "" }
+                else if (c == "[") { depth++; type[depth] = "a"; idx[depth] = 0 }
+                else if (c == "}" || c == "]") { flush_literal(); depth-- }
+                else if (c == ",") { flush_literal(); if (type[depth] == "o") expectkey[depth] = 1; else idx[depth]++ }
+                else if (c == ":" || c == " " || c == "\t" || c == "\n" || c == "\r") { flush_literal() }
+                else lit = lit c
+            }
+        }
+        BEGIN { RS = "\""; depth = 0; instr = 0; buf = ""; lit = "" }
+        {
+            if (!instr) { outside($0); instr = 1; next }
+            # Inside a string. A record ending in an odd number of backslashes ended at an
+            # escaped quote, so the string continues in the next record.
+            n = 0; i = length($0); while (i > 0 && substr($0, i, 1) == "\\") { n++; i-- }
+            if (n % 2 == 1) { buf = buf $0 "\""; next }
+            v = unescape(buf $0); buf = ""; instr = 0
+            if (depth > 0 && type[depth] == "o" && expectkey[depth]) { key[depth] = v; expectkey[depth] = 0 }
+            else emit(v)
+        }
+        END { flush_literal() }
+    ' "${1:--}"
 }
 
 # --- Console output -------------------------------------------------------------------------

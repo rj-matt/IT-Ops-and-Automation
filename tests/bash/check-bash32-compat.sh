@@ -8,6 +8,7 @@
 #
 # Files named *-linux.sh only run on Linux, so GNU-only commands (stat -c, date -d ...) are
 # allowed there; the bash 3.2 checks still apply (some Linux systems are tested with 3.2 too).
+# In shared scripts, a line that only runs on Linux can be marked with a "# linux-only" comment.
 set -u
 
 found=0
@@ -15,6 +16,17 @@ check() {
     # check FILE REGEX MESSAGE
     local hits
     hits=$(grep -nE "$2" "$1" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*#')
+    if [ -n "$hits" ]; then
+        printf '%s: %s\n' "$1" "$3"
+        printf '%s\n' "$hits" | sed 's/^/    line /'
+        found=1
+    fi
+}
+
+check_gnu() {
+    # Like check, but lines marked "# linux-only" are allowed to use GNU-only commands.
+    local hits
+    hits=$(grep -nE "$2" "$1" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*#' | grep -v '# linux-only')
     if [ -n "$hits" ]; then
         printf '%s: %s\n' "$1" "$3"
         printf '%s\n' "$hits" | sed 's/^/    line /'
@@ -43,7 +55,7 @@ for f in "$@"; do
     # Not a bash 4 feature, but an easy porting slip: PowerShell writes it''s, bash prints its.
     check "$f" "[A-Za-z]''[a-z]" "PowerShell-style '' quote escape (bash drops it; use '\\'' or double quotes)"
     case "$f" in *-linux.sh) continue ;; esac
-    check "$f" '(^|[;&|[:space:]])(timeout|readlink[[:space:]]+-f|realpath|sed[[:space:]]+-i|stat[[:space:]]+-c|date[[:space:]]+-d|grep[[:space:]]+-P)([[:space:]]|$)' 'GNU-only command/flag (missing or different on macOS)'
+    check_gnu "$f" '(^|[;&|[:space:]])(timeout|readlink[[:space:]]+-f|realpath|sed[[:space:]]+-i|stat[[:space:]]+-c|date[[:space:]]+-d|grep[[:space:]]+-P)([[:space:]]|$)' 'GNU-only command/flag (missing or different on macOS)'
 done
 
 if [ "$found" -eq 0 ]; then printf 'No bash 4+ or GNU-only constructs found in %s file(s).\n' "$#"; fi

@@ -85,6 +85,10 @@ $r = Get-Case 'A2.Unidentified.AA-BB-CC-00-11-22' 'Discovery' 'Unidentified devi
 Assert-Equal 'ID set on purpose is kept' 'A2.Unidentified.AA-BB-CC-00-11-22' $r.Id
 $r = Get-Case 'Get-HomeNetworkMap:Discovery:Devices-found' 'Discovery' 'Devices found' 'Get-HomeNetworkMap'
 Assert-Equal 'schema 1.0 A2' 'A2.Discovery.Devices-found' $r.Id
+$r = Get-Case 'A6.Lifecycle.Windows-version-support' 'Lifecycle' 'Windows version support' 'Get-WindowsUpdateCompliance' 'A6'
+Assert-Equal 'A6 1.1.0 name: ID' 'A6.Lifecycle.OS-version-support' $r.Id
+$r = Get-Case 'Get-WindowsUpdateCompliance:Lifecycle:Windows-version' 'Lifecycle' 'Windows version' 'Get-WindowsUpdateCompliance'
+Assert-Equal 'A6 schema 1.0 name: ID' 'A6.Lifecycle.OS-version' $r.Id
 $r = Get-Case 'Some-Other-Tool:X:Y' 'X' 'Y' 'Some-Other-Tool'
 Assert-Equal 'unknown script without CheckId: kept' 'Some-Other-Tool:X:Y' $r.Id
 $r = Get-Case 'A1.Encryption.Windows-drive-encryption' 'Encryption' 'Windows drive encryption' 'Get-EndpointSecurityStatus' 'A1'

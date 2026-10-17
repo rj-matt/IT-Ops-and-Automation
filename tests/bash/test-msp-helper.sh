@@ -73,6 +73,20 @@ check_eq 'json_obj strings' '{"a":"1","b":"two \"2\""}' "$(msp_json_obj a 1 b 't
 check_eq 'json_obj raw values' '{"Port":443,"Open":true,"Name":"SSH"}' "$(msp_json_obj Port# 443 Open# true Name SSH)"
 check_eq 'json_obj empty' '{}' "$(msp_json_obj)"
 
+# --- msp_json_flatten -----------------------------------------------------------------------
+TAB=$(printf '\t')
+flat=$(printf '%s' '{"name":"uBlock \"Origin\"","version":"1.2","permissions":["tabs","<all_urls>"],"nested":{"a":{"b":[1,{"c":true}]}},"esc":"a\\b\/c\nd","empty":"","n":null}' | msp_json_flatten -)
+check_eq 'json flatten: string' ".name${TAB}uBlock \"Origin\"" "$(printf '%s\n' "$flat" | sed -n 1p)"
+check_eq 'json flatten: array items' ".permissions[1]${TAB}<all_urls>" "$(printf '%s\n' "$flat" | grep '^\.permissions\[1\]')"
+check_eq 'json flatten: deep path' ".nested.a.b[1].c${TAB}true" "$(printf '%s\n' "$flat" | grep '^\.nested\.a\.b\[1\]')"
+check_eq 'json flatten: number in array' ".nested.a.b[0]${TAB}1" "$(printf '%s\n' "$flat" | grep '^\.nested\.a\.b\[0\]')"
+check_eq 'json flatten: escapes' ".esc${TAB}a\\b/c d" "$(printf '%s\n' "$flat" | grep '^\.esc')"
+check_eq 'json flatten: empty string kept' ".empty${TAB}" "$(printf '%s\n' "$flat" | grep '^\.empty')"
+check_eq 'json flatten: null' ".n${TAB}null" "$(printf '%s\n' "$flat" | grep '^\.n	')"
+check_eq 'json flatten: top-level array' "[1].id${TAB}x" "$(printf '[{"id":"w"},{"id":"x"}]' | msp_json_flatten - | sed -n 2p)"
+check_eq 'json flatten: pretty-printed input' ".a.b${TAB}2" "$(printf '{\n  "a": {\n    "b": 2\n  }\n}\n' | msp_json_flatten -)"
+check_eq 'json flatten: malformed input does not fail' '0' "$(printf '{"a": [1, 2' | msp_json_flatten - >/dev/null; echo $?)"
+
 # --- msp_csv_field --------------------------------------------------------------------------
 check_eq 'csv: plain' '"abc"' "$(msp_csv_field 'abc')"
 check_eq 'csv: quotes doubled' '"say ""hi"""' "$(msp_csv_field 'say "hi"')"

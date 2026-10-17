@@ -26,7 +26,7 @@
     cookies.sqlite, places.sqlite, or any other credential/history store.
 
 .PARAMETER OutputPath
-    Optional folder for JSON/CSV results (toolkit schema 1.0), with Browsers and Extensions tables.
+    Optional folder for JSON/CSV results (toolkit schema 2.0), with Browsers and Extensions tables.
 
 .PARAMETER AllUsers
     Also check the browser profiles of every other user on this PC. Requires administrator.
@@ -50,13 +50,14 @@
     Scope         : This PC. Current user's browser profiles (all users with -AllUsers as admin).
     Risk Level    : Read-Only -- reads program versions, extension manifests and policy keys only.
     Prerequisites : Windows PowerShell 5.1 | Admin: No (Yes for -AllUsers) | Modules: none
-    Version       : 1.1.0
+    Version       : 1.1.1
     Limitations   : "Out of date" is an estimate from the release schedule unless exact versions
                     are supplied. Extension names come from the extension's own manifest; a
                     malicious extension can pick a harmless-sounding name. Store-delivered
                     extensions can still be malicious; not from the store is a stronger signal.
                     Opera/Vivaldi and Microsoft Store browser installs are not checked.
-                    Replaces _archive\...\Check-BrowserSecurity.ps1.
+                    Replaces _archive\...\Check-BrowserSecurity.ps1. macOS/Linux version:
+                    get-browser-security-check.sh (same checks and finding IDs).
 #>
 [CmdletBinding()]
 param(
@@ -681,7 +682,7 @@ function Complete-MSPRun {
 #endregion MSPHelper:Core
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '1.1.0'
+$ScriptVersion = '1.1.1'
 Initialize-MSPRun -ScriptName 'Get-BrowserSecurityCheck' -ScriptVersion $ScriptVersion -CheckId 'A5' -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'Browser versions, extensions and policies (read-only; no passwords, cookies or history)'
 
