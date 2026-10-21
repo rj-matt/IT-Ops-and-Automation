@@ -527,6 +527,11 @@ OUT="$WORK/a6-unknown.txt"
 run_script a6-unknown "$A6L" "$OUT"
 check 'A6 linux: distribution not in table = WARN Low' "$OUT" '\[WARN\] +OS version support - Gentoo Linux is not in this script'"'"'s support table'
 check 'A6 linux: no apt/dnf = SKIPPED' "$OUT" '\[SKIPPED\] Pending updates'
+printf 'PRETTY_NAME="Fedora Linux 44 (Workstation Edition)"\nID=fedora\nVERSION_ID=44\n' >"$FAKE/etc/os-release"
+run_script a6-unknown "$A6L" "$OUT.f44"
+check 'A6 linux: date not confirmed by an official source is said so' "$OUT.f44" '\[PASS\] +OS version support - Fedora 44 is supported until 2027-05-19\. This date is not confirmed by an official source'
+check_not 'A6 linux: verified date has no "not confirmed" note' "$WORK/a6-new.txt" 'not confirmed by an official source'
+check 'A6 linux: source and verified-on date in the JSON evidence' "$(find "$WORK/a6-old/export" -name '*.json' | head -n 1)" 'DateVerified.{1,6}2026-10-21'
 
 A6M=endpoint-systems/diagnostics/system-info/get-update-compliance-macos.sh
 new_env a6-mac-old
@@ -541,6 +546,12 @@ check 'A6 mac: Sequoia = PASS, oldest supported' "$OUT.15" '\[PASS\] +OS version
 stub "$BIN" sw_vers 'case "$1" in -productVersion) echo 28.0 ;; -buildVersion) echo 27A1 ;; esac'
 run_script a6-mac-old "$A6M" "$OUT.28"
 check 'A6 mac: newer than table = WARN Low' "$OUT.28" '\[WARN\] +OS version support - macOS 28 is newer than this script'
+stub "$BIN" sw_vers 'case "$1" in -productVersion) echo 14.8.9 ;; -buildVersion) echo 23J1 ;; esac'
+run_script a6-mac-old "$A6M" "$OUT.14"
+check 'A6 mac: Sonoma ended with its last security update date' "$OUT.14" '\[FAIL\] +OS version support - macOS Sonoma \(14\.8\.9\) no longer receives security updates \(Apple.s last security update for it: 2026-08-06\)'
+stub "$BIN" sw_vers 'case "$1" in -productVersion) echo 27.0.1 ;; -buildVersion) echo 27A1 ;; esac'
+run_script a6-mac-old "$A6M" "$OUT.27"
+check 'A6 mac: macOS 27 = current' "$OUT.27" '\[PASS\] +OS version support - macOS Golden Gate \(27\.0\.1\) is the current macOS version'
 
 # =========================================================================================
 # A7 get-router-security-check.sh (Linux branch; every network command is a stub)

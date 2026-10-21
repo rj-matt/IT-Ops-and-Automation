@@ -34,9 +34,10 @@
 # Scope         : This Mac only. Without --online, no network traffic.
 # Risk Level    : Read-Only -- reads update records and settings; never downloads, installs or changes anything.
 # Prerequisites : macOS 12+ | bash 3.2+ | root: No | --online needs internet access
-# Version       : 1.0.0
-# Limitations   : Apple does not publish end-of-support dates; the table below follows Apple's
-#                 practice (current major version + two before it) and was reviewed 2026-10.
+# Version       : 1.1.0
+# Limitations   : Apple does not publish end-of-support dates; the table below is built from
+#                 Apple's security releases page (support.apple.com/en-us/100100), with the
+#                 source and the day it was checked on each row; reviewed 2026-10-21.
 #                 Review it every autumn when a new macOS ships. Whether this Mac's hardware
 #                 can run the newest macOS is not checked. Same check names and IDs as the
 #                 Windows version where the check is the same.
@@ -895,7 +896,7 @@ msp_complete() {
 #endregion MSPHelper:Core
 #endregion MSPToolkit (generated)
 
-SCRIPT_VERSION='1.0.0'
+SCRIPT_VERSION='1.1.0'
 OUTPUT=''
 ONLINE=0
 while [ $# -gt 0 ]; do
@@ -931,18 +932,26 @@ SU_PLIST="$ROOT/Library/Preferences/com.apple.SoftwareUpdate"
 MANAGED="$ROOT/Library/Managed Preferences/com.apple.SoftwareUpdate.plist"
 
 # --- macOS support table ----------------------------------------------------------------------
-# major|name|status|date. status: current, supported, oldest (still supported, next to end),
-# ended (no more security updates since about <date>). Reviewed 2026-10: macOS 27 is current,
-# so 26 and 15 still get security updates and 14 ended when 27 shipped.
-# Each autumn: add the new major as current, move the others down, update "Reviewed".
-SUPPORT_TABLE='27|macOS 27|current|
-26|macOS Tahoe|supported|
-15|macOS Sequoia|oldest|2027-09
-14|macOS Sonoma|ended|2026-09
-13|macOS Ventura|ended|2025-09
-12|macOS Monterey|ended|2024-09
-11|macOS Big Sur|ended|2023-09
-10|macOS 10.x|ended|2022-09'
+# major|name|status|date|source|verified. status: current, supported, oldest (still supported,
+# next to end), ended. Apple publishes no end-of-support dates, so the table is built from
+# Apple's security releases page ("source"; "verified" = the day it was checked there):
+#   current/supported/oldest  the version got a security release with the latest macOS.
+#   ended                     date = Apple's last security release for that version.
+#   oldest                    date = when Apple usually stops (around the release of the next
+#                             major macOS); an estimate, so "verified" says unverified.
+# Reviewed 2026-10-21: macOS 27 (Golden Gate) is current; 27.0.1, 26.7.1 and 15.8.1 shipped on
+# 2026-09-28. Sonoma's last was 14.8.9 (2026-08-06); it was not in the 2026-09 releases.
+# Big Sur and Catalina got one-off updates with no published CVE entries on 2026-02-02
+# (11.7.11, Security Update 2026-001); their dates below are the last regular security releases.
+# Each autumn: add the new major as current, move the others down, update the dates.
+SUPPORT_TABLE='27|macOS Golden Gate|current||https://support.apple.com/en-us/100100|2026-10-21
+26|macOS Tahoe|supported||https://support.apple.com/en-us/100100|2026-10-21
+15|macOS Sequoia|oldest|2027-09|https://support.apple.com/en-us/100100|unverified
+14|macOS Sonoma|ended|2026-08-06|https://support.apple.com/en-us/100100|2026-10-21
+13|macOS Ventura|ended|2025-08-20|https://support.apple.com/en-us/100100|2026-10-21
+12|macOS Monterey|ended|2024-07-29|https://support.apple.com/en-us/100100|2026-10-21
+11|macOS Big Sur|ended|2023-09-11|https://support.apple.com/en-us/121012|2026-10-21
+10|macOS 10.x|ended|2022-07-20|https://support.apple.com/en-us/121012|2026-10-21'
 NEWEST_MAJOR=27
 
 epoch_of() {
@@ -969,14 +978,15 @@ check_version() {
     row=$(printf '%s\n' "$SUPPORT_TABLE" | awk -F'|' -v m="$major" '$1 == m')
     if [ -z "$row" ] && [ "$major" -gt "$NEWEST_MAJOR" ]; then
         msp_finding --status WARN --severity Low --category 'Lifecycle' --check 'OS version support' --evidence "$ev" \
-            --detail "macOS $major is newer than this script's support table (reviewed 2026-10)." \
+            --detail "macOS $major is newer than this script's support table (reviewed 2026-10-21)." \
             --rec 'It is almost certainly supported. Update the support table in this script.'
         return 0
     fi
     [ -n "$row" ] || row=$(printf '%s\n' "$SUPPORT_TABLE" | tail -n 1)
-    IFS='|' read -r _ name status ended <<EOF
+    IFS='|' read -r _ name status ended source verified <<EOF
 $row
 EOF
+    ev=$(msp_json_obj Version "$version" Build "$build" Major "$major" Status "$status" Date "$ended" Source "$source" DateVerified "$verified")
     case "$status" in
         current)
             msp_finding --status PASS --category 'Lifecycle' --check 'OS version support' --evidence "$ev" --detail "$name ($version) is the current macOS version." ;;
@@ -989,7 +999,7 @@ EOF
             ;;
         *)
             msp_finding --status FAIL --severity Critical --category 'Lifecycle' --check 'OS version support' --evidence "$ev" \
-                --detail "$name ($version) no longer receives security updates (Apple stopped around $ended)." \
+                --detail "$name ($version) no longer receives security updates (Apple's last security update for it: $ended)." \
                 --rec 'Upgrade to a supported macOS (System Settings > General > Software Update). If this Mac cannot run a supported version, plan to replace it, and until then keep browsers updated and avoid sensitive work on it.'
             ;;
     esac

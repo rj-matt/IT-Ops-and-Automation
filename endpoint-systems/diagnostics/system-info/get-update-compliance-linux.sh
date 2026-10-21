@@ -34,9 +34,11 @@
 # Scope         : This computer only. Without --online, no network traffic.
 # Risk Level    : Read-Only -- reads package records and settings; never installs, removes or changes anything.
 # Prerequisites : bash 3.2+ | apt (Debian/Ubuntu family) or dnf (Fedora/RHEL family) | root: No
-# Version       : 1.0.0
-# Limitations   : The support table is built in (reviewed 2026-10; dates as published by each
-#                 project, LTS/ESM paid extensions noted but not detected). Review it every
+# Version       : 1.1.0
+# Limitations   : The support table is built in (reviewed 2026-10-21; dates only from each
+#                 project's own pages, each row with its source URL and the day it was
+#                 checked; dates no official page confirmed are reported as "not confirmed").
+#                 LTS/ESM paid extensions are noted but not detected. Review it every
 #                 April and October. Other distributions are reported as not in the table.
 #                 Flatpak updates are not checked. MSP_TEST_ROOT (development tests only)
 #                 prefixes the files read.
@@ -895,7 +897,7 @@ msp_complete() {
 #endregion MSPHelper:Core
 #endregion MSPToolkit (generated)
 
-SCRIPT_VERSION='1.0.0'
+SCRIPT_VERSION='1.1.0'
 OUTPUT=''
 ONLINE=0
 while [ $# -gt 0 ]; do
@@ -931,41 +933,47 @@ PKG=''
 if msp_have apt-get; then PKG='apt'; elif msp_have dnf; then PKG='dnf'; fi
 
 # --- Support table ----------------------------------------------------------------------------
-# os-release ID|VERSION_ID (or its major)|name|end of security updates|note. Reviewed 2026-10.
-# Dates as published by each project (Ubuntu: end of standard support; Debian: end of LTS;
-# Fedora: about 4 weeks after release N+2; RHEL family: end of maintenance). Update every
-# April and October, and whenever a run reports a version as not in the table.
-SUPPORT_TABLE='ubuntu|20.04|Ubuntu 20.04 LTS|2025-05-31|Paid Ubuntu Pro (ESM) can extend security updates to 2030.
-ubuntu|22.04|Ubuntu 22.04 LTS|2027-06-01|Ubuntu Pro (free for personal use) extends this to 2032.
-ubuntu|24.04|Ubuntu 24.04 LTS|2029-05-31|Ubuntu Pro (free for personal use) extends this to 2034.
-ubuntu|26.04|Ubuntu 26.04 LTS|2031-05-31|
-ubuntu|25.04|Ubuntu 25.04|2026-01-15|Interim release (9 months of support).
-ubuntu|25.10|Ubuntu 25.10|2026-07-09|Interim release (9 months of support).
-ubuntu|26.10|Ubuntu 26.10|2027-07-15|Interim release (9 months of support).
-pop|22.04|Pop!_OS 22.04|2027-06-01|Follows Ubuntu 22.04.
-pop|24.04|Pop!_OS 24.04|2029-05-31|Follows Ubuntu 24.04.
-debian|11|Debian 11 (bullseye)|2026-08-31|Including the Debian LTS period.
-debian|12|Debian 12 (bookworm)|2028-06-30|Including the Debian LTS period.
-debian|13|Debian 13 (trixie)|2030-06-30|Including the Debian LTS period.
-fedora|42|Fedora 42|2026-05-13|
-fedora|43|Fedora 43|2026-12-09|
-fedora|44|Fedora 44|2027-05-19|
-fedora|45|Fedora 45|2027-12-08|
-rhel|8|Red Hat Enterprise Linux 8|2029-05-31|
-rhel|9|Red Hat Enterprise Linux 9|2032-05-31|
-rhel|10|Red Hat Enterprise Linux 10|2035-05-31|
-rocky|8|Rocky Linux 8|2029-05-31|
-rocky|9|Rocky Linux 9|2032-05-31|
-rocky|10|Rocky Linux 10|2035-05-31|
-almalinux|8|AlmaLinux 8|2029-05-31|
-almalinux|9|AlmaLinux 9|2032-05-31|
-almalinux|10|AlmaLinux 10|2035-05-31|
-centos|7|CentOS 7|2024-06-30|
-centos|9|CentOS Stream 9|2027-05-31|
-centos|10|CentOS Stream 10|2030-01-01|
-linuxmint|20|Linux Mint 20|2025-04-30|
-linuxmint|21|Linux Mint 21|2027-04-30|
-linuxmint|22|Linux Mint 22|2029-04-30|'
+# os-release ID|VERSION_ID (or its major)|name|end of security updates|note|source|verified.
+# Dates are taken only from each project's own pages (Ubuntu: end of standard support; Debian:
+# end of LTS; Fedora: EOL; RHEL family: end of maintenance / security support); "source" is the
+# page and "verified" the day the date was checked there. Where a project publishes only a
+# month, the last day of that month is used. "unverified" means no official page confirmed the
+# date: it is the project's usual pattern, and findings say the date is not confirmed.
+# Not confirmed at the 2026-10-21 review: Pop!_OS (System76 publishes no end dates); Fedora
+# 43-45 (EOL is four weeks after release N+2 ships; the Fedora schedule pages could not be
+# read); RHEL 9 and 10 (the Red Hat life-cycle page did not show its dates table).
+# Update every April and October, and whenever a run reports a version as not in the table.
+SUPPORT_TABLE='ubuntu|20.04|Ubuntu 20.04 LTS|2025-05-31|Paid Ubuntu Pro (ESM) can extend security updates to 2030.|https://ubuntu.com/about/release-cycle|2026-10-21
+ubuntu|22.04|Ubuntu 22.04 LTS|2027-05-31|Ubuntu Pro (free for personal use) extends this to 2032.|https://ubuntu.com/about/release-cycle|2026-10-21
+ubuntu|24.04|Ubuntu 24.04 LTS|2029-05-31|Ubuntu Pro (free for personal use) extends this to 2034.|https://ubuntu.com/about/release-cycle|2026-10-21
+ubuntu|26.04|Ubuntu 26.04 LTS|2031-05-31|Ubuntu Pro (free for personal use) extends this to 2036.|https://ubuntu.com/about/release-cycle|2026-10-21
+ubuntu|25.04|Ubuntu 25.04|2026-01-15|Interim release (9 months of support).|https://ubuntu.com/project/docs/release-team/list-of-releases/|2026-10-21
+ubuntu|25.10|Ubuntu 25.10|2026-07-09|Interim release (9 months of support).|https://lists.ubuntu.com/archives/ubuntu-announce/2026-July/000325.html|2026-10-21
+ubuntu|26.10|Ubuntu 26.10|2027-07-31|Interim release (9 months of support).|https://ubuntu.com/project/docs/release-team/list-of-releases/|2026-10-21
+pop|22.04|Pop!_OS 22.04|2027-05-31|Follows Ubuntu 22.04.|none (System76 publishes no end date)|unverified
+pop|24.04|Pop!_OS 24.04|2029-05-31|Follows Ubuntu 24.04.|none (System76 publishes no end date)|unverified
+debian|11|Debian 11 (bullseye)|2026-08-31|Including the Debian LTS period.|https://wiki.debian.org/LTS|2026-10-21
+debian|12|Debian 12 (bookworm)|2028-06-30|Including the Debian LTS period.|https://wiki.debian.org/LTS|2026-10-21
+debian|13|Debian 13 (trixie)|2030-06-30|Including the Debian LTS period.|https://wiki.debian.org/LTS|2026-10-21
+fedora|42|Fedora 42|2026-05-27||https://docs.fedoraproject.org/en-US/releases/eol/|2026-10-21
+fedora|43|Fedora 43|2026-12-09||https://docs.fedoraproject.org/en-US/releases/eol/|unverified
+fedora|44|Fedora 44|2027-05-19||https://docs.fedoraproject.org/en-US/releases/eol/|unverified
+fedora|45|Fedora 45|2027-12-08||https://docs.fedoraproject.org/en-US/releases/eol/|unverified
+rhel|8|Red Hat Enterprise Linux 8|2029-05-31||https://access.redhat.com/support/policy/updates/errata|2026-10-21
+rhel|9|Red Hat Enterprise Linux 9|2032-05-31||https://access.redhat.com/support/policy/updates/errata|unverified
+rhel|10|Red Hat Enterprise Linux 10|2035-05-31||https://access.redhat.com/support/policy/updates/errata|unverified
+rocky|8|Rocky Linux 8|2029-05-31||https://docs.rockylinux.org/10/releases/|2026-10-21
+rocky|9|Rocky Linux 9|2032-05-31||https://docs.rockylinux.org/10/releases/|2026-10-21
+rocky|10|Rocky Linux 10|2035-05-31||https://docs.rockylinux.org/10/releases/|2026-10-21
+almalinux|8|AlmaLinux 8|2029-05-31||https://wiki.almalinux.org/release-notes/|2026-10-21
+almalinux|9|AlmaLinux 9|2032-05-31||https://wiki.almalinux.org/release-notes/|2026-10-21
+almalinux|10|AlmaLinux 10|2035-05-31||https://wiki.almalinux.org/release-notes/|2026-10-21
+centos|7|CentOS 7|2024-06-30||https://www.centos.org/centos-linux/|2026-10-21
+centos|9|CentOS Stream 9|2027-05-31||https://www.centos.org/download/|2026-10-21
+centos|10|CentOS Stream 10|2030-05-31||https://www.centos.org/download/|2026-10-21
+linuxmint|20|Linux Mint 20|2025-04-30||https://www.linuxmint.com/rel_ulyana.php|2026-10-21
+linuxmint|21|Linux Mint 21|2027-04-30||https://linuxmint.com/download_all.php|2026-10-21
+linuxmint|22|Linux Mint 22|2029-04-30||https://linuxmint.com/download_all.php|2026-10-21'
 
 days_until() { printf '%s' $((($(date -d "$1" +%s) - NOW) / 86400)); } # linux-only: date -d
 ymd() { date -d "@$1" '+%Y-%m-%d'; }                                     # linux-only: date -d
@@ -988,16 +996,18 @@ check_version() {
     if [ -z "$row" ]; then
         local hint='Check the distribution'\''s release page for its end-of-support date, and add it to this script'\''s support table.'
         msp_finding --status WARN --severity Low --category 'Lifecycle' --check 'OS version support' --evidence "$ev" \
-            --detail "${pretty:-$id $version} is not in this script's support table (reviewed 2026-10), so its end-of-support date is unknown here." \
+            --detail "${pretty:-$id $version} is not in this script's support table (reviewed 2026-10-21), so its end-of-support date is unknown here." \
             --rec "$hint"
         return 0
     fi
-    IFS='|' read -r _ _ name end note <<EOF
+    IFS='|' read -r _ _ name end note source verified <<EOF
 $row
 EOF
     local left
     left=$(days_until "$end")
-    ev=$(msp_json_obj Id "$id" Version "$version" EndOfSupport "$end" Note "$note")
+    ev=$(msp_json_obj Id "$id" Version "$version" EndOfSupport "$end" Note "$note" Source "$source" DateVerified "$verified")
+    # A date no official page confirmed is still reported, but marked as such.
+    [ "$verified" = 'unverified' ] && note="${note:+$note }This date is not confirmed by an official source; check the distribution's release page."
     if [ "$left" -lt 0 ]; then
         msp_finding --status FAIL --severity Critical --category 'Lifecycle' --check 'OS version support' --evidence "$ev" \
             --detail "$name reached end of security support on $end and no longer receives security updates.${note:+ $note}" \

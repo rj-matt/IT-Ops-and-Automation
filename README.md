@@ -85,9 +85,14 @@ Scheduled upkeep:
   MSP adds or retires an RMM/remote-support product.
 - **macOS and Linux support tables (A6).** `get-update-compliance-macos.sh` (`SUPPORT_TABLE`:
   macOS majors) and `get-update-compliance-linux.sh` (`SUPPORT_TABLE`: Ubuntu, Debian, Fedora,
-  RHEL family, Mint, Pop!_OS end dates) are marked "Reviewed 2026-10". Review them every April
-  and October like the Windows table: add new releases, check end dates against each vendor's
-  release page, and update the "Reviewed" note.
+  RHEL family, Mint, Pop!_OS end dates) were reviewed 2026-10-21. Every row carries the official
+  page its date came from and the day it was checked there; a row no official page confirmed is
+  marked `unverified`, and the script says "not confirmed" when it reports that date. Review them
+  every April and October like the Windows table: add new releases, take dates only from the
+  vendor's own pages (macOS: Apple security releases, support.apple.com/en-us/100100, since
+  Apple publishes no end dates; Ubuntu release cycle; Debian LTS wiki; Fedora EOL page; Red Hat,
+  Rocky, Alma, CentOS, Mint release pages), update the source and verified-on fields, and try
+  again to confirm the `unverified` rows.
 
 Deprecated or superseded scripts should be retained in designated locations rather
 than removed outright to preserve context.
@@ -165,8 +170,8 @@ shows the options.
 | `get-wifi-security-audit-linux.sh` (A3) | `core-infrastructure/networking/diagnostics/` | Linux (NetworkManager) | Current Wi-Fi security, saved connections (no secrets), nearby networks from the last scan | Read-Only | No |
 | `get-open-port-scan.sh` (A4) | `security-operations/diagnostics/endpoint-posture/` | macOS, Linux | Listening ports with owning process; optional `--scan-lan` check of 11 risky ports on local devices | Read-Only | No (on Linux, Yes shows other users' process names) |
 | `get-browser-security-check.sh` (A5) | `endpoint-systems/diagnostics/system-info/` | macOS, Linux | Chrome/Edge/Brave/Chromium/Firefox versions (estimated current), extensions, force-install and update-blocking policies; Safari version and extensions on macOS; no credential or history access | Read-Only | No (Yes for `--all-users`) |
-| `get-update-compliance-macos.sh` (A6) | `endpoint-systems/diagnostics/system-info/` | macOS | macOS version support (built-in table, reviewed 2026-10), last macOS update, pending updates from the last check (`--online` asks Apple), uptime, update settings and profiles | Read-Only | No |
-| `get-update-compliance-linux.sh` (A6) | `endpoint-systems/diagnostics/system-info/` | Linux (apt, dnf) | Distribution support (built-in table, reviewed 2026-10), last package update, pending (security) updates from the local lists (`--online` refreshes into a temporary folder), restart needed, automatic updates, held packages/snaps | Read-Only | No |
+| `get-update-compliance-macos.sh` (A6) | `endpoint-systems/diagnostics/system-info/` | macOS | macOS version support (built-in table from Apple's security releases, verified 2026-10-21), last macOS update, pending updates from the last check (`--online` asks Apple), uptime, update settings and profiles | Read-Only | No |
+| `get-update-compliance-linux.sh` (A6) | `endpoint-systems/diagnostics/system-info/` | Linux (apt, dnf) | Distribution support (built-in table, sources verified 2026-10-21), last package update, pending (security) updates from the local lists (`--online` refreshes into a temporary folder), restart needed, automatic updates, held packages/snaps | Read-Only | No |
 | `get-router-security-check.sh` (A7) | `core-infrastructure/networking/diagnostics/` | macOS, Linux | Gateway, DNS, admin page HTTP vs HTTPS, management ports, UPnP (SSDP, needs perl) and its port forwards, guided router checklist | Read-Only (no logins) | No |
 | `get-home-device-inventory.sh` (A8) | `endpoint-systems/audit/software-inventory/` | macOS, Linux | Hardware/OS, accounts and last login, home folders, installed apps/packages; flags remote-access and P2P tools (uses `approved-remote-tools.txt`) | Read-Only | No (Linux: Yes adds serial number and empty-password check) |
 
