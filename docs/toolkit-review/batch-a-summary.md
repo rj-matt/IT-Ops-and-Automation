@@ -34,6 +34,7 @@ Stubbed bash tests (`tests/bash/test-scripts-mocked.sh`): 200 passed under bash 
 |---|---|
 | `57a43f7` | A6 macOS/Linux 1.1.0: every support-table row has its official source URL and a verified-on date; unconfirmed rows say so in the finding |
 | `3c5d558` | A8 1.1.0: macOS `~/Applications` (one folder deep); `--all-users` (root) adds every user's `~/Applications` |
+| `9523d99` | Bash helper fix (with Batch B): a data table first filled inside a pipeline was left out of the export and the next table got its rows (A6 macOS `RecentUpdates` / `PendingUpdates`); regenerated in every bash script |
 
 A6 dates not confirmed by an official source (marked `unverified` in the scripts):
 
