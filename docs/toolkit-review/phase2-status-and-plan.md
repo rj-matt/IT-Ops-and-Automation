@@ -38,6 +38,7 @@ Nothing was rated **good** at Phase 2: the schema change (section 2) reaches eve
 Updated after steps A-1 (A1-A4) and A-2 (A5-A8): "good" = built to standard and run on that platform; "built" =
 built to standard, logic tested with stubbed commands, not yet run on a real machine of that
 platform. The A-1 Windows changes were parse- and analyzer-checked on pwsh 7 only.
+Current status, open items and hand tests for each batch: `batch-a-summary.md`, `batch-b-summary.md`.
 
 **Planned macOS/Linux splits** (single shared `.sh` otherwise): A1, A3, A6, C3. In each, the two
 platforms share almost no commands (FileVault/SIP/Gatekeeper vs LUKS/ufw/firewalld; `system_profiler`/`wdutil`

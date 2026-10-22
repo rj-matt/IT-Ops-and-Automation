@@ -33,3 +33,11 @@ Read README.md and docs/toolkit-review/ for the toolkit standards and the curren
   `-Force` (which must refuse).
 - Anything that could not be tested on the current machine is listed for the owner to run by
   hand, with exact commands.
+
+## Reporting at each stop
+
+- Write the stop's summary table, outstanding hand tests (with exact commands) and any
+  active-network commands to `docs/toolkit-review/` (e.g. `batch-a-summary.md`), and commit it.
+  Keep the chat summary to a few lines and point to the file; wide tables wrap in the terminal.
+- Keep platform status honest: "run" only for a real run on that platform; Linux stays
+  "stubbed only" until it has been run on a real Linux machine.
