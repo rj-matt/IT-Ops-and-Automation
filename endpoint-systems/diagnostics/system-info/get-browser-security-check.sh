@@ -50,7 +50,7 @@ MSP_SCRIPT_FILE=$0
 
 #region MSPToolkit (generated) Sections=Core
 # DO NOT EDIT — regenerate with Sync-MSPEmbeddedHelper.ps1
-# Source: endpoint-systems/utilities/msp-toolkit-common.sh | Sections: Core | SHA256: 7ff53c4c2280105169783fa5b4cfcc09020b95b59021da21ad657c067db1c247
+# Source: endpoint-systems/utilities/msp-toolkit-common.sh | Sections: Core | SHA256: 973c32cda8c7bcd7deb382fdd30e7df70a3edc3db9231b0dd3a55396649b62d1
 #region MSPHelper:Core
 # --- Run state ------------------------------------------------------------------------------
 # One toolkit script = one "run": one log file, one findings list, one optional export.
@@ -610,15 +610,32 @@ msp_check() {
 
 # --- Data tables ----------------------------------------------------------------------------
 MSP__DATA_IDX=0
+msp__data_sync() {
+    # Reloads the table names from the run folder. Names are kept in a file, not only in
+    # MSP_DATA_NAMES, because rows are often added inside a pipeline ("... | while read"),
+    # which runs in a subshell: a table created there would otherwise be unknown to the main
+    # script (left out of the export, and its index reused by the next new table).
+    local n
+    MSP_DATA_COUNT=0
+    MSP_DATA_NAMES=()
+    [ -n "$MSP_WORK_DIR" ] && [ -f "$MSP_WORK_DIR/data_names" ] || return 0
+    while IFS= read -r n; do
+        MSP_DATA_NAMES[MSP_DATA_COUNT]=$n
+        MSP_DATA_COUNT=$((MSP_DATA_COUNT + 1))
+    done <"$MSP_WORK_DIR/data_names"
+}
+
 msp__data_index() {
     # Sets MSP__DATA_IDX to the index of table NAME, creating it if needed (bash 3.2 has no
     # associative arrays). Sets a global instead of printing: $(...) would run in a subshell
     # and lose a newly created table.
     local i=0
+    msp__data_sync
     while [ "$i" -lt "$MSP_DATA_COUNT" ]; do
         if [ "${MSP_DATA_NAMES[$i]}" = "$1" ]; then MSP__DATA_IDX=$i; return 0; fi
         i=$((i + 1))
     done
+    printf '%s\n' "$1" >>"$MSP_WORK_DIR/data_names"
     MSP_DATA_NAMES[MSP_DATA_COUNT]=$1
     MSP__DATA_IDX=$MSP_DATA_COUNT
     MSP_DATA_COUNT=$((MSP_DATA_COUNT + 1))
@@ -813,6 +830,7 @@ msp_json_result() {
     [ "$MSP_F_COUNT" -gt 0 ] && printf '\n  '
     printf '],\n'
     printf '  "Data": {'
+    msp__data_sync
     i=0
     sep=''
     while [ "$i" -lt "$MSP_DATA_COUNT" ]; do
@@ -842,6 +860,7 @@ msp_export() {
     base="$folder/${MSP_SCRIPT_NAME}_${MSP_HOST}_${MSP_START_STAMP}"
     json="$base.json"
     csv="${base}_findings.csv"
+    msp__data_sync
     msp_json_result >"$json" || return 1
     {
         printf '"CheckId","ScriptName","Platform","Host","Timestamp","Id","Category","Check","Status","Severity","Target","Detail","Recommendation"\n'

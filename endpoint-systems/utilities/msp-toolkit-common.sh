@@ -22,6 +22,9 @@
 #   Net    Local IPv4 subnet of the active non-VPN adapter, IPv4 math, DNS servers in use,
 #          neighbor (ARP) table, listening sockets, MAC vendor hint, ping and TCP probes,
 #          parallel runner capped at 32
+#   Change For scripts that change something: interactive-session test, numbered plan,
+#          "What if:" lines for --what-if, and the type-YES confirmation that refuses in a
+#          non-interactive session unless --force was given
 #
 # Every section depends on Core. The sync tool always embeds Core first.
 # The PowerShell equivalent is MSPToolkit.Common.psm1; both write the same result schema.
@@ -37,7 +40,7 @@
 #
 # Risk Level    : Read-Only (defining functions has no side effects)
 # Prerequisites : bash 3.2+ | root: No | Dependencies: none beyond the OS
-# Version       : 1.2.0
+# Version       : 1.3.0
 
 #region MSPHelper:Core
 # --- Run state ------------------------------------------------------------------------------
@@ -598,15 +601,32 @@ msp_check() {
 
 # --- Data tables ----------------------------------------------------------------------------
 MSP__DATA_IDX=0
+msp__data_sync() {
+    # Reloads the table names from the run folder. Names are kept in a file, not only in
+    # MSP_DATA_NAMES, because rows are often added inside a pipeline ("... | while read"),
+    # which runs in a subshell: a table created there would otherwise be unknown to the main
+    # script (left out of the export, and its index reused by the next new table).
+    local n
+    MSP_DATA_COUNT=0
+    MSP_DATA_NAMES=()
+    [ -n "$MSP_WORK_DIR" ] && [ -f "$MSP_WORK_DIR/data_names" ] || return 0
+    while IFS= read -r n; do
+        MSP_DATA_NAMES[MSP_DATA_COUNT]=$n
+        MSP_DATA_COUNT=$((MSP_DATA_COUNT + 1))
+    done <"$MSP_WORK_DIR/data_names"
+}
+
 msp__data_index() {
     # Sets MSP__DATA_IDX to the index of table NAME, creating it if needed (bash 3.2 has no
     # associative arrays). Sets a global instead of printing: $(...) would run in a subshell
     # and lose a newly created table.
     local i=0
+    msp__data_sync
     while [ "$i" -lt "$MSP_DATA_COUNT" ]; do
         if [ "${MSP_DATA_NAMES[$i]}" = "$1" ]; then MSP__DATA_IDX=$i; return 0; fi
         i=$((i + 1))
     done
+    printf '%s\n' "$1" >>"$MSP_WORK_DIR/data_names"
     MSP_DATA_NAMES[MSP_DATA_COUNT]=$1
     MSP__DATA_IDX=$MSP_DATA_COUNT
     MSP_DATA_COUNT=$((MSP_DATA_COUNT + 1))
@@ -801,6 +821,7 @@ msp_json_result() {
     [ "$MSP_F_COUNT" -gt 0 ] && printf '\n  '
     printf '],\n'
     printf '  "Data": {'
+    msp__data_sync
     i=0
     sep=''
     while [ "$i" -lt "$MSP_DATA_COUNT" ]; do
@@ -830,6 +851,7 @@ msp_export() {
     base="$folder/${MSP_SCRIPT_NAME}_${MSP_HOST}_${MSP_START_STAMP}"
     json="$base.json"
     csv="${base}_findings.csv"
+    msp__data_sync
     msp_json_result >"$json" || return 1
     {
         printf '"CheckId","ScriptName","Platform","Host","Timestamp","Id","Category","Check","Status","Severity","Target","Detail","Recommendation"\n'
@@ -1703,3 +1725,57 @@ msp_mac_vendor() {
     return 0
 }
 #endregion MSPHelper:Net
+
+#region MSPHelper:Change
+msp_is_interactive() {
+    # True when a person can answer a prompt: input and output are a terminal. False under RMM
+    # agents, cron/launchd jobs, "ssh host command" without -t, and piped or redirected input.
+    [ -t 0 ] && [ -t 1 ]
+}
+
+msp_change_plan() {
+    # msp_change_plan STEP... - prints and logs the numbered list of changes before anything is
+    # changed.
+    local n=0 step
+    msp_section 'Planned changes'
+    for step in "$@"; do
+        n=$((n + 1))
+        printf '  %s. %s\n' "$n" "$step"
+        msp_log INFO "Plan $n: $step"
+    done
+}
+
+msp_what_if() {
+    # msp_what_if TARGET ACTION - one "What if:" line for a change a --what-if run would make.
+    msp_say 90 "What if: $2 on \"$1\"."
+    msp_log INFO "What if: $2 on \"$1\""
+}
+
+msp_confirm_change() {
+    # msp_confirm_change QUESTION FORCE(0|1) - asks the technician to type YES before changes are
+    # made. Returns 0 to go ahead.
+    #   FORCE=1                     : no question (recorded as a finding).
+    #   not interactive, no --force : refuses (SKIPPED finding), so an RMM job or a pasted
+    #                                 command can never make changes by accident.
+    # Callers skip this entirely under --what-if, which changes nothing.
+    local answer=''
+    if [ "${2:-0}" = '1' ]; then
+        msp_finding --status INFO --category 'Safety' --check 'Confirmation' --detail 'Not asked: --force was given.'
+        return 0
+    fi
+    if ! msp_is_interactive; then
+        msp_finding --status SKIPPED --category 'Safety' --check 'Confirmation' \
+            --detail 'No changes made: this session cannot answer a confirmation prompt (non-interactive) and --force was not given.' \
+            --rec 'Run it in a Terminal window, or add --force once you are sure (use --what-if first to see the plan).'
+        return 1
+    fi
+    printf '\n'
+    msp_say 33 "  $1"
+    printf '  Type YES to continue (anything else cancels): '
+    IFS= read -r answer || answer=''
+    msp_log INFO "Confirmation answer: \"$answer\""
+    [ "$answer" = 'YES' ] && return 0
+    msp_finding --status INFO --category 'Safety' --check 'Confirmation' --detail 'Cancelled by the technician. No changes were made.'
+    return 1
+}
+#endregion MSPHelper:Change

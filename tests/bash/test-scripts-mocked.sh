@@ -699,6 +699,247 @@ check 'A8 mac: under sudo, the user who ran sudo keeps their scope' "$csv" 'AnyD
 check 'A8 mac: other user scope' "$csv" 'TeamViewer.*User: bob'
 
 # =========================================================================================
+# Batch B
+# =========================================================================================
+fmt_epoch() {
+    # fmt_epoch EPOCH FORMAT - real date, BSD or GNU.
+    "$REAL_DATE" -r "$1" "$2" 2>/dev/null || "$REAL_DATE" -d "@$1" "$2"
+}
+
+# --- B1 get-client-health-snapshot.sh (Linux) --------------------------------------------------
+B1=endpoint-systems/diagnostics/system-info/get-client-health-snapshot.sh
+new_env b1-linux
+mkdir -p "$FAKE/proc" "$FAKE/sys/class/dmi/id" "$FAKE/var/log" "$FAKE/var/run" "$FAKE/etc"
+printf 'Dell Inc.\n' >"$FAKE/sys/class/dmi/id/sys_vendor"
+printf 'XPS 13\n' >"$FAKE/sys/class/dmi/id/product_name"
+printf '3456000.12 100.0\n' >"$FAKE/proc/uptime"
+printf 'MemTotal:       16777216 kB\nMemAvailable:    1048576 kB\n' >"$FAKE/proc/meminfo"
+printf 'processor\t: 0\nmodel name\t: Mock CPU 3000\nphysical id\t: 0\ncore id\t\t: 0\nprocessor\t: 1\nmodel name\t: Mock CPU 3000\nphysical id\t: 0\ncore id\t\t: 1\n' >"$FAKE/proc/cpuinfo"
+printf '1.96 1.50 1.20 2/300 4000\n' >"$FAKE/proc/loadavg"
+: >"$FAKE/var/run/reboot-required"
+printf '%s status installed openssl:amd64 3.0.13\n' "$(fmt_epoch $(($("$REAL_DATE" +%s) - 5 * 86400)) '+%Y-%m-%d %H:%M:%S')" >"$FAKE/var/log/dpkg.log"
+# df -kP: / 100 GB with 4 GB free (FAIL), /boot 1 GB 28 % free (small: percentage only, PASS),
+# /home 500 GB with 200 GB free (PASS); the snap squashfs line is excluded by -x in the script.
+stub "$BIN" df 'printf "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/nvme0n1p2 104857600 100663296 4194304 96%% /\n/dev/nvme0n1p1 1048576 754974 293601 72%% /boot\n/dev/nvme0n1p3 524288000 314572800 209715200 60%% /home\n"'
+stub "$BIN" apt-get 'printf "Inst openssl [3.0.13-0ubuntu3.1] (3.0.13-0ubuntu3.4 Ubuntu:24.04/noble-security [amd64])\nInst vim [2:9.1] (2:9.1.1 Ubuntu:24.04/noble-updates [amd64])\n"'
+OUT="$WORK/b1-linux.txt"
+run_script b1-linux "$B1" "$OUT" --output "$WORK/b1-linux/export"
+check 'B1 linux: exit 0' "$OUT.rc" '^0$'
+check 'B1 linux: computer without serial (needs sudo)' "$OUT" 'Computer - Dell Inc\. XPS 13 \(S/N \(needs sudo\)\)'
+check 'B1 linux: 40 days up = WARN' "$OUT" '\[WARN\] +Uptime - Up 40 day'
+check 'B1 linux: reboot-required = WARN' "$OUT" '\[WARN\] +Restart pending - A restart is needed: the system asked for a restart'
+check 'B1 linux: memory 94 % = WARN' "$OUT" '\[WARN\] +Memory - 94 % of 16\.0 GB in use'
+check 'B1 linux: load 1.96 on 2 threads = WARN' "$OUT" '\[WARN\] +CPU - Mock CPU 3000 \(2 cores / 2 threads\): 1-minute load 1\.96 = about 98 %'
+check 'B1 linux: system drive 4 GB free = FAIL' "$OUT" '\[FAIL\] +System drive space - /: 4 GB free of 100 GB'
+check 'B1 linux: small /boot judged on percentage = PASS' "$OUT" '\[PASS\] +Disk space /boot - '
+check 'B1 linux: 200 GB free = PASS' "$OUT" '\[PASS\] +Disk space /home - /home: 200 GB free'
+check 'B1 linux: security update pending = WARN' "$OUT" '\[WARN\] +Pending updates - 2 update\(s\) waiting, 1 of them security updates \(openssl\)'
+check 'B1 linux: last install 5 days ago = PASS' "$OUT" '\[PASS\] +Last update installed - .*\(5 days ago\)'
+check_not 'B1 linux: no ERROR findings' "$OUT" '\[ERROR\]'
+csv=$(find "$WORK/b1-linux/export" -name '*_Disks.csv' 2>/dev/null | head -n 1)
+check 'B1 linux: Disks table exported' "$csv" '"/home","/dev/nvme0n1p3","500","200","40","PASS"'
+json=$(find "$WORK/b1-linux/export" -name '*.json' 2>/dev/null | head -n 1)
+[ -n "$json" ] && check 'B1 linux: ID matches Windows' "$json" '"Id": "B1\.Resources\.System-drive-space"'
+
+# --- B2 get-network-connectivity-report.sh (Linux) ---------------------------------------------
+B2=endpoint-systems/diagnostics/networking/get-network-connectivity-report.sh
+new_env b2-passive
+mkdir -p "$FAKE/sys/class/net/eth0" "$FAKE/sys/class/net/lo" "$FAKE/sys/class/net/wg0"
+printf 'up\n' >"$FAKE/sys/class/net/eth0/operstate"
+printf 'unknown\n' >"$FAKE/sys/class/net/lo/operstate"
+linux_net 'default via 198.51.100.1 dev eth0 metric 100' '2: eth0    inet 198.51.100.23/24 brd 198.51.100.255 scope global eth0'
+OUT="$WORK/b2-passive.txt"
+run_script b2-passive "$B2" "$OUT" --passive
+check 'B2 passive: exit 0' "$OUT.rc" '^0$'
+check 'B2 passive: adapter (lo and wg0 not counted)' "$OUT" '\[PASS\] +Network adapter - Connected: eth0\.'
+check 'B2 passive: address' "$OUT" '\[PASS\] +IP address - 198\.51\.100\.23/24 on eth0'
+check 'B2 passive: gateway' "$OUT" 'Default gateway - 198\.51\.100\.1 via eth0'
+check 'B2 passive: nothing sent' "$OUT" '\[SKIPPED\] Connectivity tests - Passive: nothing was sent'
+check 'B2 passive: configuration-only diagnosis' "$OUT" 'First failing layer - No configuration problem found'
+check_not 'B2 passive: no "Will contact" line' "$OUT" 'Will contact'
+
+new_env b2-apipa
+mkdir -p "$FAKE/sys/class/net/wlan0"
+printf 'up\n' >"$FAKE/sys/class/net/wlan0/operstate"
+linux_net '' '3: wlan0    inet 169.254.10.20/16 brd 169.254.255.255 scope link wlan0'
+OUT="$WORK/b2-apipa.txt"
+run_script b2-apipa "$B2" "$OUT" --passive
+check 'B2 self-assigned address = FAIL' "$OUT" '\[FAIL\] +IP address - Only a self-assigned address \(169\.254\.10\.20/16\)'
+check 'B2 diagnosis names the address layer' "$OUT" '\[FAIL\] +First failing layer - IP address: The computer is connected but did not get an address'
+
+# Active run against stub probes only (documentation addresses; nothing leaves this computer).
+new_env b2-active
+mkdir -p "$FAKE/sys/class/net/eth0"
+printf 'up\n' >"$FAKE/sys/class/net/eth0/operstate"
+linux_net 'default via 198.51.100.1 dev eth0 metric 100' '2: eth0    inet 198.51.100.23/24 scope global eth0'
+PROBES="$WORK/b2-active/probes"
+stub "$BIN" ping "echo \"ping \$*\" >>'$PROBES'; exit 0"
+stub "$BIN" nc "echo \"nc \$*\" >>'$PROBES'; exit 0"
+stub "$BIN" curl "echo \"curl \$*\" >>'$PROBES'; out=; prev=; for a in \"\$@\"; do [ \"\$prev\" = -o ] && out=\$a; prev=\$a; done; case \"\$*\" in *connecttest.txt*) [ -n \"\$out\" ] && printf 'Microsoft Connect Test' >\"\$out\"; printf 200 ;; *) printf 200 ;; esac; exit 0"
+# getent ahostsv4 answers nothing: the name lookup fails although IP traffic works.
+OUT="$WORK/b2-active.txt"
+run_script b2-active "$B2" "$OUT" --endpoint www.example.com
+check 'B2 active: prints what it will contact first' "$OUT" 'Will contact: gateway 198\.51\.100\.1 \(ping\); DNS resolver .*https://www\.example\.com'
+check 'B2 active: gateway answers' "$OUT" '\[PASS\] +Gateway reachable'
+check 'B2 active: lookup fails = FAIL' "$OUT" '\[FAIL\] +DNS lookup - www\.msftconnecttest\.com could not be looked up'
+check 'B2 active: internet by IP works' "$OUT" '\[PASS\] +Internet \(IP\) - Reached 1\.1\.1\.1, 8\.8\.8\.8 on port 443'
+check 'B2 active: diagnosis = DNS' "$OUT" '\[FAIL\] +First failing layer - DNS: The internet is reachable by number but names do not resolve'
+check 'B2 active: only the endpoint given was tested' "$PROBES" 'curl .*https://www\.example\.com/'
+check_not 'B2 active: default endpoints not used with --endpoint' "$PROBES" 'office365'
+# Captive portal: lookups work, the test page is answered by something else.
+stub "$BIN" getent 'case "$1" in ahostsv4) echo "203.0.113.80 STREAM www.msftconnecttest.com" ;; esac'
+stub "$BIN" curl "echo \"curl \$*\" >>'$PROBES'; out=; prev=; for a in \"\$@\"; do [ \"\$prev\" = -o ] && out=\$a; prev=\$a; done; case \"\$*\" in *connecttest.txt*) [ -n \"\$out\" ] && printf '<html>Hotel Wi-Fi sign in</html>' >\"\$out\"; printf 200 ;; *) printf 200 ;; esac; exit 0"
+run_script b2-active "$B2" "$OUT.portal" --endpoint www.example.com
+check 'B2 captive portal = WARN' "$OUT.portal" '\[WARN\] +Web access - The test page came back changed \(HTTP 200\): a captive portal'
+check 'B2 captive portal: diagnosis = first warning at Web' "$OUT.portal" '\[WARN\] +First failing layer - No layer failed outright; first warning at Web'
+
+# --- B3 get-recent-critical-errors.sh (Linux) ---------------------------------------------------
+B3=endpoint-systems/diagnostics/event-logs/get-recent-critical-errors.sh
+new_env b3-linux
+mkdir -p "$FAKE/var/crash"
+: >"$FAKE/var/crash/_usr_bin_firefox.1000.crash"
+stub "$BIN" journalctl 'case "$*" in
+    *"-n 1"*) exit 0 ;;
+    *" -k "*) printf "%s\n" "2026-10-20T10:00:00+0000 mockhost kernel: Oops: 0000 [#1] PREEMPT SMP" "2026-10-20T10:05:00+0000 mockhost kernel: blk_update_request: I/O error, dev sda, sector 2048" "2026-10-20T11:00:00+0000 mockhost kernel: firefox[4242]: segfault at 0 ip 00007f sp 00007f error 4 in libxul.so" ;;
+    *"_PID=1"*) printf "%s\n" "2026-10-20T09:00:00+0000 mockhost systemd[1]: cups.service: Failed with result '"'"'exit-code'"'"'." "2026-10-20T09:00:01+0000 mockhost systemd[1]: Failed to start CUPS Scheduler." ;;
+    *"-p 0..2"*) printf "%s\n" "2026-10-20T10:00:00+0000 mockhost kernel: Oops: 0000 [#1] PREEMPT SMP" ;;
+    *"-p 3..3"*) printf "%s\n" "2026-10-20T10:05:00+0000 mockhost kernel: blk_update_request: I/O error" "2026-10-20T09:00:01+0000 mockhost systemd[1]: Failed to start CUPS Scheduler." ;;
+esac'
+CRASH_AT=$(fmt_epoch $(($("$REAL_DATE" +%s) - 7200)) '+%a %b %d %H:%M:%S %Y')
+OLD_AT=$(fmt_epoch $(($("$REAL_DATE" +%s) - 30 * 86400)) '+%a %b %d %H:%M:%S %Y')
+stub "$BIN" last "printf 'reboot   system boot  6.8.0-mock       $CRASH_AT - crash  (01:00)\nreboot   system boot  6.8.0-mock       $OLD_AT - crash  (01:00)\nshutdown system down  6.8.0-mock       $OLD_AT - $OLD_AT  (00:00)\n'"
+OUT="$WORK/b3-linux.txt"
+run_script b3-linux "$B3" "$OUT" --output "$WORK/b3-linux/export"
+check 'B3 linux: exit 0' "$OUT.rc" '^0$'
+check 'B3 linux: kernel oops = FAIL' "$OUT" '\[FAIL\] +System crashes - 1 kernel crash message'
+check 'B3 linux: crash within the window only' "$OUT" '\[WARN\] +Unexpected shutdowns - 1 unexpected shutdown'
+check 'B3 linux: I/O error = FAIL' "$OUT" '\[FAIL\] +Disk errors - 1 disk or file system error message\(s\) .*I/O error, dev sda'
+check 'B3 linux: failed unit named' "$OUT" '\[WARN\] +Service failures - 2 service failure message\(s\) .*cups\.service x1'
+check 'B3 linux: segfault + apport crash' "$OUT" '\[WARN\] +Application crashes - 2 application crash\(es\) .*firefox x2'
+check 'B3 linux: error events counted' "$OUT" '\[INFO\] +Error events - 3 critical/error journal message\(s\) \(1 critical\)'
+check_not 'B3 linux: no ERROR findings' "$OUT" '\[ERROR\]'
+csv=$(find "$WORK/b3-linux/export" -name '*_Sources.csv' 2>/dev/null | head -n 1)
+check 'B3 linux: Sources table' "$csv" '"kernel","2"'
+json=$(find "$WORK/b3-linux/export" -name '*.json' 2>/dev/null | head -n 1)
+[ -n "$json" ] && check 'B3 linux: ID matches Windows' "$json" '"Id": "B3\.Stability\.Unexpected-shutdowns"'
+# Without access to the system journal: journal checks are SKIPPED, not reported as "none".
+stub "$BIN" journalctl 'echo "Hint: You are currently not seeing messages from other users and the system." >&2; exit 0'
+rm -f "$FAKE/var/crash/_usr_bin_firefox.1000.crash"
+run_script b3-linux "$B3" "$OUT.noaccess"
+check 'B3 linux: no journal access = SKIPPED' "$OUT.noaccess" "\\[SKIPPED\\] Journal access - Skipped: this account can only see its own journal messages"
+check 'B3 linux: disk errors not claimed as none' "$OUT.noaccess" '\[SKIPPED\] Disk errors'
+
+# --- B3 (macOS paths: report folders, restart records, SMART) ----------------------------------
+new_env b3-mac
+stub "$BIN" uname 'case "$1" in -s) echo Darwin ;; -n) echo mockmac ;; *) echo Darwin ;; esac'
+mkdir -p "$FAKE/Library/Logs/DiagnosticReports" "$FAKE/home/alice/Library/Logs/DiagnosticReports"
+: >"$FAKE/Library/Logs/DiagnosticReports/panic-full-2026-10-21-101010.panic"
+: >"$FAKE/Library/Logs/DiagnosticReports/configd-2026-10-21-101010.ips"
+: >"$FAKE/Library/Logs/DiagnosticReports/JetsamEvent-2026-10-21-101010.ips"
+: >"$FAKE/Library/Logs/DiagnosticReports/Google Chrome_2026-10-21-101010_mockmac.diag"
+: >"$FAKE/home/alice/Library/Logs/DiagnosticReports/ExcUserFault_Safari-2026-10-21-101010.ips"
+: >"$FAKE/home/alice/Library/Logs/DiagnosticReports/Mail-2026-10-21-111111.ips"
+R1=$(fmt_epoch $(($("$REAL_DATE" +%s) - 3600)) '+%a %b %e %H:%M')
+R2=$(fmt_epoch $(($("$REAL_DATE" +%s) - 7200)) '+%a %b %e %H:%M')
+stub "$BIN" last "printf 'reboot time                                $R1\nreboot time                                $R2\nshutdown time                              $R2\n'"
+stub "$BIN" diskutil 'case "$1" in list) printf "/dev/disk0 (internal, physical):\n" ;; info) printf "   Device / Media Name:       MOCK SSD\n   SMART Status:              Failing\n" ;; esac'
+OUT="$WORK/b3-mac.txt"
+if [ "$(uname -s)" = 'Darwin' ]; then
+    run_script b3-mac "$B3" "$OUT"
+    check 'B3 mac: panic report = FAIL' "$OUT" '\[FAIL\] +System crashes - 1 kernel panic'
+    check 'B3 mac: restart without shutdown = WARN' "$OUT" '\[WARN\] +Unexpected shutdowns - 1 unexpected shutdown'
+    check 'B3 mac: SMART failing = FAIL' "$OUT" '\[FAIL\] +Disk errors - SMART reports a failing disk: disk0 \(MOCK SSD\): Failing'
+    check 'B3 mac: system crash report (Jetsam and .diag left out)' "$OUT" '\[WARN\] +Service failures - 1 crash report\(s\) of system processes .*configd x1'
+    check 'B3 mac: app crash reports' "$OUT" '\[WARN\] +Application crashes - 2 application crash report\(s\)'
+fi
+
+# --- B4 restart-common-services.sh (Linux and macOS; stub service managers record every call) ---
+B4=endpoint-systems/remediation/safe/restart-services/restart-common-services.sh
+new_env b4-linux
+CALLS="$WORK/b4-linux/calls"
+: >"$CALLS"
+stub "$BIN" id 'case "$1" in -u) echo 0 ;; -un) echo root ;; *) echo "uid=0(root)" ;; esac'
+cat >"$BIN/systemctl" <<STUB
+#!/bin/sh
+case "\$*" in
+    *"show"*cups.service*) printf 'LoadState=loaded\nActiveState=active\nUnitFileState=enabled\nMainPID=100\n' ;;
+    *"show"*systemd-resolved.service*) printf 'LoadState=loaded\nActiveState=active\nUnitFileState=enabled\nMainPID=200\n' ;;
+    *"show"*NetworkManager.service*) printf 'LoadState=loaded\nActiveState=active\nUnitFileState=enabled\nMainPID=300\n' ;;
+    *restart*|*start*) echo "systemctl \$*" >>"$CALLS"; [ -f "$WORK/b4-linux/fail" ] && { echo 'Job for cups.service failed.' >&2; exit 1; }; exit 0 ;;
+esac
+STUB
+chmod +x "$BIN/systemctl"
+OUT="$WORK/b4-linux.txt"
+run_script b4-linux "$B4" "$OUT"
+check 'B4 linux: non-interactive without --force = exit 1' "$OUT.rc" '^1$'
+check 'B4 linux: refusal recorded' "$OUT" '\[SKIPPED\] Confirmation - No changes made: this session cannot answer'
+check_not 'B4 linux: nothing restarted when refused' "$CALLS" 'restart'
+run_script b4-linux "$B4" "$OUT.whatif" --what-if
+check 'B4 linux: --what-if exit 0' "$OUT.whatif.rc" '^0$'
+check 'B4 linux: --what-if plan' "$OUT.whatif" 'What if: Restart on "cups"'
+check_not 'B4 linux: --what-if changes nothing' "$CALLS" 'restart'
+run_script b4-linux "$B4" "$OUT.force" --force --output "$WORK/b4-linux/export"
+check 'B4 linux: --force exit 0' "$OUT.force.rc" '^0$'
+check 'B4 linux: default set restarted' "$CALLS" 'restart cups\.service'
+check 'B4 linux: resolved restarted' "$CALLS" 'restart systemd-resolved\.service'
+check_not 'B4 linux: NetworkManager not in the default set' "$CALLS" 'NetworkManager'
+check 'B4 linux: after state' "$OUT.force" '\[PASS\] +cups running - Running -> Running \(pid 100\)'
+csv=$(find "$WORK/b4-linux/export" -name '*_ServicesAfter.csv' 2>/dev/null | head -n 1)
+check 'B4 linux: after table exported' "$csv" '"cups","Printing \(CUPS\)","Running","Boot","100"'
+: >"$CALLS"
+run_script b4-linux "$B4" "$OUT.nm" --services NetworkManager --force
+check 'B4 linux: NetworkManager only when named' "$CALLS" 'restart NetworkManager\.service'
+: >"$WORK/b4-linux/fail"
+run_script b4-linux "$B4" "$OUT.fail" --services cups --force
+check 'B4 linux: failed restart = exit 2' "$OUT.fail.rc" '^2$'
+check 'B4 linux: failure reported with the reason' "$OUT.fail" '\[FAIL\] +cups: restart - Failed: Job for cups\.service failed\.'
+rm -f "$WORK/b4-linux/fail"
+run_script b4-linux "$B4" "$OUT.bad" --services sshd --force
+check 'B4 linux: name not on the allow-list = exit 2' "$OUT.bad.rc" '^2$'
+check 'B4 linux: allow-list enforced' "$OUT.bad" 'Not on the allow-list for this computer: sshd'
+# Masked and stopped-on-demand services are never changed.
+cat >"$BIN/systemctl" <<STUB
+#!/bin/sh
+case "\$*" in
+    *"show"*cups.service*) printf 'LoadState=loaded\nActiveState=inactive\nUnitFileState=indirect\nMainPID=0\n' ;;
+    *"show"*systemd-resolved.service*) printf 'LoadState=masked\nActiveState=inactive\nUnitFileState=masked\nMainPID=0\n' ;;
+    *restart*|*start*) echo "systemctl \$*" >>"$CALLS"; exit 0 ;;
+esac
+STUB
+: >"$CALLS"
+run_script b4-linux "$B4" "$OUT.none" --force
+check 'B4 linux: nothing to change = exit 0' "$OUT.none.rc" '^0$'
+check 'B4 linux: masked service reported' "$OUT.none" '\[WARN\] +Service systemd-resolved - .*Masked\. This script never changes'
+check 'B4 linux: on-demand service left alone' "$OUT.none" 'Service cups - .*Left alone; use --start-if-stopped'
+check_not 'B4 linux: no calls for masked/on-demand' "$CALLS" 'start'
+
+new_env b4-mac
+CALLS="$WORK/b4-mac/calls"
+: >"$CALLS"
+stub "$BIN" uname 'case "$1" in -s) echo Darwin ;; -n) echo mockmac ;; *) echo Darwin ;; esac'
+stub "$BIN" id 'case "$1" in -u) echo 0 ;; -un) echo root ;; *) echo "uid=0(root)" ;; esac'
+cat >"$BIN/launchctl" <<STUB
+#!/bin/sh
+case "\$*" in
+    "print system/com.apple.mDNSResponder.reloaded") printf 'system/com.apple.mDNSResponder.reloaded = {\n\tstate = running\n\tpid = 501\n}\n' ;;
+    "print system/org.cups.cupsd") printf 'system/org.cups.cupsd = {\n\tstate = running\n\tpid = 777\n}\n' ;;
+    print-disabled*) printf 'disabled services = {\n}\n' ;;
+    kickstart*) echo "launchctl \$*" >>"$CALLS" ;;
+esac
+STUB
+chmod +x "$BIN/launchctl"
+stub "$BIN" dscacheutil "echo \"dscacheutil \$*\" >>'$CALLS'"
+stub "$BIN" killall "echo \"killall \$*\" >>'$CALLS'"
+OUT="$WORK/b4-mac.txt"
+run_script b4-mac "$B4" "$OUT" --force
+check 'B4 mac: exit 0' "$OUT.rc" '^0$'
+check 'B4 mac: DNS cache cleared (Apple method)' "$CALLS" 'dscacheutil -flushcache'
+check 'B4 mac: mDNSResponder sent HUP, not restarted' "$CALLS" 'killall -HUP mDNSResponder'
+check 'B4 mac: running cupsd restarted' "$CALLS" 'launchctl kickstart -k system/org\.cups\.cupsd'
+check_not 'B4 mac: mDNSResponder never kickstarted' "$CALLS" 'kickstart.*mDNSResponder'
+check 'B4 mac: cache result' "$OUT" '\[PASS\] +mDNSResponder: clear cache - DNS cache cleared\.'
+
+# =========================================================================================
 for f in "$WORK"/*/network-calls; do
     if [ -s "$f" ]; then FAILED=$((FAILED + 1)); printf 'FAIL: network stub called (%s):\n' "$f"; cat "$f"; else PASSED=$((PASSED + 1)); fi
 done

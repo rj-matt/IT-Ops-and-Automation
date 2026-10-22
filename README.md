@@ -111,8 +111,8 @@ This repository exists to support those outcomes
 
 ## Script Catalog
 
-Scripts reviewed against the toolkit standards (Batch A, home network audit, and the safety
-fixes for the live remediation scripts). Every Windows script below runs on **Windows PowerShell
+Scripts reviewed against the toolkit standards (Batches A and B, home network audit, and the
+safety fixes for the live remediation scripts). Every Windows script below runs on **Windows PowerShell
 5.1** with **built-in modules only**, works without admin (admin-only checks show `SKIPPED`), logs
 to `%TEMP%\MSP-Toolkit\`, and supports `-OutputPath` for JSON/CSV results. The macOS and Linux
 scripts are listed after them.
@@ -122,7 +122,8 @@ plan first; support `-WhatIf` (plan only, nothing changed, no admin needed); ask
 **YES**; refuse to change anything in a non-interactive session (RMM job, scheduled task) unless
 `-Force` is given; record the state afterwards; and say plainly what cannot be undone.
 Exit codes: `0` done, `1` nothing changed (not admin / not confirmed / non-interactive),
-`2` a step failed.
+`2` a step failed. The bash version of B4 (`restart-common-services.sh`) follows the same rules
+with `--what-if` and `--force`.
 
 | Script | Folder | Purpose | Risk | Admin required | PS version | Modules |
 |---|---|---|---|---|---|---|
@@ -136,6 +137,9 @@ Exit codes: `0` done, `1` nothing changed (not admin / not confirmed / non-inter
 | `Get-HomeDeviceInventory.ps1` (A8) | `endpoint-systems/audit/software-inventory/` | Hardware/OS, users and last logon, installed software; flags remote-access and P2P tools | Read-Only | No (Yes for `-IncludeOtherUsers`) | 5.1 | Built-in |
 | `Export-SecurityAuditReport.ps1` (A9) | `security-operations/diagnostics/` | One self-contained HTML report from the JSON results | Read-Only (writes the report file) | No | 5.1 | Built-in |
 | `Invoke-HomeAuditBundle.ps1` | `security-operations/diagnostics/` | Runs A1-A8 in order into one timestamped folder; continues past failures; optional A9 | Read-Only | No (recommended: Yes) | 5.1 | Built-in |
+| `Get-ClientHealthSnapshot.ps1` (B1) | `endpoint-systems/diagnostics/system-info/` | System, uptime and pending restart, memory, CPU load, free space per drive, last update and updates waiting (cached) | Read-Only | No | 5.1 | Built-in |
+| `Get-NetworkConnectivityReport.ps1` (B2) | `endpoint-systems/diagnostics/networking/` | Adapter, address, gateway, DNS, internet, web (captive portal) in order, proxy, VPN; names the first failing layer. `-Passive` sends nothing | Read-Only (ping, DNS, TCP 443, HTTP(S)) | No | 5.1 | Built-in |
+| `Get-RecentCriticalErrors.ps1` (B3) | `endpoint-systems/diagnostics/event-logs/` | Last 48 h (`-Hours`): blue screens, unexpected shutdowns, disk errors, service failures, app crashes, error counts by source | Read-Only | No | 5.1 | Built-in |
 | `Restart-CommonServices.ps1` (B4) | `endpoint-systems/remediation/safe/restart-services/` | Restarts allow-listed Spooler, wuauserv, BITS; clears the DNS Client cache (Windows does not allow restarting it); before/after state | Safe | Yes (No for `-WhatIf`) | 5.1 | Built-in |
 | `Clear-WindowsUpdateCache.ps1` (D1) | `endpoint-systems/remediation/safe/clear-caches/` | Renames (never deletes) SoftwareDistribution and catroot2, restarts the update services, checks they rebuilt | Safe | Yes (No for `-WhatIf`) | 5.1 | Built-in |
 | `Reset-NetworkStack.ps1` (D2) | `endpoint-systems/remediation/elevated/network-resets/` | Pre-flight, saved copy of settings, `netsh winsock reset` + `netsh int ip reset` (exit codes checked) + DNS flush; restart required; **not fully reversible** | Elevated | Yes (No for `-WhatIf` / `-BackupOnly`) | 5.1 | Built-in |
@@ -174,13 +178,17 @@ shows the options.
 | `get-update-compliance-linux.sh` (A6) | `endpoint-systems/diagnostics/system-info/` | Linux (apt, dnf) | Distribution support (built-in table, sources verified 2026-10-21), last package update, pending (security) updates from the local lists (`--online` refreshes into a temporary folder), restart needed, automatic updates, held packages/snaps | Read-Only | No |
 | `get-router-security-check.sh` (A7) | `core-infrastructure/networking/diagnostics/` | macOS, Linux | Gateway, DNS, admin page HTTP vs HTTPS, management ports, UPnP (SSDP, needs perl) and its port forwards, guided router checklist | Read-Only (no logins) | No |
 | `get-home-device-inventory.sh` (A8) | `endpoint-systems/audit/software-inventory/` | macOS, Linux | Hardware/OS, accounts and last login, home folders, installed apps/packages (macOS: `/Applications` and `~/Applications`; every user's with `--all-users`); flags remote-access and P2P tools (uses `approved-remote-tools.txt`) | Read-Only | No (Linux: Yes adds serial number and empty-password check; macOS: Yes for `--all-users`) |
+| `get-client-health-snapshot.sh` (B1) | `endpoint-systems/diagnostics/system-info/` | macOS, Linux | System, uptime and pending restart, memory, load, free space per volume, last update and updates waiting (cached) | Read-Only | No (Linux: Yes adds serial number) |
+| `get-network-connectivity-report.sh` (B2) | `endpoint-systems/diagnostics/networking/` | macOS, Linux | Same layers and diagnosis as the Windows version; `--passive` sends nothing | Read-Only (ping, DNS, TCP 443, HTTP(S) via curl) | No |
+| `get-recent-critical-errors.sh` (B3) | `endpoint-systems/diagnostics/event-logs/` | macOS, Linux | macOS: panic and crash reports, restarts without shutdown, SMART. Linux: journal (kernel crashes, disk errors, failed units, segfaults, error counts), `last -x`, apport | Read-Only | No (Linux: Yes, or the adm / systemd-journal group, for system messages) |
+| `restart-common-services.sh` (B4) | `endpoint-systems/remediation/safe/restart-services/` | macOS, Linux | Allow-list only: macOS mDNSResponder (DNS cache cleared) and cupsd; Linux cups, systemd-resolved, NetworkManager (only when named). `--what-if`, type YES, `--force` for non-interactive runs; before/after state | Safe | Yes (No for `--what-if`) |
 
 Run them with `bash <script>` (no need to make them executable, and macOS's quarantine flag on
 downloaded files does not apply to a script passed to bash). On macOS, macOS hides Wi-Fi names
 from Terminal unless it has Location Services permission; the A3 ratings still work and the
 name-matching checks say so. None of these scripts need Full Disk Access.
 
-Scripts not listed here have not yet been reviewed against the standards (Batches B-E).
+Scripts not listed here have not yet been reviewed against the standards (Batches C-E).
 Superseded scripts and unsigned binaries are in `_archive/` (see `_archive/README.md`).
 
 ---
@@ -302,7 +310,7 @@ There are two helper sources, one per script language:
 | Scripts | Helper source | Sections |
 |---|---|---|
 | `*.ps1` | `endpoint-systems/utilities/MSPToolkit.Common.psm1` | Core (also runs on PowerShell 7 for macOS/Linux), Net, Updates, LocalAdmin, Software |
-| `*.sh` | `endpoint-systems/utilities/msp-toolkit-common.sh` (bash 3.2 compatible) | Core, Net |
+| `*.sh` | `endpoint-systems/utilities/msp-toolkit-common.sh` (bash 3.2 compatible) | Core, Net, Change |
 
 1. Edit the helper source only, never a generated region.
 2. Run `.\endpoint-systems\utilities\Sync-MSPEmbeddedHelper.ps1` to regenerate every copy
@@ -351,7 +359,7 @@ and PowerShell, schema validation, the PowerShell helper unit tests, logic tests
 | macOS | `pwsh -NoProfile -File tests/Invoke-ToolkitTests.ps1` | Windows PowerShell 5.1 steps; Windows/Linux runtime cases; bash tests as root (never uses sudo) |
 | Linux | `pwsh -NoProfile -File tests/Invoke-ToolkitTests.ps1` | Windows PowerShell 5.1 steps; Windows/macOS runtime cases; bash 3.2 unless built at `/opt/bash-3.2` |
 
-PSScriptAnalyzer findings in scripts not yet brought to standard (Batches B-D) are listed in
+PSScriptAnalyzer findings in scripts not yet brought to standard (Batches C-D) are listed in
 `tests/pssa-known-issues.txt` and reported as known, so a clean run is all green and any new
 finding fails. Remove a script's lines from that file when its batch is reworked.
 

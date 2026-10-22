@@ -264,6 +264,10 @@ line two" --rec 'Turn it on.'
     msp_data_row 'Devices' IP 192.168.1.10 MAC 'AA:BB:CC:DD:EE:FF' Ports# 3 Note 'has "quotes", commas'
     msp_data_row 'Devices' IP 192.168.1.11 MAC '' Ports# 0 Note ''
     msp_data_row 'Empty note' Key k
+    # A table first created inside a pipeline (a subshell), then a new table in the main shell:
+    # both must be exported, each with its own rows.
+    printf 'r1\nr2\n' | while read -r r; do msp_data_row 'FromPipe' Row "$r"; done
+    msp_data_row 'AfterPipe' Col x
     msp_complete "$OUT_DIR"
 ) >"$RUN_TMP/console.txt" 2>&1
 json=$(find "$OUT_DIR" -name 'test-msp-helper_*.json' 2>/dev/null | head -n 1)
@@ -271,6 +275,8 @@ csv=$(find "$OUT_DIR" -name 'test-msp-helper_*_findings.csv' 2>/dev/null | head 
 check_true 'export: JSON written' [ -n "$json" ]
 check_true 'export: findings CSV written' [ -n "$csv" ]
 check_true 'export: Devices CSV written' [ -n "$(ls "$OUT_DIR"/test-msp-helper_*_Devices.csv 2>/dev/null)" ]
+check_eq 'export: table created in a pipeline kept' '"Row" "r1" "r2"' "$(cat "$OUT_DIR"/test-msp-helper_*_FromPipe.csv 2>/dev/null | paste -sd ' ' -)"
+check_eq 'export: next table gets its own file' '"Col" "x"' "$(cat "$OUT_DIR"/test-msp-helper_*_AfterPipe.csv 2>/dev/null | paste -sd ' ' -)"
 if [ -n "$json" ]; then
     check_true 'json: schema 2.0' grep -q '"SchemaVersion": "2.0"' "$json"
     check_true 'json: CheckId T1' grep -q '"CheckId": "T1"' "$json"
@@ -332,6 +338,15 @@ if [ -n "$EMIT_DIR" ]; then
             printf '%s\t%s|%s|%s\n' "$mac" "$MSP_VENDOR" "$MSP_VENDOR_HINT" "$r" >>"$EMIT_DIR/vendor-cases.txt"
         done
 fi
+# --- Change section (confirmation never proceeds without a person or --force) ------------------
+out=$( (msp_confirm_change 'Make 2 changes?' 0 </dev/null >/dev/null; rc=$?; printf '%s|%s|%s' "$rc" "${MSP_F_STATUS[$((MSP_F_COUNT - 1))]}" "${MSP_F_CHECK[$((MSP_F_COUNT - 1))]}") )
+check_eq 'confirm: non-interactive without force refuses (SKIPPED)' '1|SKIPPED|Confirmation' "$out"
+out=$( (msp_confirm_change 'Make 2 changes?' 1 </dev/null >/dev/null; rc=$?; printf '%s|%s|%s' "$rc" "${MSP_F_STATUS[$((MSP_F_COUNT - 1))]}" "${MSP_F_DETAIL[$((MSP_F_COUNT - 1))]}") )
+check_eq 'confirm: --force goes ahead and says so' '0|INFO|Not asked: --force was given.' "$out"
+check_false 'interactive: false with redirected input' msp_is_interactive </dev/null
+check_eq 'what if line' 'What if: Restart on "cupsd".' "$(MSP_COLOR=0 msp_what_if cupsd Restart)"
+check_eq 'change plan numbered' '  2. Flush the DNS cache' "$(MSP_COLOR=0 msp_change_plan 'Restart cupsd' 'Flush the DNS cache' | tail -n 1)"
+
 rm -rf "$RUN_TMP"
 
 printf '\n%s passed, %s failed (bash %s)\n' "$PASSED" "$FAILED" "$BASH_VERSION"

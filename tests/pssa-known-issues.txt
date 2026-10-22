@@ -12,15 +12,6 @@ cloud-services/m365/diagnostics/Get-UserMailboxStatus.ps1|PSAvoidTrailingWhitesp
 cloud-services/m365/diagnostics/Get-UserMailboxStatus.ps1|PSAvoidUsingPositionalParameters|1
 cloud-services/m365/diagnostics/Get-UserMailboxStatus.ps1|PSUseDeclaredVarsMoreThanAssignments|1
 cloud-services/m365/diagnostics/Get-UserMailboxStatus.ps1|PSUseSingularNouns|1
-endpoint-systems/diagnostics/event-logs/Get-RecentCriticalErrors.ps1|PSAvoidAssignmentToAutomaticVariable|2
-endpoint-systems/diagnostics/event-logs/Get-RecentCriticalErrors.ps1|PSAvoidTrailingWhitespace|13
-endpoint-systems/diagnostics/event-logs/Get-RecentCriticalErrors.ps1|PSUseDeclaredVarsMoreThanAssignments|1
-endpoint-systems/diagnostics/event-logs/Get-RecentCriticalErrors.ps1|PSUseSingularNouns|1
-endpoint-systems/diagnostics/networking/Get-NetworkConnectivityReport.ps1|PSAvoidTrailingWhitespace|64
-endpoint-systems/diagnostics/networking/Get-NetworkConnectivityReport.ps1|PSReviewUnusedParameter|3
-endpoint-systems/diagnostics/networking/Get-NetworkConnectivityReport.ps1|PSUseDeclaredVarsMoreThanAssignments|1
-endpoint-systems/diagnostics/networking/Get-NetworkConnectivityReport.ps1|PSUseSingularNouns|1
-endpoint-systems/diagnostics/system-info/Get-ClientHealthSnapshot.ps1|PSAvoidTrailingWhitespace|47
 endpoint-systems/diagnostics/system-info/Get-UserLicenseReport.ps1|PSAvoidOverwritingBuiltInCmdlets|1
 endpoint-systems/diagnostics/system-info/Get-UserLicenseReport.ps1|PSReviewUnusedParameter|1
 security-operations/hardening/server-hardening/Set-InactivityTimeout.ps1|PSAvoidUsingEmptyCatchBlock|1

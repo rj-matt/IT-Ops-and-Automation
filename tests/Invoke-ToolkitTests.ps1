@@ -25,7 +25,8 @@
       8  PowerShell helper unit tests (tests/Test-MSPToolkitCommon.ps1) on 5.1 and 7
       9  Logic tests that use mocked paths and run on any platform:
          tests/Test-ClearWindowsUpdateCacheLogic.ps1 (D1 repeat runs),
-         tests/Test-ExportSecurityAuditReportIds.ps1 (A9 old/new finding IDs) and
+         tests/Test-ExportSecurityAuditReportIds.ps1 (A9 old/new finding IDs),
+         tests/Test-BatchBWindowsLogic.ps1 (B1-B3 Windows scripts against mocked cmdlets) and
          tests/bash/test-scripts-mocked.sh under every bash (Linux scripts, Linux branches and
          macOS paths not reachable here, with stub commands; no network traffic is possible)
      10  Runtime smoke tests of the scripts for THIS platform, results validated against schema
@@ -68,7 +69,7 @@
                     macOS/Linux: PowerShell 7 and bash
                     All: PSScriptAnalyzer (module path or %LOCALAPPDATA%\PSModules), ShellCheck
     Exit code     : 0 when every step that ran passed, 1 otherwise
-    Version       : 2.2.0
+    Version       : 2.3.0
 #>
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPositionalParameters', '', Justification = 'Add-Result (Step, Result, Detail) is called ~50 times; positional calls keep each step on one readable line.')]
 [CmdletBinding()]
@@ -481,6 +482,7 @@ foreach ($h in $hosts) {
 $logic = @(
     @{ Name = 'D1 repeat runs: backup names never reused or overwritten'; File = 'Test-ClearWindowsUpdateCacheLogic.ps1' }
     @{ Name = 'A9 reports a check once across result versions and platforms'; File = 'Test-ExportSecurityAuditReportIds.ps1' }
+    @{ Name = 'B1-B3 Windows scripts against mocked cmdlets'; File = 'Test-BatchBWindowsLogic.ps1' }
 )
 foreach ($t in $logic) {
     foreach ($h in $hosts) {
@@ -529,6 +531,11 @@ else {
     $ep = 'security-operations/diagnostics/endpoint-posture'
     $net = 'core-infrastructure/networking/diagnostics'
     $si = 'endpoint-systems/diagnostics/system-info'
+    $b2ps = 'endpoint-systems/diagnostics/networking/Get-NetworkConnectivityReport.ps1'
+    $b2sh = 'endpoint-systems/diagnostics/networking/get-network-connectivity-report.sh'
+    $b3ps = 'endpoint-systems/diagnostics/event-logs/Get-RecentCriticalErrors.ps1'
+    $b3sh = 'endpoint-systems/diagnostics/event-logs/get-recent-critical-errors.sh'
+    $b4sh = 'endpoint-systems/remediation/safe/restart-services/restart-common-services.sh'
     # Platform: where the case can run. Expect: allowed exit codes. Active: sends traffic beyond
     # this computer (gated by -AllowActiveNetwork). Bash cases get --output, PowerShell -OutputPath.
     $cases = @(
@@ -579,6 +586,23 @@ else {
         @{ Platform = 'Linux'; Name = 'A6 --online (Linux)'; Script = "$si/get-update-compliance-linux.sh"; Args = @('--online'); Expect = @(0); Active = 'distribution package servers and the Snap Store' }
         @{ Platform = 'Linux'; Name = 'A2 ping sweep (Linux)'; Script = "$net/get-home-network-map.sh"; Args = @(); Expect = @(0); Active = 'ping sweep of the whole local subnet + hostname lookups' }
         @{ Platform = 'Linux'; Name = 'A4 --scan-lan (Linux)'; Script = "$ep/get-open-port-scan.sh"; Args = @('--scan-lan'); Expect = @(0); Active = 'ping sweep + TCP probes of 11 ports on every device' }
+        # Batch B. B2 without -Passive / --passive sends traffic (gateway, DNS, internet, web).
+        @{ Platform = 'Windows'; Name = 'B1 health snapshot'; Script = "$si/Get-ClientHealthSnapshot.ps1"; Args = @(); Expect = @(0) }
+        @{ Platform = 'Windows'; Name = 'B2 -Passive (configuration only, nothing sent)'; Script = $b2ps; Args = @('-Passive'); Expect = @(0) }
+        @{ Platform = 'Windows'; Name = 'B3 recent critical errors (48 h)'; Script = $b3ps; Args = @(); Expect = @(0) }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'B1 health snapshot (macOS)'; Script = "$si/get-client-health-snapshot.sh"; Args = @(); Expect = @(0) }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'B2 --passive (configuration only, nothing sent)'; Script = $b2sh; Args = @('--passive'); Expect = @(0); MustContain = 'Passive: nothing was sent' }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'B3 recent critical errors (macOS)'; Script = $b3sh; Args = @(); Expect = @(0) }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'B4 --what-if (macOS)'; Script = $b4sh; Args = @('--what-if'); Expect = @(0); MustContain = 'nothing was changed' }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'B4 non-interactive, no --force (must refuse)'; Script = $b4sh; Args = @(); Expect = @(1) }
+        @{ Platform = 'Linux'; Name = 'B1 health snapshot (Linux)'; Script = "$si/get-client-health-snapshot.sh"; Args = @(); Expect = @(0) }
+        @{ Platform = 'Linux'; Name = 'B2 --passive (configuration only, nothing sent)'; Script = $b2sh; Args = @('--passive'); Expect = @(0); MustContain = 'Passive: nothing was sent' }
+        @{ Platform = 'Linux'; Name = 'B3 recent critical errors (Linux)'; Script = $b3sh; Args = @(); Expect = @(0) }
+        @{ Platform = 'Linux'; Name = 'B4 --what-if (Linux)'; Script = $b4sh; Args = @('--what-if'); Expect = @(0); MustContain = 'nothing was changed' }
+        @{ Platform = 'Linux'; Name = 'B4 non-interactive, no --force (must refuse)'; Script = $b4sh; Args = @(); Expect = @(1) }
+        @{ Platform = 'Windows'; Name = 'B2 full connectivity test'; Script = $b2ps; Args = @(); Expect = @(0); Active = 'ping gateway, DNS lookup, TCP 443 to 1.1.1.1/8.8.8.8, HTTP(S) to www.msftconnecttest.com and 3 cloud endpoints' }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'B2 full connectivity test (macOS)'; Script = $b2sh; Args = @(); Expect = @(0); Active = 'ping gateway, DNS lookup, TCP 443 to 1.1.1.1/8.8.8.8, HTTP(S) to www.msftconnecttest.com and 3 cloud endpoints' }
+        @{ Platform = 'Linux'; Name = 'B2 full connectivity test (Linux)'; Script = $b2sh; Args = @(); Expect = @(0); Active = 'ping gateway, DNS lookup, TCP 443 to 1.1.1.1/8.8.8.8, HTTP(S) to www.msftconnecttest.com and 3 cloud endpoints' }
         @{ Platform = 'Windows'; Name = 'D2 -WhatIf with connectivity test'; Script = 'endpoint-systems/remediation/elevated/network-resets/Reset-NetworkStack.ps1'; Args = @('-WhatIf'); Expect = @(0); Active = 'ping gateway, DNS lookup, TCP to www.msftconnecttest.com' }
     )
     if ($AllowActiveNetwork) {
