@@ -657,6 +657,47 @@ check_not 'A8 linux: no ERROR findings' "$OUT" '\[ERROR\]'
 json=$(find "$WORK/a8-linux/export" -name '*.json' 2>/dev/null | head -n 1)
 [ -n "$json" ] && check 'A8 linux: tool ID matches Windows' "$json" '"Id": "A8\.Software\.Remote-access-tool-RustDesk"'
 
+# A8 macOS app folders: /Applications, the user's ~/Applications (one folder level deep), and
+# every user's ~/Applications with --all-users as root. Device commands are stubbed.
+new_env a8-mac
+stub "$BIN" uname 'case "$1" in -s) echo Darwin ;; -n) echo mockmac ;; *) echo Darwin ;; esac'
+stub "$BIN" id 'case "$1" in -u) echo 501 ;; -un) echo alice ;; *) echo "uid=501(alice)" ;; esac'
+stub "$BIN" dscl 'case "$*" in
+    *"-list /Users UniqueID"*) printf "_www 70\nalice 501\nbob 502\n" ;;
+    *"/Groups/admin GroupMembership"*) echo "GroupMembership: root alice" ;;
+    *"/Users/alice NFSHomeDirectory"*) echo "NFSHomeDirectory: /Users/alice" ;;
+    *"/Users/bob NFSHomeDirectory"*) echo "NFSHomeDirectory: /Users/bob" ;;
+    *RealName*) printf "RealName:\n Mock User\n" ;;
+esac'
+# Info.plist files hold just the version; "defaults read FILE KEY" prints it.
+stub "$BIN" defaults '[ "$1" = read ] && [ -f "$2" ] && head -n 1 "$2"'
+for c in system_profiler sysctl sw_vers profiles dsconfigad df uptime last ps; do stub "$BIN" "$c" 'exit 0'; done
+mac_app() { mkdir -p "$FAKE/$1.app/Contents" && printf '%s\n' "$2" >"$FAKE/$1.app/Contents/Info.plist"; }
+mac_app Applications/Safari 18.0
+mac_app Applications/Utilities/Terminal 2.14
+mac_app Users/alice/Applications/AnyDesk 9.0.1
+mac_app 'Users/alice/Applications/Chrome Apps.localized/Gmail' 1.0
+mac_app Users/bob/Applications/TeamViewer 15.50
+OUT="$WORK/a8-mac.txt"
+run_script a8-mac "$A8" "$OUT" --output "$WORK/a8-mac/export"
+check 'A8 mac: /Applications + ~/Applications, one level deep' "$OUT" 'Installed software - 4 app\(s\) in /Applications and ~/Applications'
+check 'A8 mac: app in ~/Applications flagged' "$OUT" '\[WARN\] +Remote-access tool: AnyDesk - installed: AnyDesk 9\.0\.1'
+check_not 'A8 mac: other user'"'"'s ~/Applications not read without --all-users' "$OUT" 'TeamViewer'
+csv=$(find "$WORK/a8-mac/export" -name '*_Software.csv' 2>/dev/null | head -n 1)
+check 'A8 mac: ~/Applications subfolder app with the user as scope' "$csv" 'Gmail.*User: alice'
+run_script a8-mac "$A8" "$OUT.all" --all-users
+check 'A8 mac: --all-users without root = SKIPPED' "$OUT.all" "\\[SKIPPED\\] Other users' software - Skipped: requires root"
+stub "$BIN" id 'case "$1" in -u) echo 0 ;; -un) echo root ;; *) echo "uid=0(root)" ;; esac'
+export SUDO_USER=alice
+run_script a8-mac "$A8" "$OUT.root" --all-users --output "$WORK/a8-mac/export-root"
+unset SUDO_USER
+check 'A8 mac: --all-users as root counts other users' "$OUT.root" "Other users' software - Also listing the apps in 1 other user"
+check 'A8 mac: --all-users lists every user'"'"'s ~/Applications' "$OUT.root" 'Installed software - 5 app\(s\)'
+check 'A8 mac: other user'"'"'s remote tool flagged' "$OUT.root" '\[WARN\] +Remote-access tool: TeamViewer - installed: TeamViewer 15\.50'
+csv=$(find "$WORK/a8-mac/export-root" -name '*_Software.csv' 2>/dev/null | head -n 1)
+check 'A8 mac: under sudo, the user who ran sudo keeps their scope' "$csv" 'AnyDesk.*User: alice'
+check 'A8 mac: other user scope' "$csv" 'TeamViewer.*User: bob'
+
 # =========================================================================================
 for f in "$WORK"/*/network-calls; do
     if [ -s "$f" ]; then FAILED=$((FAILED + 1)); printf 'FAIL: network stub called (%s):\n' "$f"; cat "$f"; else PASSED=$((PASSED + 1)); fi

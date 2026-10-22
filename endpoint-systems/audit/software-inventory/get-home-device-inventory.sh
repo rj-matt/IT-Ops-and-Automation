@@ -6,13 +6,15 @@
 # Get-HomeDeviceInventory.ps1 (same checks and finding IDs).
 #
 # Usage:  bash get-home-device-inventory.sh [--approved-remote-tool NAME[,NAME...]]
-#                                           [--stale-account-days N] [--output DIR]
+#                                           [--stale-account-days N] [--all-users] [--output DIR]
 #
 # Options:
 #   --approved-remote-tool LIST  Remote-access tools the MSP or client uses on purpose (comma
 #                                separated). Matching tools are INFO, not WARN. REPLACES
 #                                approved-remote-tools.txt (next to this script) for this run.
 #   --stale-account-days N       Accounts not used for N days are flagged (14-3650, default 90).
+#   --all-users                  macOS: also list the apps in every other user's ~/Applications.
+#                                Needs root (sudo). Linux packages are already system-wide.
 #   --output DIR                 Also save results as JSON and CSV (toolkit schema 2.0), with
 #                                Device, Users, Profiles, Software and FlaggedSoftware tables.
 #   --help                       Show this help.
@@ -22,14 +24,16 @@
 # Users     Local accounts (UID 500+ on macOS, 1000+ on Linux) with last login and admin rights;
 #           home folders and when each was last used; unused accounts flagged. With sudo on
 #           Linux, accounts allowed to log in with an empty password are flagged.
-# Software  macOS: apps in /Applications (and ~/Applications). Linux: dpkg/rpm packages, snaps
-#           and Flatpaks. Flags remote-access tools (TeamViewer, AnyDesk, RustDesk, VNC ...;
+# Software  macOS: apps in /Applications and the user's ~/Applications (each with one folder level
+#           below it; every user's with --all-users). Linux: dpkg/rpm packages, snaps and
+#           Flatpaks. Flags remote-access tools (TeamViewer, AnyDesk, RustDesk, VNC ...;
 #           scammers install these) and peer-to-peer clients. Running processes are checked
 #           too, because portable remote tools run without being installed.
 #
 # Examples:
 #   bash get-home-device-inventory.sh
 #   bash get-home-device-inventory.sh --approved-remote-tool Kaseya,ScreenConnect --output ~/Desktop/Audit
+#   sudo bash get-home-device-inventory.sh --all-users --output ~/Desktop/Audit
 #
 # Purpose       : Know what this computer is, who uses it, and what is installed on it.
 # Use Case      : Home network security audits; onboarding; "someone has been on my computer" tickets.
@@ -37,10 +41,12 @@
 # Risk Level    : Read-Only -- reads system information, account lists, the app/package lists and
 #                 the process list; changes nothing.
 # Prerequisites : macOS 12+ or Linux | bash 3.2+ | root: No (Linux: sudo adds serial number and
-#                 empty-password check)
-# Version       : 1.0.0
-# Limitations   : macOS apps outside /Applications and portable programs that are not running
-#                 are not listed. Last login comes from the login records (wtmp), which rotate.
+#                 empty-password check; macOS: sudo with --all-users adds other users' apps)
+# Version       : 1.1.0
+# Limitations   : macOS apps outside /Applications and ~/Applications (and one folder level
+#                 below them) and portable programs that are not running are not listed.
+#                 Without --all-users as root, other users' ~/Applications are not listed.
+#                 Linux: other users' per-user Flatpaks are not listed. Last login comes from the login records (wtmp), which rotate.
 #                 Name matching can miss renamed tools. MSP_TEST_ROOT (development tests only)
 #                 prefixes the files read.
 
@@ -898,11 +904,12 @@ msp_complete() {
 #endregion MSPHelper:Core
 #endregion MSPToolkit (generated)
 
-SCRIPT_VERSION='1.0.0'
+SCRIPT_VERSION='1.1.0'
 OUTPUT=''
 APPROVED=''
 APPROVED_GIVEN=0
 STALE_DAYS=90
+ALL_USERS=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --output)
@@ -910,6 +917,7 @@ while [ $# -gt 0 ]; do
             [ -n "$OUTPUT" ] || { printf 'Missing folder after --output\n' >&2; exit 2; }
             shift 2
             ;;
+        --all-users) ALL_USERS=1; shift ;;
         --approved-remote-tool) APPROVED=$(printf '%s' "${2-}" | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep .); APPROVED_GIVEN=1; shift 2 ;;
         --stale-account-days)
             STALE_DAYS=${2-}
@@ -931,8 +939,9 @@ done
 [ -n "$OUTPUT" ] && msp_param Output "$OUTPUT"
 [ "$APPROVED_GIVEN" -eq 1 ] && msp_param ApprovedRemoteTool "$(printf '%s\n' "$APPROVED" | paste -sd ',' -)"
 msp_param StaleAccountDays "$STALE_DAYS"
+[ "$ALL_USERS" -eq 1 ] && msp_param AllUsers 1
 msp_init 'get-home-device-inventory' "$SCRIPT_VERSION" 'A8' 'Read-Only' 'Device, user and software inventory (read-only)' \
-    'serial number and empty-password check (Linux)'
+    'serial number and empty-password check (Linux); other users'' apps (--all-users, macOS)'
 
 ROOT=${MSP_TEST_ROOT:-}
 NOW=$(date +%s)
@@ -1204,16 +1213,53 @@ msp_section 'Installed software'
 # =========================================================================================
 SOFTWARE="${MSP_WORK_DIR:-${TMPDIR:-/tmp}}/software.txt"   # Name|Version|Scope|InstallDate
 : >"$SOFTWARE"
+
+# macOS: users whose ~/Applications is listed, as name|home. The signed-in user (the one who ran
+# sudo, under sudo) always; every other local account with --all-users as root.
+SELF=${SUDO_USER:-$MSP_USER}
+SELF_HOME=''
+[ "$MSP_PLATFORM" = 'macOS' ] && SELF_HOME=$(dscl . -read "/Users/$SELF" NFSHomeDirectory 2>/dev/null | awk '{ print $2 }')
+[ -n "$SELF_HOME" ] || SELF_HOME=$HOME
+APP_HOMES="$SELF|$SELF_HOME"
+if [ "$ALL_USERS" -eq 1 ]; then
+    if [ "$MSP_PLATFORM" = 'macOS' ]; then
+        add_other_homes() {
+            local name home count=0
+            while IFS='|' read -r name _ _ home; do
+                [ -n "$name" ] && [ "$name" != "$SELF" ] && [ -n "$home" ] || continue
+                APP_HOMES="$APP_HOMES
+$name|$home"
+                count=$((count + 1))
+            done <<EOF
+$USER_ROWS
+EOF
+            msp_finding --status INFO --category 'Software' --check "Other users' software" --detail "Also listing the apps in $count other user(s)' ~/Applications."
+        }
+        msp_check --root "Other users' home folders are protected; only /Applications and your own ~/Applications are listed." 'Software' "Other users' software" add_other_homes
+    else
+        msp_finding --status INFO --category 'Software' --check "Other users' software" \
+            --detail 'Packages, snaps and system Flatpaks are installed for all users, so --all-users adds nothing on Linux. Other users'\'' per-user Flatpaks are not listed.'
+    fi
+fi
+
+list_mac_apps() {
+    # list_mac_apps FOLDER SCOPE - apps in FOLDER and one level below it (e.g. /Applications/Utilities).
+    local app v
+    for app in "$1"/*.app "$1"/*/*.app; do
+        [ -f "$app/Contents/Info.plist" ] || continue
+        v=$(defaults read "$app/Contents/Info.plist" CFBundleShortVersionString 2>/dev/null)
+        printf '%s|%s|%s|%s\n' "$(basename "$app" .app)" "$v" "$2" "$(ymd "$(file_mtime "$app")")"
+    done
+}
 list_software() {
     if [ "$MSP_PLATFORM" = 'macOS' ]; then
-        local app v scope
-        for app in "$ROOT"/Applications/*.app "$ROOT"/Applications/*/*.app "$ROOT$HOME"/Applications/*.app; do
-            [ -f "$app/Contents/Info.plist" ] || continue
-            v=$(defaults read "$app/Contents/Info.plist" CFBundleShortVersionString 2>/dev/null)
-            scope='All users'
-            case "$app" in "$ROOT$HOME"/*) scope='This user' ;; esac
-            printf '%s|%s|%s|%s\n' "$(basename "$app" .app)" "$v" "$scope" "$(ymd "$(file_mtime "$app")")"
-        done
+        local name home
+        list_mac_apps "$ROOT/Applications" 'All users'
+        while IFS='|' read -r name home; do
+            [ -n "$name" ] && [ -n "$home" ] && list_mac_apps "$ROOT$home/Applications" "User: $name"
+        done <<EOF
+$APP_HOMES
+EOF
     else
         if msp_have dpkg-query; then
             dpkg-query -W -f '${Package}|${Version}|package|\n' 2>/dev/null
@@ -1231,7 +1277,7 @@ check_software() {
     while IFS='|' read -r name v scope d; do
         [ -n "$name" ] && msp_data_row 'Software' Name "$name" Version "$v" Scope "$scope" InstallDate "$d"
     done <"$SOFTWARE"
-    local what='app(s) in the Applications folders'
+    local what='app(s) in /Applications and ~/Applications'
     [ "$MSP_PLATFORM" = 'Linux' ] && what='package(s), snaps and Flatpaks'
     msp_finding --status INFO --category 'Software' --check 'Installed software' --detail "$count $what."
 }
