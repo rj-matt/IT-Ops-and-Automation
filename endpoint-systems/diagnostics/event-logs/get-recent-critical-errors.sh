@@ -5,11 +5,16 @@
 # failed, application crashes, and (Linux) the error messages in the system journal. The Windows
 # version is Get-RecentCriticalErrors.ps1 (same check names and finding IDs).
 #
-# Usage:  bash get-recent-critical-errors.sh [--hours N] [--include-warnings] [--output DIR]
+# Usage:  bash get-recent-critical-errors.sh [--hours N] [--include-warnings]
+#                                            [--include-system-log] [--output DIR]
 #
 # Options:
 #   --hours N           How far back to look, 1-168 (default 48).
 #   --include-warnings  Linux: also count journal warnings (priority 4) in Error events.
+#   --include-system-log
+#                       macOS: also search the unified system log for kernel disk errors
+#                       (I/O and media errors). Slow: a 48-hour search can take a minute or
+#                       more (stopped after 10 minutes). Linux always reads the journal.
 #   --output DIR        Also save results as JSON and CSV (toolkit schema 2.0), with Events
 #                       (newest 500) and Sources tables.
 #   --help              Show this help.
@@ -19,7 +24,9 @@
 #                    (/Library/Logs/DiagnosticReports)     check messages, kdump folders in /var/crash
 #   Unexpected       a restart with no shutdown recorded   boots that ended in "crash" (last -x)
 #   shutdowns        before it (last reboot shutdown)
-#   Disk errors      SMART status of internal disks        kernel I/O, file system and drive errors
+#   Disk errors      SMART status of internal disks; with  kernel I/O, file system and drive errors
+#                    --include-system-log also kernel I/O
+#                    and media errors in the unified log
 #   Service failures crash reports of system processes     systemd units that failed
 #   Application      crash reports in ~/Library/Logs/      segfaults in the kernel log, apport crash
 #   crashes          DiagnosticReports                     files in /var/crash
@@ -29,6 +36,7 @@
 # Examples:
 #   bash get-recent-critical-errors.sh
 #   bash get-recent-critical-errors.sh --hours 168 --output ~/Desktop/Ticket123
+#   bash get-recent-critical-errors.sh --include-system-log
 #
 # Purpose       : Answer "what has gone wrong on this computer lately?" in one screen.
 # Use Case      : Crashes, freezes, restarts, "it was fine yesterday" tickets.
@@ -38,9 +46,10 @@
 # Prerequisites : macOS 12+ or Linux (systemd journal for most checks) | bash 3.2+ | root: No
 #                 (Linux: sudo, or membership of the adm / systemd-journal group, is needed to
 #                 read system messages)
-# Version       : 1.0.0
-# Limitations   : macOS: the unified log is not searched (a 48-hour search takes minutes), so
-#                 disk errors are judged by SMART status only. Linux: a kernel panic is often not
+# Version       : 1.1.0
+# Limitations   : macOS: the unified log is only searched with --include-system-log (a 48-hour
+#                 search takes a minute or more); without it disk errors are judged by SMART
+#                 status only. Linux: a kernel panic is often not
 #                 written to the journal before the computer stops; it shows up as an unexpected
 #                 shutdown instead. Other users' application crash reports are not listed.
 #                 MSP_TEST_ROOT (development tests only) prefixes the files read.
@@ -918,10 +927,11 @@ msp_complete() {
 #endregion MSPHelper:Core
 #endregion MSPToolkit (generated)
 
-SCRIPT_VERSION='1.0.0'
+SCRIPT_VERSION='1.1.0'
 OUTPUT=''
 HOURS=48
 WARNINGS=0
+SYSTEM_LOG=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --output)
@@ -936,6 +946,7 @@ while [ $# -gt 0 ]; do
             shift 2
             ;;
         --include-warnings) WARNINGS=1; shift ;;
+        --include-system-log) SYSTEM_LOG=1; shift ;;
         -h | --help)
             awk 'NR > 2 && /^#/ { sub(/^# ?/, ""); print; next } NR > 2 { exit }' "$0"
             exit 0
@@ -950,6 +961,7 @@ done
 [ -n "$OUTPUT" ] && msp_param Output "$OUTPUT"
 msp_param Hours "$HOURS"
 [ "$WARNINGS" -eq 1 ] && msp_param IncludeWarnings 1
+[ "$SYSTEM_LOG" -eq 1 ] && msp_param IncludeSystemLog 1
 msp_init 'get-recent-critical-errors' "$SCRIPT_VERSION" 'B3' 'Read-Only' "Crashes, shutdowns, disk/service errors in the last $HOURS hours (read-only)" \
     'system journal messages (Linux, unless in the adm or systemd-journal group)'
 
@@ -1072,12 +1084,35 @@ EOF
             msp_finding --status FAIL --severity High --category 'Stability' --check 'Disk errors' --detail "SMART reports a failing disk: $bad." \
                 --rec 'Back up the client'\''s files now (Time Machine or copy), then replace the disk or the Mac. A failing SMART status does not recover.'
         elif [ -n "$ok" ]; then
-            msp_finding --status PASS --category 'Stability' --check 'Disk errors' --detail "SMART status verified: $ok. (Disk errors in the system log are not searched on macOS.)"
+            msp_finding --status PASS --category 'Stability' --check 'Disk errors' --detail "SMART status verified: $ok.$([ "$SYSTEM_LOG" -eq 1 ] || printf '%s' ' (The system log was not searched; --include-system-log adds it.)')"
         else
             msp_finding --status INFO --category 'Stability' --check 'Disk errors' --detail 'The internal disk does not report SMART status; disk health could not be judged.'
         fi
     }
     msp_check 'Stability' 'Disk errors' check_smart
+
+    check_log_disk() {
+        # Kernel messages only (process == "kernel"), so the search does not match its own
+        # command line, which "log" records too.
+        local out rc lines count items
+        msp_say 33 "  Searching the system log for the last $HOURS hours. This can take a minute or more..."
+        out=$(msp_run_timeout 600 log show --style compact --last "${HOURS}h" \
+            --predicate 'process == "kernel" AND (eventMessage CONTAINS[c] "I/O error" OR eventMessage CONTAINS[c] "media error" OR eventMessage CONTAINS[c] "disk error")' 2>&1)
+        rc=$?
+        if [ "$rc" -ne 0 ]; then
+            [ "$rc" -eq 124 ] && { printf 'timed out\n' >&2; return 1; }
+            printf '%s\n' "$(printf '%s\n' "$out" | head -n 1)" >&2
+            return 1
+        fi
+        lines=$(printf '%s\n' "$out" | grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2} ')
+        count=$(printf '%s\n' "$lines" | grep -c .)
+        items=$(printf '%s\n' "$lines" | grep . | sed 's/^[^ ]* [^ ]* *[A-Za-z]* *kernel[^ ]* //' | cut -c1-90 | awk '!seen[$0]++')
+        stability 'Disk errors in the system log' "$count" FAIL High 'kernel disk error message(s)' "$items" \
+            'Back up the client'\''s files now, then run Disk Utility > First Aid and check the disk'\''s SMART status. Repeated I/O errors usually mean the disk or its cable is failing.'
+    }
+    if [ "$SYSTEM_LOG" -eq 1 ]; then
+        msp_check 'Stability' 'Disk errors in the system log' check_log_disk
+    fi
 
     check_service_crashes() {
         local list count procs
@@ -1103,7 +1138,7 @@ EOF
 
     msp_section 'All critical and error events'
     msp_finding --status INFO --category 'Events' --check 'Error events' \
-        --detail 'Not counted on macOS: the unified log holds thousands of routine errors a day, and searching it takes minutes. The checks above cover panics, shutdowns, disk health and crash reports.'
+        --detail "Not counted on macOS: the unified log holds thousands of routine errors a day. The checks above cover panics, shutdowns, disk health and crash reports$([ "$SYSTEM_LOG" -eq 1 ] && printf '%s' ', plus kernel disk errors from the system log' || printf '%s' '; --include-system-log adds kernel disk errors from the system log (slow)')."
 else
     # =====================================================================================
     msp_section "Journal, last $HOURS hours"

@@ -851,6 +851,11 @@ if [ "$(uname -s)" = 'Darwin' ]; then
     check 'B3 mac: SMART failing = FAIL' "$OUT" '\[FAIL\] +Disk errors - SMART reports a failing disk: disk0 \(MOCK SSD\): Failing'
     check 'B3 mac: system crash report (Jetsam and .diag left out)' "$OUT" '\[WARN\] +Service failures - 1 crash report\(s\) of system processes .*configd x1'
     check 'B3 mac: app crash reports' "$OUT" '\[WARN\] +Application crashes - 2 application crash report\(s\)'
+    check_not 'B3 mac: system log not searched by default' "$OUT" 'Disk errors in the system log'
+    stub "$BIN" log 'printf "Timestamp               Ty Process[PID:TID]\n2026-10-21 10:00:00.123 E  kernel[0:1a2b] disk3s1: I/O error (0xe00002ca)\n"'
+    run_script b3-mac "$B3" "$OUT.log" --include-system-log
+    check 'B3 mac: --include-system-log warns it is slow' "$OUT.log" 'This can take a minute or more'
+    check 'B3 mac: kernel I/O error from the system log = FAIL' "$OUT.log" '\[FAIL\] +Disk errors in the system log - 1 kernel disk error message\(s\) .*disk3s1: I/O error'
 fi
 
 # --- B4 restart-common-services.sh (Linux and macOS; stub service managers record every call) ---
