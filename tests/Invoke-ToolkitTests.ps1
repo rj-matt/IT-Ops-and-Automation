@@ -28,6 +28,8 @@
          tests/Test-ExportSecurityAuditReportIds.ps1 (A9 old/new finding IDs),
          tests/Test-ExportSecurityAuditReportMixed.ps1 (A9 with Windows, macOS and Linux results),
          tests/Test-HomeAuditBundleWindowsLogic.ps1 (Windows bundle -Passive, mocked Start-Process),
+         tests/Test-BatchCCloudLogic.ps1 (C1/C2 against mocked Exchange Online / Graph cmdlets),
+         tests/Test-SuspiciousActivityWindowsLogic.ps1 (C3 Windows against mocked cmdlets),
          tests/Test-BatchBWindowsLogic.ps1 (B1-B3 Windows scripts against mocked cmdlets) and
          tests/bash/test-scripts-mocked.sh under every bash (Linux scripts, Linux branches and
          macOS paths not reachable here, with stub commands; no network traffic is possible)
@@ -487,6 +489,8 @@ $logic = @(
     @{ Name = 'A9 coverage, router and device checklists from Windows, macOS and Linux results'; File = 'Test-ExportSecurityAuditReportMixed.ps1' }
     @{ Name = 'B1-B3 Windows scripts against mocked cmdlets'; File = 'Test-BatchBWindowsLogic.ps1' }
     @{ Name = 'Windows bundle -Passive (mocked Start-Process; A2 -Passive, A7 not run)'; File = 'Test-HomeAuditBundleWindowsLogic.ps1' }
+    @{ Name = 'C1/C2 against mocked Exchange Online and Graph (5.1: refusal only)'; File = 'Test-BatchCCloudLogic.ps1' }
+    @{ Name = 'C3 Windows against mocked cmdlets'; File = 'Test-SuspiciousActivityWindowsLogic.ps1' }
 )
 foreach ($t in $logic) {
     foreach ($h in $hosts) {
@@ -599,6 +603,9 @@ else {
         @{ Platform = 'Windows'; Name = 'B1 health snapshot'; Script = "$si/Get-ClientHealthSnapshot.ps1"; Args = @(); Expect = @(0) }
         @{ Platform = 'Windows'; Name = 'B2 -Passive (configuration only, nothing sent)'; Script = $b2ps; Args = @('-Passive'); Expect = @(0) }
         @{ Platform = 'Windows'; Name = 'B3 recent critical errors (48 h)'; Script = $b3ps; Args = @(); Expect = @(0) }
+        @{ Platform = 'Windows'; Name = 'C3 suspicious activity triage'; Script = "$ep/Get-SuspiciousActivityReport.ps1"; Args = @(); Expect = @(0) }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'C3 suspicious activity triage (macOS)'; Script = "$ep/get-suspicious-activity-report-macos.sh"; Args = @(); Expect = @(0) }
+        @{ Platform = 'Linux'; Name = 'C3 suspicious activity triage (Linux)'; Script = "$ep/get-suspicious-activity-report-linux.sh"; Args = @(); Expect = @(0) }
         @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'B1 health snapshot (macOS)'; Script = "$si/get-client-health-snapshot.sh"; Args = @(); Expect = @(0) }
         @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'B2 --passive (configuration only, nothing sent)'; Script = $b2sh; Args = @('--passive'); Expect = @(0); MustContain = 'Passive: nothing was sent' }
         @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'B3 recent critical errors (macOS)'; Script = $b3sh; Args = @(); Expect = @(0) }
