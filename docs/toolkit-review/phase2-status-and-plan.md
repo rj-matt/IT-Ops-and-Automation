@@ -23,9 +23,9 @@ the schema and shared-helper changes in sections 2 and 5, which every Batch A sc
 | B2 | Get-NetworkConnectivityReport / get-network-connectivity-report.sh | endpoint-systems/diagnostics/networking/ | Read-Only | built (B; `-Passive` mocked; Windows run pending) | good (B; `--passive` run on macOS 26; active: stub-tested, not run) | built (B; stub-tested only) |
 | B3 | Get-RecentCriticalErrors / get-recent-critical-errors.sh | endpoint-systems/diagnostics/event-logs/ | Read-Only | built (B; mocked-cmdlet tests; Windows run pending) | good (B; run on macOS 26) | built (B; stub-tested only) |
 | B4 | Restart-CommonServices / restart-common-services.sh | endpoint-systems/remediation/safe/restart-services/ | Safe | built (safety fixes; Windows run pending) | built (B; `--what-if` and refusal run on macOS 26; changes stub-tested only, sudo not used) | built (B; stub-tested only) |
-| C1 | Get-UserMailboxStatus (PS 7) | cloud-services/m365/diagnostics/ | Read-Only | needs fixes | needs fixes (untested on pwsh) | needs fixes (untested on pwsh) |
-| C2 | Get-UserLicenseReport (PS 7) | cloud-services/m365/diagnostics/ (move) | Read-Only | needs fixes (does not parse) | needs fixes | needs fixes |
-| C3 | Get-SuspiciousActivityReport / get-suspicious-activity-report-{macos,linux}.sh | security-operations/diagnostics/endpoint-posture/ | Read-Only | missing | missing | missing |
+| C1 | Get-UserMailboxStatus (PS 7) | cloud-services/m365/diagnostics/ | Read-Only | built (C; mocked cmdlets; not run on Windows; no tenant) | built (C; mocked cmdlets on pwsh 7; no tenant) | built (C; not run on Linux) |
+| C2 | Get-UserLicenseReport (PS 7) | cloud-services/m365/diagnostics/ (moved) | Read-Only | built (C; mocked cmdlets; not run on Windows; no tenant) | built (C; mocked cmdlets on pwsh 7; no tenant) | built (C; not run on Linux) |
+| C3 | Get-SuspiciousActivityReport / get-suspicious-activity-report-{macos,linux}.sh | security-operations/diagnostics/endpoint-posture/ | Read-Only | built (C; mocked cmdlets; not run on Windows) | good (C; run on macOS 26, no sudo) | built (C; stub-tested only) |
 | D1 | Clear-WindowsUpdateCache | endpoint-systems/remediation/safe/clear-caches/ | Safe | needs fixes (rename not delete, dry run) | N/A | N/A |
 | D2 | Reset-NetworkStack | endpoint-systems/remediation/elevated/network-resets/ (rename) | Elevated | needs fixes (exit codes, overclaim, dry run) | N/A | N/A |
 | D3 | Reset-OutlookProfile | cloud-services/m365/remediation/ | Elevated | needs fixes (keep old profile, overclaim) | N/A | N/A |
@@ -38,7 +38,8 @@ Nothing was rated **good** at Phase 2: the schema change (section 2) reaches eve
 Updated after steps A-1 (A1-A4) and A-2 (A5-A8): "good" = built to standard and run on that platform; "built" =
 built to standard, logic tested with stubbed commands, not yet run on a real machine of that
 platform. The A-1 Windows changes were parse- and analyzer-checked on pwsh 7 only.
-Current status, open items and hand tests for each batch: `batch-a-summary.md`, `batch-b-summary.md`.
+Current status, open items and hand tests for each batch: `batch-a-summary.md`, `batch-b-summary.md`,
+`batch-c-summary.md`.
 
 **Planned macOS/Linux splits** (single shared `.sh` otherwise): A1, A3, A6, C3. In each, the two
 platforms share almost no commands (FileVault/SIP/Gatekeeper vs LUKS/ufw/firewalld; `system_profiler`/`wdutil`

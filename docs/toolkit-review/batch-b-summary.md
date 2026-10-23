@@ -17,10 +17,10 @@ Stubbed bash tests: 284 passed under bash 3.2 and 5.3. Mocked Windows logic test
 
 | ID | Windows | macOS | Linux |
 |---|---|---|---|
-| B1 health snapshot | built, mocked | run | stubbed only |
-| B2 connectivity | built, `-Passive` mocked | run (`--passive` only) | stubbed only |
-| B3 recent errors | built, mocked | run | stubbed only |
-| B4 restart services | built (earlier fix) | run (`--what-if`, refusal) | stubbed only |
+| B1 health snapshot | not run on Windows; mocked | run | stubbed only |
+| B2 connectivity | not run on Windows; `-Passive` mocked | run (`--passive` only) | stubbed only |
+| B3 recent errors | not run on Windows; mocked | run | stubbed only |
+| B4 restart services | not run on Windows (earlier fix) | run (`--what-if`, refusal) | stubbed only |
 
 B4 on macOS has not changed anything for real: only `--what-if` and the "not root" refusal ran.
 Its restart and cache-clearing paths ran against stub `launchctl`, `dscacheutil` and `killall`.

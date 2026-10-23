@@ -1,6 +1,6 @@
 # Batch A summary (A1-A9)
 
-Updated 2026-10-23. Built in steps A-1 (A1-A4), A-2 (A5-A8) and A-3 (A9 for every platform,
+Updated 2026-10-23 (Windows bundle `-Passive` added after the A-3 stop). Built in steps A-1 (A1-A4), A-2 (A5-A8) and A-3 (A9 for every platform,
 device checklist, macOS/Linux bundle), plus the A9 finding-ID fix, the A6 support-date review
 and the A8 `~/Applications` change. Development machine: macOS 26 (Apple silicon),
 PowerShell 7, bash 3.2.57 and 5.3, ShellCheck, PSScriptAnalyzer.
@@ -14,28 +14,31 @@ PowerShell 7 (23 of the 32 fail against A9 1.2.0).
 ## Status
 
 - **run**: run for real on that platform (passive, without sudo unless noted).
-- **built**: written to standard; parse, analyzer and logic checks only; not run there.
+- **not run on Windows**: written to standard; parse, analyzer and (where noted) mocked logic
+  checks on PowerShell 7 on macOS only. No Windows machine has run any Batch A change yet.
+- **built**: the same for macOS/Linux: not run on that platform.
 - **stubbed only**: logic run against stub commands and a fake file system on macOS.
   No Linux machine has run any of it.
 
 | ID | Windows | macOS | Linux |
 |---|---|---|---|
-| A1 endpoint security | built | run | stubbed only |
-| A2 network map | built | run (`--passive` only) | stubbed only |
-| A3 Wi-Fi | built | run | stubbed only |
-| A4 open ports | built | run (no `--scan-lan`) | stubbed only |
-| A5 browsers | built | run | stubbed only |
-| A6 updates | built | run (no `--online`) | stubbed only |
-| A7 router | built | stubbed only (active) | stubbed only |
-| A8 inventory | built | run | stubbed only |
-| A9 report | built (not changed for Windows; 5.1 not run) | run (pwsh 7, mixed set below) | not run |
-| Bundle | built (unchanged) | run (`--passive`, without sudo) | stubbed only |
+| A1 endpoint security | not run on Windows | run | stubbed only |
+| A2 network map | not run on Windows | run (`--passive` only) | stubbed only |
+| A3 Wi-Fi | not run on Windows | run | stubbed only |
+| A4 open ports | not run on Windows | run (no `--scan-lan`) | stubbed only |
+| A5 browsers | not run on Windows | run | stubbed only |
+| A6 updates | not run on Windows | run (no `--online`) | stubbed only |
+| A7 router | not run on Windows | stubbed only (active) | stubbed only |
+| A8 inventory | not run on Windows | run | stubbed only |
+| A9 report | not run on Windows (5.1 or 7); mixed-platform test mocked | run (pwsh 7, mixed set below) | not run |
+| Bundle | not run on Windows; `-Passive` mocked | run (`--passive`, without sudo) | stubbed only |
 
 ## Done in step A-3
 
 | Commit | Change |
 |---|---|
 | `d7eaef0` | B3 macOS 1.1.0: opt-in `--include-system-log` (see `batch-b-summary.md`) |
+| `a632f1c` | Windows bundle 1.2.0: `-Passive` (A2 `-Passive`, A7 not run, refused with `-ScanLan` / `-OnlineUpdateSearch`); mocked test (`tests/Test-HomeAuditBundleWindowsLogic.ps1`, 19 checks) and a Windows harness runtime case |
 | `ca105d9` | A9 1.3.0: coverage, areas and bundle lines keyed on the check ID (A1-A8), so macOS/Linux results fill the same rows; router checklist from any A7; "Other devices checklist" section; OS version per device. `run-home-audit-bundle.sh` 1.0.0. Tests, harness cases, README |
 
 A9 test with a mixed set (PowerShell 7 on this Mac,
@@ -68,8 +71,7 @@ device was listed twice. The report and result files stayed in the session's tem
 
 ## Open items in Batch A
 
-1. **Windows bundle update** (named in the plan's step A-3) was not changed: A9 already reads
-   its results. A `-Passive` switch to match `--passive` was not added; say if you want it.
+1. **Windows bundle update**: `-Passive` added (`a632f1c`). Not run on Windows.
 2. **A9 on Windows PowerShell 5.1** has not run since the A-3 changes; the harness on Windows
    runs both A9 tests on 5.1 and 7.
 3. B1-B3 are not in the bundle or the coverage table (ticket tools, run on their own).
@@ -87,8 +89,8 @@ PowerShell 5.1, once from a normal window and once from "Run as administrator":
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Invoke-ToolkitTests.ps1
 ```
 
-That runs A1-A8 passive, the bundle with A9, both A9 logic tests (including the
-Windows/macOS/Linux mix) on 5.1 and 7, and B4/D1/D2/D3 with `-WhatIf` / `-BackupOnly` / the
+That runs A1-A8 passive, the bundle with A9, the bundle with `-Passive`, both A9 logic tests
+(including the Windows/macOS/Linux mix) and the mocked bundle test on 5.1 and 7, and B4/D1/D2/D3 with `-WhatIf` / `-BackupOnly` / the
 non-interactive refusal. Then, as administrator:
 
 ```powershell
