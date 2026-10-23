@@ -1,12 +1,15 @@
 # Batch A summary (A1-A9)
 
-Updated 2026-10-21. Built in steps A-1 (A1-A4) and A-2 (A5-A8), plus the A9 finding-ID fix,
-the A6 support-date review and the A8 `~/Applications` change. Development machine: macOS 26
-(Apple silicon), PowerShell 7, bash 3.2.57 and 5.3, ShellCheck, PSScriptAnalyzer.
+Updated 2026-10-23. Built in steps A-1 (A1-A4), A-2 (A5-A8) and A-3 (A9 for every platform,
+device checklist, macOS/Linux bundle), plus the A9 finding-ID fix, the A6 support-date review
+and the A8 `~/Applications` change. Development machine: macOS 26 (Apple silicon),
+PowerShell 7, bash 3.2.57 and 5.3, ShellCheck, PSScriptAnalyzer.
 
 Harness on macOS (`pwsh -NoProfile -File tests/Invoke-ToolkitTests.ps1`, passive):
-69 steps, 28 passed, 0 failed, 41 not run (other platforms, sudo, active network).
-Stubbed bash tests (`tests/bash/test-scripts-mocked.sh`): 200 passed under bash 3.2 and 5.3.
+91 steps, 36 passed, 0 failed, 55 not run (other platforms, sudo, active network).
+Stubbed bash tests (`tests/bash/test-scripts-mocked.sh`): 310 passed under bash 3.2 and 5.3.
+Mixed-platform A9 test (`tests/Test-ExportSecurityAuditReportMixed.ps1`): 32 passed on
+PowerShell 7 (23 of the 32 fail against A9 1.2.0).
 
 ## Status
 
@@ -25,42 +28,51 @@ Stubbed bash tests (`tests/bash/test-scripts-mocked.sh`): 200 passed under bash 
 | A6 updates | built | run (no `--online`) | stubbed only |
 | A7 router | built | stubbed only (active) | stubbed only |
 | A8 inventory | built | run | stubbed only |
-| A9 report | built | run (pwsh 7), gaps below | not run |
-| Bundle | built | missing | missing |
+| A9 report | built (not changed for Windows; 5.1 not run) | run (pwsh 7, mixed set below) | not run |
+| Bundle | built (unchanged) | run (`--passive`, without sudo) | stubbed only |
 
-## Done since the A-2 stop
+## Done in step A-3
 
 | Commit | Change |
 |---|---|
-| `57a43f7` | A6 macOS/Linux 1.1.0: every support-table row has its official source URL and a verified-on date; unconfirmed rows say so in the finding |
-| `3c5d558` | A8 1.1.0: macOS `~/Applications` (one folder deep); `--all-users` (root) adds every user's `~/Applications` |
-| `9523d99` | Bash helper fix (with Batch B): a data table first filled inside a pipeline was left out of the export and the next table got its rows (A6 macOS `RecentUpdates` / `PendingUpdates`); regenerated in every bash script |
+| `d7eaef0` | B3 macOS 1.1.0: opt-in `--include-system-log` (see `batch-b-summary.md`) |
+| `ca105d9` | A9 1.3.0: coverage, areas and bundle lines keyed on the check ID (A1-A8), so macOS/Linux results fill the same rows; router checklist from any A7; "Other devices checklist" section; OS version per device. `run-home-audit-bundle.sh` 1.0.0. Tests, harness cases, README |
 
-A6 dates not confirmed by an official source (marked `unverified` in the scripts):
+A9 test with a mixed set (PowerShell 7 on this Mac,
+`tests/Test-ExportSecurityAuditReportMixed.ps1 -ExtraInputPath <mac>,<linux>`):
 
-| Row | Why |
-|---|---|
-| macOS 15 expected end (2027-09) | Apple publishes no end dates; estimate from past releases |
-| Pop!_OS 22.04, 24.04 | System76 publishes no end dates |
-| Fedora 43, 44, 45 | EOL is 4 weeks after release N+2; Fedora 45 had not shipped on 2026-10-21; the Fedora schedule pages block automated readers |
-| RHEL 9, 10 | The Red Hat life-cycle page did not show its dates table |
+| Source | Platform | How produced |
+|---|---|---|
+| Made-up results (in the test) | Windows | A1, A2 with devices, A7 checklist answers, a bundle result with one skipped and one failed script |
+| `run-home-audit-bundle.sh --passive` on this Mac | macOS | Real run, no sudo, nothing sent: A1-A6 and A8 completed, A7 not run (passive) |
+| `run-home-audit-bundle.sh --passive` under the stubs | Linux | `test-scripts-mocked.sh --keep`, stub commands only |
 
-Fedora 42 (2026-05-27) came from a search-index copy of the Fedora EOL page, because the page
-itself blocks automated readers. Ubuntu 22.04 and 24.04 use the May dates from
-ubuntu.com/about/release-cycle; Ubuntu's release-team list says June for the same releases.
+Result: every macOS and Linux script appears in the coverage table under its check name; A7
+"Not run" shows the bundle's reason; Windows and bash A7 answers are both in the router
+checklist; the devices found by the Mac's and the Linux A2 are listed once each, without the
+router or the computers in the report. One bug was found and fixed before the commit:
+Windows writes MAC addresses as `AA-BB-...` and macOS/Linux as `aa:bb:...`, so the same
+device was listed twice. The report and result files stayed in the session's temporary folder
+(they name this Mac and the devices on its network) and were not committed.
+
+`run-home-audit-bundle.sh` decisions:
+
+1. **`--passive`** (not in the Windows bundle): A2 reads the neighbor table only and A7 is not
+   run, because every A7 check talks to the router. Refused together with `--scan-lan` or
+   `--online`. Without it the bundle behaves like the Windows one (A2 ping sweep, A7 run).
+2. **`--include-router-checklist`**: A7 then runs at the terminal with no time limit (the
+   questions take as long as the client does). Without a terminal it falls back to
+   "Not verified", as A7 does on its own.
+3. **The A9 report** needs PowerShell 7. With `--technician` and no `pwsh`, the bundle prints
+   the command to run on another computer.
 
 ## Open items in Batch A
 
-Step A-3 from the plan is not done yet. Found while catching up:
-
-1. **A9 coverage table ignores macOS/Linux results.** It looks results up by the Windows script
-   names, so a Mac's A1-A8 results show as "Not run" (seen in a report built from this Mac's
-   harness results). Fix: match on `CheckId`.
-2. **A9 router checklist ignores the bash A7.** It filters on
-   `ScriptName -eq 'Get-RouterSecurityCheck'`, so checklist answers from
-   `get-router-security-check.sh` are left out. Fix: match on `CheckId` `A7`.
-3. **Not built:** the A9 manual device checklist (phones, TVs, consoles, IoT),
-   `run-home-audit-bundle.sh` for macOS/Linux, and the Windows bundle update.
+1. **Windows bundle update** (named in the plan's step A-3) was not changed: A9 already reads
+   its results. A `-Passive` switch to match `--passive` was not added; say if you want it.
+2. **A9 on Windows PowerShell 5.1** has not run since the A-3 changes; the harness on Windows
+   runs both A9 tests on 5.1 and 7.
+3. B1-B3 are not in the bundle or the coverage table (ticket tools, run on their own).
 
 ## Outstanding hand tests
 
@@ -75,8 +87,9 @@ PowerShell 5.1, once from a normal window and once from "Run as administrator":
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Invoke-ToolkitTests.ps1
 ```
 
-That runs A1-A8 passive, the bundle with A9, and B4/D1/D2/D3 with `-WhatIf` / `-BackupOnly` /
-the non-interactive refusal. Then, as administrator:
+That runs A1-A8 passive, the bundle with A9, both A9 logic tests (including the
+Windows/macOS/Linux mix) on 5.1 and 7, and B4/D1/D2/D3 with `-WhatIf` / `-BackupOnly` / the
+non-interactive refusal. Then, as administrator:
 
 ```powershell
 $o = "$env:TEMP\MSP-Toolkit\hand"
@@ -85,6 +98,16 @@ $o = "$env:TEMP\MSP-Toolkit\hand"
 ```
 
 Check: A1 shows BitLocker, TPM and SMBv1 without SKIPPED; A6 resolves this PC's build.
+
+Combined report on 5.1: put the PC's bundle folder and a Mac's `run-home-audit-bundle.sh`
+folder (copied from the Mac) under one parent folder, then:
+
+```powershell
+.\security-operations\diagnostics\Export-SecurityAuditReport.ps1 -InputPath <parent> -Recurse -TechnicianName "Test"
+```
+
+Check: the Mac's rows in Coverage show dates (not "Not run"); "Other devices checklist" lists
+the devices from both A2 runs once each; the report opens and prints (the checkboxes print).
 
 ### macOS with sudo
 
@@ -95,11 +118,14 @@ sudo bash security-operations/diagnostics/endpoint-posture/get-endpoint-security
 sudo bash core-infrastructure/networking/diagnostics/get-wifi-security-audit-macos.sh --output "$o"
 sudo bash endpoint-systems/diagnostics/system-info/get-browser-security-check.sh --all-users --output "$o"
 sudo bash endpoint-systems/audit/software-inventory/get-home-device-inventory.sh --all-users --output "$o"
+sudo bash security-operations/diagnostics/run-home-audit-bundle.sh --passive --all-users --technician "Test" --output "$o"
 ```
 
 Check: A1 FileVault recovery key check runs; A3 lists security types of saved networks;
 A5 and A8 list other users (A8: "Also listing the apps in N other user(s)' ~/Applications",
 `User: <name>` scopes in the Software CSV, and your own apps still under your name, not root).
+The bundle shows "Elevated: Yes", runs A5 and A8 with `--all-users`, and writes
+`SecurityAuditReport_*.html` into its `HomeAudit_*` folder.
 Delete `/tmp/msp-hand` afterwards (it holds account and app names).
 
 ### Real Linux runs (all Linux results so far are stubbed only)
@@ -122,11 +148,15 @@ sudo bash security-operations/diagnostics/endpoint-posture/get-endpoint-security
 sudo bash security-operations/diagnostics/endpoint-posture/get-open-port-scan.sh --output "$o"
 sudo bash endpoint-systems/diagnostics/system-info/get-browser-security-check.sh --all-users --output "$o"
 sudo bash endpoint-systems/audit/software-inventory/get-home-device-inventory.sh --output "$o"
+bash security-operations/diagnostics/run-home-audit-bundle.sh --passive --output "$o"
+sudo bash security-operations/diagnostics/run-home-audit-bundle.sh --passive --technician "Test" --output "$o"
 ```
 
 Check: no ERROR findings; A6 finds the distribution in its table; A1 with sudo shows root
 password status and the running SSH settings; A8 with sudo shows the serial number and the
-empty-password check.
+empty-password check. The bundle runs the `-linux.sh` scripts, all "Completed" except A7
+("Skipped (passive)"); the `--technician` run builds the report only if `pwsh` is installed,
+otherwise it prints the command.
 
 ### Active network (each run needs your approval; name the subnet first)
 
@@ -144,6 +174,7 @@ Or one at a time:
 | macOS, Linux | `bash core-infrastructure/networking/diagnostics/get-home-network-map.sh` | ping sweep + name lookups, local subnet |
 | macOS, Linux | `bash security-operations/diagnostics/endpoint-posture/get-open-port-scan.sh --scan-lan` | ping + 11 TCP ports per device |
 | macOS, Linux | `bash core-infrastructure/networking/diagnostics/get-router-security-check.sh` | HTTP/TCP to the gateway, SSDP |
+| macOS, Linux | `bash security-operations/diagnostics/run-home-audit-bundle.sh --include-router-checklist --technician "Test"` | A2 ping sweep + name lookups, A7 (HTTP/TCP to the gateway, SSDP); asks the router checklist |
 | macOS | `bash endpoint-systems/diagnostics/system-info/get-update-compliance-macos.sh --online` | Apple update servers |
 | Linux | `bash endpoint-systems/diagnostics/system-info/get-update-compliance-linux.sh --online` | package servers, Snap Store |
 | Windows | `.\core-infrastructure\networking\diagnostics\Get-HomeNetworkMap.ps1` | ping sweep + reverse DNS |

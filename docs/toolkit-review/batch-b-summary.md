@@ -43,9 +43,11 @@ Design choices to review:
    the network for a few seconds, which also drops a remote session. It runs only when named.
 3. **B4 macOS mDNSResponder** is never restarted: its DNS cache is cleared with Apple's method
    (`dscacheutil -flushcache; killall -HUP mDNSResponder`), like Windows' DNS Client.
-4. **B3 macOS** does not search the unified log: a 48-hour search took 77 s on this Mac. It
-   reads panic and crash report names and dates, `last reboot shutdown`, and SMART status.
-   Disk errors on macOS are therefore SMART only.
+4. **B3 macOS** does not search the unified log by default: a 48-hour search took 77 s on this
+   Mac. It reads panic and crash report names and dates, `last reboot shutdown`, and SMART
+   status. `--include-system-log` (1.1.0, `d7eaef0`) adds a search of kernel I/O, media and
+   disk errors in the window; it warns that this can take a minute or more (45 s for 48 hours
+   on this Mac) and stops after 10 minutes.
 5. **B3 Linux without journal access** reports the journal checks as SKIPPED (with the sudo
    command), never as "none found".
 
@@ -59,9 +61,7 @@ bash script (regenerated helper) and has a helper unit test that fails without i
 
 ## Open items
 
-- Batch A step A-3 is still open: A9 coverage and router-checklist sections match Windows script
-  names only, the device checklist and `run-home-audit-bundle.sh` are not built
-  (see `batch-a-summary.md`).
+- Batch A step A-3 is done (see `batch-a-summary.md`).
 - B1-B3 are not in the home-audit bundle or the A9 report's coverage table; they are ticket
   tools, run on their own.
 
