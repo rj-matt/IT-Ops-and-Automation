@@ -27,6 +27,12 @@
     Parent folder for results. A sub-folder HomeAudit_<COMPUTER>_<yyyyMMdd-HHmmss> is created
     in it. Default: %TEMP%\MSP-Toolkit.
 
+.PARAMETER Passive
+    Send nothing beyond this PC: Get-HomeNetworkMap reads the ARP/neighbor table only (no ping
+    sweep, no name lookups) and Get-RouterSecurityCheck is not run, because every router check
+    talks to the router. Cannot be combined with -ScanLan or -OnlineUpdateSearch. Same as
+    run-home-audit-bundle.sh --passive.
+
 .PARAMETER ScanLan
     Let Get-OpenPortScan also check other devices on the local subnet for risky open ports.
 
@@ -70,14 +76,19 @@
     powershell.exe -ExecutionPolicy Bypass -File .\Invoke-HomeAuditBundle.ps1 -ScanLan -IncludeRouterChecklist -TechnicianName "J. Smith" -ClientName "Smith household"
     Full audit with LAN port check, router questions, and the HTML report.
 
+.EXAMPLE
+    powershell.exe -ExecutionPolicy Bypass -File .\Invoke-HomeAuditBundle.ps1 -Passive
+    Nothing is sent on the network; A2 lists only devices already in the ARP table and A7 is not run.
+
 .NOTES
     Purpose       : One command for the whole home network audit on a PC.
     Use Case      : Home network security audits (run on each PC the client wants checked).
     Scope         : This PC, its local subnet (A2; A4 with -ScanLan) and its default gateway (A7).
+                    With -Passive: this PC only.
     Risk Level    : Read-Only -- runs read-only scripts and writes result files only.
     Prerequisites : Windows PowerShell 5.1 | Admin: No (recommended: Yes, for complete results) |
                     Modules: built-in only | The eight audit scripts must be present (see .DESCRIPTION)
-    Version       : 1.1.0
+    Version       : 1.2.0
     Limitations   : Runs on the local PC only; repeat on each PC to audit. Per-script output
                     appears on screen as each one runs; each script's own log is in
                     %TEMP%\MSP-Toolkit.
@@ -85,6 +96,7 @@
 [CmdletBinding()]
 param(
     [string]$OutputPath = (Join-Path -Path $env:TEMP -ChildPath 'MSP-Toolkit'),
+    [switch]$Passive,
     [switch]$ScanLan,
     [string]$HomeSsid,
     [switch]$OnlineUpdateSearch,
@@ -712,7 +724,7 @@ function Complete-MSPRun {
 #endregion MSPHelper:Core
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '1.1.0'
+$ScriptVersion = '1.2.0'
 Initialize-MSPRun -ScriptName 'Invoke-HomeAuditBundle' -ScriptVersion $ScriptVersion -CheckId 'Bundle' -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'Home network audit: runs A1-A8 and collects the results'
 
@@ -759,6 +771,13 @@ function ConvertTo-ArgumentText {
 # =========================================================================================
 Write-MSPSection -Title 'Setup'
 # =========================================================================================
+if ($Passive -and ($ScanLan -or $OnlineUpdateSearch)) {
+    Add-MSPFinding -Check 'Options' -Category 'Setup' -Status ERROR `
+        -Detail '-Passive cannot be combined with -ScanLan or -OnlineUpdateSearch (both send network traffic). Nothing was run.' `
+        -Recommendation 'Run again with either -Passive or the network options.'
+    Complete-MSPRun
+    exit 2
+}
 $runFolder = $null
 Invoke-MSPCheck -Name 'Results folder' -Category 'Setup' -ScriptBlock {
     $folder = Join-Path -Path $OutputPath -ChildPath ('HomeAudit_{0}_{1}' -f $env:COMPUTERNAME, (Get-Date).ToString('yyyyMMdd-HHmmss'))
@@ -773,6 +792,10 @@ if (-not $runFolder) {
 if (-not $script:MSPRun.IsAdmin) {
     Add-MSPFinding -Check 'Administrator' -Category 'Setup' -Status INFO `
         -Detail 'Not running as administrator: BitLocker, TPM, SMBv1 and other-user checks will show SKIPPED. For complete results, re-run from PowerShell opened with "Run as administrator".'
+}
+if ($Passive) {
+    Add-MSPFinding -Check 'Passive mode' -Category 'Setup' -Status INFO `
+        -Detail 'Nothing is sent on the network: Get-HomeNetworkMap reads the ARP table only and Get-RouterSecurityCheck is not run.'
 }
 $powershellExe = Join-Path -Path $PSHOME -ChildPath 'powershell.exe'
 if (-not (Test-Path -LiteralPath $powershellExe)) { $powershellExe = 'powershell.exe' }
@@ -789,6 +812,11 @@ foreach ($item in $plan) {
         $results.Add([pscustomobject]@{ Step = $step; Script = $name; Result = 'Skipped'; Seconds = 0; PASS = ''; WARN = ''; FAIL = ''; ERROR = '' })
         continue
     }
+    if ($Passive -and $name -eq 'Get-RouterSecurityCheck') {
+        Add-MSPFinding -Check $name -Category 'Run' -Status SKIPPED -Detail 'Not run with -Passive: every router check sends traffic to the router.'
+        $results.Add([pscustomobject]@{ Step = $step; Script = $name; Result = 'Skipped (passive)'; Seconds = 0; PASS = ''; WARN = ''; FAIL = ''; ERROR = '' })
+        continue
+    }
     $path = Find-ToolkitScript -Name $name -RelativeFolder $item.Path
     if (-not $path) {
         Add-MSPFinding -Check $name -Category 'Run' -Status ERROR -Detail ('Script file {0}.ps1 was not found next to this script or in {1}.' -f $name, $item.Path) `
@@ -802,6 +830,7 @@ foreach ($item in $plan) {
     $arguments = New-Object System.Collections.Generic.List[string]
     foreach ($a in @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (ConvertTo-ArgumentText $path), '-OutputPath', (ConvertTo-ArgumentText $runFolder))) { $arguments.Add($a) }
     switch ($name) {
+        'Get-HomeNetworkMap' { if ($Passive) { $arguments.Add('-Passive') } }
         'Get-WiFiSecurityAudit' { if ($HomeSsid) { $arguments.Add('-HomeSsid'); $arguments.Add((ConvertTo-ArgumentText $HomeSsid)) } }
         'Get-OpenPortScan' { if ($ScanLan) { $arguments.Add('-ScanLan') } }
         'Get-BrowserSecurityCheck' { if ($AllUsers -and $script:MSPRun.IsAdmin) { $arguments.Add('-AllUsers') } }

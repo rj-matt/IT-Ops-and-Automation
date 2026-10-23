@@ -27,6 +27,7 @@
          tests/Test-ClearWindowsUpdateCacheLogic.ps1 (D1 repeat runs),
          tests/Test-ExportSecurityAuditReportIds.ps1 (A9 old/new finding IDs),
          tests/Test-ExportSecurityAuditReportMixed.ps1 (A9 with Windows, macOS and Linux results),
+         tests/Test-HomeAuditBundleWindowsLogic.ps1 (Windows bundle -Passive, mocked Start-Process),
          tests/Test-BatchBWindowsLogic.ps1 (B1-B3 Windows scripts against mocked cmdlets) and
          tests/bash/test-scripts-mocked.sh under every bash (Linux scripts, Linux branches and
          macOS paths not reachable here, with stub commands; no network traffic is possible)
@@ -485,6 +486,7 @@ $logic = @(
     @{ Name = 'A9 reports a check once across result versions and platforms'; File = 'Test-ExportSecurityAuditReportIds.ps1' }
     @{ Name = 'A9 coverage, router and device checklists from Windows, macOS and Linux results'; File = 'Test-ExportSecurityAuditReportMixed.ps1' }
     @{ Name = 'B1-B3 Windows scripts against mocked cmdlets'; File = 'Test-BatchBWindowsLogic.ps1' }
+    @{ Name = 'Windows bundle -Passive (mocked Start-Process; A2 -Passive, A7 not run)'; File = 'Test-HomeAuditBundleWindowsLogic.ps1' }
 )
 foreach ($t in $logic) {
     foreach ($h in $hosts) {
@@ -549,6 +551,7 @@ else {
         @{ Platform = 'Windows'; Name = 'A6 updates (last scan, no -Online)'; Script = "$si/Get-WindowsUpdateCompliance.ps1"; Args = @(); Expect = @(0) }
         @{ Platform = 'Windows'; Name = 'A8 inventory'; Script = 'endpoint-systems/audit/software-inventory/Get-HomeDeviceInventory.ps1'; Args = @(); Expect = @(0) }
         @{ Platform = 'Windows'; Name = 'Bundle without A2/A7 + A9 report'; Script = "$diag/Invoke-HomeAuditBundle.ps1"; Args = @('-Skip', 'Get-HomeNetworkMap,Get-RouterSecurityCheck', '-TechnicianName', 'Test'); Expect = @(0) }
+        @{ Platform = 'Windows'; Name = 'Bundle -Passive (A2 neighbor table only, A7 not run)'; Script = "$diag/Invoke-HomeAuditBundle.ps1"; Args = @('-Passive'); Expect = @(0); MustContain = 'Not run with -Passive' }
         @{ Platform = 'Windows'; Name = 'D1 -WhatIf'; Script = 'endpoint-systems/remediation/safe/clear-caches/Clear-WindowsUpdateCache.ps1'; Args = @('-WhatIf'); Expect = @(0) }
         @{ Platform = 'Windows'; Name = 'D1 non-interactive, no -Force (must refuse)'; Script = 'endpoint-systems/remediation/safe/clear-caches/Clear-WindowsUpdateCache.ps1'; Args = @(); Expect = @(1) }
         @{ Platform = 'Windows'; Name = 'D2 -WhatIf -SkipConnectivityTest'; Script = 'endpoint-systems/remediation/elevated/network-resets/Reset-NetworkStack.ps1'; Args = @('-WhatIf', '-SkipConnectivityTest'); Expect = @(0) }

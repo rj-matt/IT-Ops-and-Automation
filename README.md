@@ -136,7 +136,7 @@ with `--what-if` and `--force`.
 | `Get-RouterSecurityCheck.ps1` (A7) | `core-infrastructure/networking/diagnostics/` | Gateway, DNS, admin page HTTP vs HTTPS, UPnP (SSDP) and its port forwards, guided router checklist | Read-Only (no logins) | No | 5.1 | Built-in |
 | `Get-HomeDeviceInventory.ps1` (A8) | `endpoint-systems/audit/software-inventory/` | Hardware/OS, users and last logon, installed software; flags remote-access and P2P tools | Read-Only | No (Yes for `-IncludeOtherUsers`) | 5.1 | Built-in |
 | `Export-SecurityAuditReport.ps1` (A9) | `security-operations/diagnostics/` | One self-contained HTML report from the JSON results of Windows, macOS and Linux computers (matched by check ID), with a printable checklist for phones, TVs, consoles and smart-home devices | Read-Only (writes the report file) | No | 5.1, or 7 on Windows/macOS/Linux | Built-in |
-| `Invoke-HomeAuditBundle.ps1` | `security-operations/diagnostics/` | Runs A1-A8 in order into one timestamped folder; continues past failures; optional A9 | Read-Only | No (recommended: Yes) | 5.1 | Built-in |
+| `Invoke-HomeAuditBundle.ps1` | `security-operations/diagnostics/` | Runs A1-A8 in order into one timestamped folder; continues past failures; `-Passive` sends nothing (A2 neighbor table only, A7 not run); optional A9 | Read-Only | No (recommended: Yes) | 5.1 | Built-in |
 | `Get-ClientHealthSnapshot.ps1` (B1) | `endpoint-systems/diagnostics/system-info/` | System, uptime and pending restart, memory, CPU load, free space per drive, last update and updates waiting (cached) | Read-Only | No | 5.1 | Built-in |
 | `Get-NetworkConnectivityReport.ps1` (B2) | `endpoint-systems/diagnostics/networking/` | Adapter, address, gateway, DNS, internet, web (captive portal) in order, proxy, VPN; names the first failing layer. `-Passive` sends nothing | Read-Only (ping, DNS, TCP 443, HTTP(S)) | No | 5.1 | Built-in |
 | `Get-RecentCriticalErrors.ps1` (B3) | `endpoint-systems/diagnostics/event-logs/` | Last 48 h (`-Hours`): blue screens, unexpected shutdowns, disk errors, service failures, app crashes, error counts by source | Read-Only | No | 5.1 | Built-in |
@@ -241,6 +241,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\security-operations\di
 Useful options: `-HomeSsid "<wifi name>"` (PC is wired), `-OnlineUpdateSearch` (live Windows
 Update query), `-ApprovedRemoteTool Kaseya,ScreenConnect` (replaces the approved list for this run, see below),
 `-AllUsers` (admin: other users' browsers/software), `-Skip Get-HomeNetworkMap`,
+`-Passive` (nothing sent beyond the PC: A2 reads the ARP table only, A7 is not run),
 `-OutputPath E:\Results` (default `%TEMP%\MSP-Toolkit`). The bundle prints the results folder at the end.
 
 **Approved remote tools.** Remote-access tools the MSP deploys on purpose are listed in
@@ -279,7 +280,8 @@ sudo bash security-operations/diagnostics/run-home-audit-bundle.sh --include-rou
 
 Options match the Windows bundle: `--scan-lan`, `--home-ssid NAME`, `--online`,
 `--approved-remote-tool LIST`, `--all-users`, `--skip A2,A7`, `--output DIR` (default
-`${TMPDIR:-/tmp}/msp-toolkit`), and `--passive` to send nothing on the network. Without
+`${TMPDIR:-/tmp}/msp-toolkit`), and `--passive` (`-Passive` on Windows) to send nothing on the
+network. Without
 `sudo` it still runs; the root-only checks show SKIPPED. The HTML report needs PowerShell 7
 (`pwsh`); without it, bring the results folder to a PC and run step 9 there.
 
