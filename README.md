@@ -135,7 +135,7 @@ with `--what-if` and `--force`.
 | `Get-WindowsUpdateCompliance.ps1` (A6) | `endpoint-systems/diagnostics/system-info/` | Windows version end-of-support, last install, pending updates (COM), restart, update policies | Read-Only | No | 5.1 | Built-in |
 | `Get-RouterSecurityCheck.ps1` (A7) | `core-infrastructure/networking/diagnostics/` | Gateway, DNS, admin page HTTP vs HTTPS, UPnP (SSDP) and its port forwards, guided router checklist | Read-Only (no logins) | No | 5.1 | Built-in |
 | `Get-HomeDeviceInventory.ps1` (A8) | `endpoint-systems/audit/software-inventory/` | Hardware/OS, users and last logon, installed software; flags remote-access and P2P tools | Read-Only | No (Yes for `-IncludeOtherUsers`) | 5.1 | Built-in |
-| `Export-SecurityAuditReport.ps1` (A9) | `security-operations/diagnostics/` | One self-contained HTML report from the JSON results | Read-Only (writes the report file) | No | 5.1 | Built-in |
+| `Export-SecurityAuditReport.ps1` (A9) | `security-operations/diagnostics/` | One self-contained HTML report from the JSON results of Windows, macOS and Linux computers (matched by check ID), with a printable checklist for phones, TVs, consoles and smart-home devices | Read-Only (writes the report file) | No | 5.1, or 7 on Windows/macOS/Linux | Built-in |
 | `Invoke-HomeAuditBundle.ps1` | `security-operations/diagnostics/` | Runs A1-A8 in order into one timestamped folder; continues past failures; optional A9 | Read-Only | No (recommended: Yes) | 5.1 | Built-in |
 | `Get-ClientHealthSnapshot.ps1` (B1) | `endpoint-systems/diagnostics/system-info/` | System, uptime and pending restart, memory, CPU load, free space per drive, last update and updates waiting (cached) | Read-Only | No | 5.1 | Built-in |
 | `Get-NetworkConnectivityReport.ps1` (B2) | `endpoint-systems/diagnostics/networking/` | Adapter, address, gateway, DNS, internet, web (captive portal) in order, proxy, VPN; names the first failing layer. `-Passive` sends nothing | Read-Only (ping, DNS, TCP 443, HTTP(S)) | No | 5.1 | Built-in |
@@ -178,6 +178,7 @@ shows the options.
 | `get-update-compliance-linux.sh` (A6) | `endpoint-systems/diagnostics/system-info/` | Linux (apt, dnf) | Distribution support (built-in table, sources verified 2026-10-21), last package update, pending (security) updates from the local lists (`--online` refreshes into a temporary folder), restart needed, automatic updates, held packages/snaps | Read-Only | No |
 | `get-router-security-check.sh` (A7) | `core-infrastructure/networking/diagnostics/` | macOS, Linux | Gateway, DNS, admin page HTTP vs HTTPS, management ports, UPnP (SSDP, needs perl) and its port forwards, guided router checklist | Read-Only (no logins) | No |
 | `get-home-device-inventory.sh` (A8) | `endpoint-systems/audit/software-inventory/` | macOS, Linux | Hardware/OS, accounts and last login, home folders, installed apps/packages (macOS: `/Applications` and `~/Applications`; every user's with `--all-users`); flags remote-access and P2P tools (uses `approved-remote-tools.txt`) | Read-Only | No (Linux: Yes adds serial number and empty-password check; macOS: Yes for `--all-users`) |
+| `run-home-audit-bundle.sh` | `security-operations/diagnostics/` | macOS, Linux | Runs A1-A8 in order into one timestamped folder; continues past failures; `--passive` sends nothing (A2 neighbor table only, A7 not run); optional A9 with `--technician` (needs `pwsh`) | Read-Only | No (recommended: Yes) |
 | `get-client-health-snapshot.sh` (B1) | `endpoint-systems/diagnostics/system-info/` | macOS, Linux | System, uptime and pending restart, memory, load, free space per volume, last update and updates waiting (cached) | Read-Only | No (Linux: Yes adds serial number) |
 | `get-network-connectivity-report.sh` (B2) | `endpoint-systems/diagnostics/networking/` | macOS, Linux | Same layers and diagnosis as the Windows version; `--passive` sends nothing | Read-Only (ping, DNS, TCP 443, HTTP(S) via curl) | No |
 | `get-recent-critical-errors.sh` (B3) | `endpoint-systems/diagnostics/event-logs/` | macOS, Linux | macOS: panic and crash reports, restarts without shutdown, SMART (`--include-system-log` adds kernel disk errors; slow). Linux: journal (kernel crashes, disk errors, failed units, segfaults, error counts), `last -x`, apport | Read-Only | No (Linux: Yes, or the adm / systemd-journal group, for system messages) |
@@ -266,7 +267,25 @@ Or run scripts one at a time (prefix each with `powershell.exe -NoProfile -Execu
 | 9 | `.\security-operations\diagnostics\Export-SecurityAuditReport.ps1 -InputPath <folder> -TechnicianName "Your Name"` | < 5 s | No |
 
 To combine several PCs into one report, copy each PC's results folder under one parent folder
-and run step 9 with `-InputPath <parent> -Recurse`.
+and run step 9 with `-InputPath <parent> -Recurse`. Results folders from Macs and Linux
+computers (`run-home-audit-bundle.sh`, below) can go in the same parent folder.
+
+**Macs and Linux computers.** Copy the toolkit the same way (the bash scripts and
+`approved-remote-tools.txt`), then in Terminal:
+
+```bash
+sudo bash security-operations/diagnostics/run-home-audit-bundle.sh --include-router-checklist --technician "Your Name" --client "Smith household"
+```
+
+Options match the Windows bundle: `--scan-lan`, `--home-ssid NAME`, `--online`,
+`--approved-remote-tool LIST`, `--all-users`, `--skip A2,A7`, `--output DIR` (default
+`${TMPDIR:-/tmp}/msp-toolkit`), and `--passive` to send nothing on the network. Without
+`sudo` it still runs; the root-only checks show SKIPPED. The HTML report needs PowerShell 7
+(`pwsh`); without it, bring the results folder to a PC and run step 9 there.
+
+**Other devices.** The report has a printable checklist for phones, tablets, TVs, consoles,
+printers and smart-home devices, listing the devices the network map (A2) found. Go through it
+with the client; the scripts cannot check those devices.
 
 Network scans (2, 4 with `-ScanLan`, 7) print their scope before sending anything and never
 leave the PC's own subnet. Only scan networks the client owns and has asked us to audit.

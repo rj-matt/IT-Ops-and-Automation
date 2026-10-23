@@ -5,16 +5,22 @@
 
 .DESCRIPTION
     Reads every toolkit JSON file (schema 1.0 or 2.0) in -InputPath, for example the folder written by
-    Invoke-HomeAuditBundle.ps1, and writes a single HTML file with no external links, scripts or
-    images, so it can be emailed, printed or saved as PDF from the browser.
+    Invoke-HomeAuditBundle.ps1 or run-home-audit-bundle.sh, and writes a single HTML file with no
+    external links, scripts or images, so it can be emailed, printed or saved as PDF from the
+    browser. Windows, macOS and Linux results can be mixed: scripts are matched by their catalog
+    ID (A1-A8), so get-endpoint-security-status-macos.sh and Get-EndpointSecurityStatus.ps1 fill
+    the same row.
 
     Report sections
       Executive summary     Overall rating, issue counts by priority, the most important items.
-      Coverage              Which scripts ran on which device, as administrator or not, and any
-                            script that failed to run (from the bundle's own results).
+      Coverage              Which checks (A1-A8) ran on which device, as administrator or not,
+                            and any script that failed to run (from the bundle's own results).
       Remediation plan      Every FAIL/WARN item grouped Critical / High / Medium / Low, with the
                             recommended action and every device/target it affects.
-      Router checklist      Answers from Get-RouterSecurityCheck.ps1's guided checklist.
+      Router checklist      Answers from the router check's (A7) guided checklist, any platform.
+      Other devices         A checklist to work through by hand for phones, tablets, TVs,
+                            consoles and smart-home devices, which the scripts cannot check,
+                            with the devices the network map (A2) found on the network.
       Per-device findings   Issues first, then all results per script (collapsed).
       Could not check       ERROR (the check itself failed to run) and SKIPPED (for example
                             needs administrator) are listed separately from FAIL: they are gaps
@@ -56,8 +62,9 @@
     Use Case      : Final step of a home network security audit.
     Scope         : Reads JSON files in -InputPath; writes one HTML file. No system or network access.
     Risk Level    : Read-Only -- reads result files and writes the report file only.
-    Prerequisites : Windows PowerShell 5.1 | Admin: No | Modules: none
-    Version       : 1.2.0
+    Prerequisites : Windows PowerShell 5.1 or PowerShell 7 (Windows, macOS, Linux) | Admin: No |
+                    Modules: none
+    Version       : 1.3.0
     Limitations   : Reports only what the scripts found at the time they ran; it is not a
                     penetration test. Files that are not toolkit schema 1.0 or 2.0 are skipped (listed
                     in the console and log). Router settings marked "Not verified" were not seen.
@@ -686,34 +693,109 @@ function Complete-MSPRun {
 #endregion MSPHelper:Core
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '1.2.0'
+$ScriptVersion = '1.3.0'
 Initialize-MSPRun -ScriptName 'Export-SecurityAuditReport' -ScriptVersion $ScriptVersion -CheckId 'A9' -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'HTML security audit report from toolkit JSON results'
 
-# The audit scripts in run order, with a plain-English name for the report.
+# The audit checks in run order (catalog ID), with a plain-English name for the report. The
+# same ID covers the Windows, macOS and Linux script.
 $auditScripts = [ordered]@{
-    'Get-EndpointSecurityStatus'  = 'PC security settings'
-    'Get-HomeNetworkMap'          = 'Devices on the network'
-    'Get-WiFiSecurityAudit'       = 'Wi-Fi security'
-    'Get-OpenPortScan'            = 'Open ports'
-    'Get-BrowserSecurityCheck'    = 'Web browsers'
-    'Get-WindowsUpdateCompliance' = 'Windows updates'
-    'Get-RouterSecurityCheck'     = 'Router'
-    'Get-HomeDeviceInventory'     = 'Device and software inventory'
+    'A1' = 'Computer security settings'
+    'A2' = 'Devices on the network'
+    'A3' = 'Wi-Fi security'
+    'A4' = 'Open ports'
+    'A5' = 'Web browsers'
+    'A6' = 'Updates and end of support'
+    'A7' = 'Router'
+    'A8' = 'Device and software inventory'
 }
 $severityRank = @{ 'Critical' = 0; 'High' = 1; 'Medium' = 2; 'Low' = 3; 'Info' = 4 }
 
-# Catalog IDs of the Windows scripts, for schema 1.0 files (which do not record a CheckId).
+# Catalog IDs by script name: for schema 1.0 files (Windows only, no CheckId recorded) and for
+# the per-script lines in the bundle results (Invoke-HomeAuditBundle, run-home-audit-bundle.sh).
 $scriptCheckIds = @{
-    'Get-EndpointSecurityStatus'  = 'A1'
-    'Get-HomeNetworkMap'          = 'A2'
-    'Get-WiFiSecurityAudit'       = 'A3'
-    'Get-OpenPortScan'            = 'A4'
-    'Get-BrowserSecurityCheck'    = 'A5'
-    'Get-WindowsUpdateCompliance' = 'A6'
-    'Get-RouterSecurityCheck'     = 'A7'
-    'Get-HomeDeviceInventory'     = 'A8'
+    'Get-EndpointSecurityStatus'          = 'A1'
+    'Get-HomeNetworkMap'                  = 'A2'
+    'Get-WiFiSecurityAudit'               = 'A3'
+    'Get-OpenPortScan'                    = 'A4'
+    'Get-BrowserSecurityCheck'            = 'A5'
+    'Get-WindowsUpdateCompliance'         = 'A6'
+    'Get-RouterSecurityCheck'             = 'A7'
+    'Get-HomeDeviceInventory'             = 'A8'
+    'get-endpoint-security-status-macos'  = 'A1'
+    'get-endpoint-security-status-linux'  = 'A1'
+    'get-home-network-map'                = 'A2'
+    'get-wifi-security-audit-macos'       = 'A3'
+    'get-wifi-security-audit-linux'       = 'A3'
+    'get-open-port-scan'                  = 'A4'
+    'get-browser-security-check'          = 'A5'
+    'get-update-compliance-macos'         = 'A6'
+    'get-update-compliance-linux'         = 'A6'
+    'get-router-security-check'           = 'A7'
+    'get-home-device-inventory'           = 'A8'
 }
+
+function Get-AreaName {
+    <# Plain-English name for a catalog ID, or the script name for anything else. #>
+    param([string]$CheckId, [string]$ScriptName)
+    if ($CheckId -and $auditScripts.Contains($CheckId)) { return $auditScripts[$CheckId] }
+    if ($scriptCheckIds.ContainsKey($ScriptName)) { return $auditScripts[$scriptCheckIds[$ScriptName]] }
+    return $ScriptName
+}
+
+# Manual checklist for devices the scripts cannot run on. Group = the heading in the report;
+# Types = the A2 DeviceType values that belong to it.
+$deviceChecklist = @(
+    [pscustomobject]@{
+        Group = 'Phones and tablets (iPhone, iPad, Android)'
+        Types = @('Phone / tablet', 'Phone / tablet / laptop (private MAC)')
+        Items = @(
+            @('Software is up to date and automatic updates are on', 'iOS/iPadOS: Settings > General > Software Update. Android: Settings > System > Software update, and Google Play system update. A device that no longer gets updates should be replaced or kept off sensitive accounts.'),
+            @('Screen lock with a passcode (not swipe only)', 'iOS: Settings > Face ID/Touch ID & Passcode. Android: Settings > Security > Screen lock.'),
+            @('Find My / Find My Device is on', 'iOS: Settings > [name] > Find My. Android: Settings > Security > Find My Device.'),
+            @('Apple ID / Google account uses two-factor authentication', 'iOS: Settings > [name] > Sign-In & Security. Android: myaccount.google.com > Security.'),
+            @('Apps come only from the App Store / Google Play', 'Android: Settings > Apps > Special app access > Install unknown apps: off for every app. Remove apps the client does not recognize.'),
+            @('No unknown management or VPN profiles', 'iOS: Settings > General > VPN & Device Management. Android: Settings > Security > Device admin apps. Remove anything the client (or their employer) did not set up.')
+        )
+    }
+    [pscustomobject]@{
+        Group = 'Smart TVs and streaming boxes'
+        Types = @('TV / streaming')
+        Items = @(
+            @('Automatic software updates are on', 'Settings > Support / System > Software update. TVs the maker no longer updates should not be used for banking or shopping apps.'),
+            @('Viewing-data sharing (ACR) is off if the client prefers', 'Samsung: Viewing Information Services; LG: Live Plus; Vizio: Viewing Data; Roku: Smart TV experience.'),
+            @('Unused apps and signed-in accounts removed', 'Sign out of services the household no longer uses.')
+        )
+    }
+    [pscustomobject]@{
+        Group = 'Game consoles'
+        Types = @('Game console')
+        Items = @(
+            @('System updates install automatically', 'Xbox: Settings > System > Updates. PlayStation: Settings > System > System Software. Switch: System Settings > System.'),
+            @('Account uses two-factor authentication', 'Microsoft, PlayStation Network and Nintendo accounts all support it.'),
+            @('Purchases need a PIN or password; parental controls set for children', 'Each console''s family / parental settings.')
+        )
+    }
+    [pscustomobject]@{
+        Group = 'Smart-home devices (cameras, doorbells, speakers, plugs, thermostats)'
+        Types = @('Camera / recorder', 'Smart speaker', 'Single-board computer')
+        Items = @(
+            @('Default password changed; the maker''s app account uses two-factor authentication', 'Cameras and video recorders with a default password are a common way in.'),
+            @('Firmware updates automatically and the maker still supports the device', 'In the maker''s app. Devices past end of support should be replaced.'),
+            @('Not reachable from the internet', 'No port forwards to the device on the router; UPnP off (see the Router checklist). Prefer the maker''s app over opening ports.'),
+            @('On the guest or IoT network, if the router has one', 'Keeps a compromised gadget away from the household''s computers.')
+        )
+    }
+    [pscustomobject]@{
+        Group = 'Printers and network storage (NAS)'
+        Types = @('Printer', 'NAS / file server')
+        Items = @(
+            @('Admin password changed from the default', 'Printer or NAS web page (open it from a computer on the same network).'),
+            @('Firmware is current', 'The maker''s web page or app.'),
+            @('Remote / cloud access off unless it is used', 'NAS: QuickConnect, myQNAPcloud, WD My Cloud remote access. Printers: Wi-Fi Direct with the default password.')
+        )
+    }
+)
 
 # Checks renamed in a later script version: '<CheckId>|<Category>|<old Check>' = new Check.
 # Older results are reported under the new name so a report mixing versions (or platforms)
@@ -794,7 +876,10 @@ Invoke-MSPCheck -Name 'Read result files' -Category 'Input' -ScriptBlock {
         else {
             $data | Add-Member -NotePropertyName Platform -NotePropertyValue 'Windows' -Force
         }
-        if ($data.ScriptName -eq 'Invoke-HomeAuditBundle') { $script:bundleRuns.Add($data) }
+        if (-not $data.CheckId -and $scriptCheckIds.ContainsKey([string]$data.ScriptName)) {
+            $data | Add-Member -NotePropertyName CheckId -NotePropertyValue $scriptCheckIds[[string]$data.ScriptName] -Force
+        }
+        if ($data.ScriptName -in @('Invoke-HomeAuditBundle', 'run-home-audit-bundle')) { $script:bundleRuns.Add($data) }
         else { $script:results.Add($data) }
     }
     if ($skipped.Count -gt 0) {
@@ -810,12 +895,12 @@ foreach ($r in $results) {
     if (-not $latest.ContainsKey($key) -or [datetime]$r.StartTime -gt [datetime]$latest[$key].StartTime) { $latest[$key] = $r }
 }
 $superseded = $results.Count - $latest.Count
-$runs = @($latest.Values | Sort-Object -Property Computer, @{ Expression = { $i = [array]::IndexOf(@($auditScripts.Keys), $_.ScriptName); if ($i -lt 0) { 99 } else { $i } } })
+$runs = @($latest.Values | Sort-Object -Property Computer, @{ Expression = { $i = [array]::IndexOf(@($auditScripts.Keys), [string]$_.CheckId); if ($i -lt 0) { 99 } else { $i } } }, ScriptName)
 
 if ($runs.Count -eq 0) {
     Add-MSPFinding -Check 'Audit results' -Category 'Input' -Status FAIL -Severity High `
         -Detail ('No toolkit result files were found in "{0}".' -f $InputPath) `
-        -Recommendation 'Run Invoke-HomeAuditBundle.ps1 (or the individual scripts with -OutputPath) first, then point -InputPath at that folder.'
+        -Recommendation 'Run Invoke-HomeAuditBundle.ps1 or run-home-audit-bundle.sh (or the individual scripts with -OutputPath / --output) first, then point -InputPath at that folder.'
     Complete-MSPRun
     exit 1
 }
@@ -835,6 +920,7 @@ foreach ($run in $runs) {
         $allFindings.Add([pscustomobject]@{
                 Computer       = [string]$run.Computer
                 ScriptName     = [string]$run.ScriptName
+                CheckId        = [string]$run.CheckId
                 Id             = $current.Id
                 Category       = [string]$f.Category
                 Check          = $current.Check
@@ -866,7 +952,7 @@ $remediation = foreach ($group in ($issues | Group-Object -Property Id)) {
         Rank           = $severityRank[$priority]
         Status         = $(if ($hasFail) { 'FAIL' } else { 'WARN' })
         Check          = $items[0].Check
-        Area           = $(if ($auditScripts.Contains($items[0].ScriptName)) { $auditScripts[$items[0].ScriptName] } else { $items[0].ScriptName })
+        Area           = (Get-AreaName -CheckId $items[0].CheckId -ScriptName $items[0].ScriptName)
         Detail         = $items[0].Detail
         Recommendation = ($items | ForEach-Object { $_.Recommendation } | Where-Object { $_ } | Select-Object -First 1)
         Affected       = $affected
@@ -947,7 +1033,7 @@ details { margin:6px 0 14px; } summary { cursor:pointer; color:var(--info); }
 Add-Html ('<h1>{0}</h1>' -f (ConvertTo-Html5Text $title))
 Add-Html ('<div class="meta"><span>Technician: <b>{0}</b></span><span>Audit performed: {1}</span><span>Report created: {2}</span><span>Devices: {3}</span></div>' -f `
         (ConvertTo-Html5Text $TechnicianName), (ConvertTo-Html5Text ($auditStart.ToString('yyyy-MM-dd HH:mm') + ' to ' + $auditEnd.ToString('yyyy-MM-dd HH:mm'))), (Get-Date).ToString('yyyy-MM-dd HH:mm'), (ConvertTo-Html5Text ($computers -join ', ')))
-Add-Html '<div class="toc small"><a href="#summary">Summary</a><a href="#plan">Remediation plan</a><a href="#coverage">Coverage</a><a href="#router">Router checklist</a><a href="#devices">Per-device results</a><a href="#gaps">Could not check</a></div>'
+Add-Html '<div class="toc small"><a href="#summary">Summary</a><a href="#plan">Remediation plan</a><a href="#coverage">Coverage</a><a href="#router">Router checklist</a><a href="#other-devices">Other devices</a><a href="#devices">Per-device results</a><a href="#gaps">Could not check</a></div>'
 
 # --- Executive summary -------------------------------------------------------------------
 Add-Html '<h2 id="summary">Executive summary</h2>'
@@ -959,7 +1045,7 @@ Add-Html ('<div class="tile skipped"><b>{0}</b><span>checks skipped</span></div>
 Add-Html '</div>'
 if ($scriptFailures.Count -gt 0) {
     Add-Html ('<p class="note"><b>{0} audit script(s) did not run</b> ({1}), so those areas were not checked. See Coverage and Could not check below.</p>' -f `
-            $scriptFailures.Count, (ConvertTo-Html5Text (($scriptFailures | ForEach-Object { '{0} on {1}' -f $(if ($auditScripts.Contains($_.ScriptName)) { $auditScripts[$_.ScriptName] } else { $_.ScriptName }), $_.Computer }) -join '; ')))
+            $scriptFailures.Count, (ConvertTo-Html5Text (($scriptFailures | ForEach-Object { '{0} on {1}' -f (Get-AreaName -ScriptName $_.ScriptName), $_.Computer }) -join '; ')))
 }
 Add-Html ('<p class="small muted">All results: {0} passed, {1} warnings, {2} failed, {3} informational, {4} skipped, {5} could not run. ERROR means the check itself could not run (not that something failed); SKIPPED usually means it needs administrator rights.</p>' -f `
         $statusCounts['PASS'], $statusCounts['WARN'], $statusCounts['FAIL'], $statusCounts['INFO'], $statusCounts['SKIPPED'], $statusCounts['ERROR'])
@@ -994,13 +1080,18 @@ foreach ($p in @('Critical', 'High', 'Medium', 'Low')) {
 # --- Coverage ----------------------------------------------------------------------------
 Add-Html '<h2 id="coverage">Coverage</h2>'
 Add-Html '<table><tr><th>Device</th><th>Check</th><th>Ran</th><th>Admin</th><th class="num">Pass</th><th class="num">Warn</th><th class="num">Fail</th><th class="num">Could not run</th><th class="num">Skipped</th></tr>'
+# Bundle lines are keyed by catalog ID, so the Windows and the macOS/Linux bundle both match.
 $bundleStatus = @{}
 foreach ($b in $bundleRuns) {
-    foreach ($f in @($b.Findings | Where-Object { $_.Category -eq 'Run' })) { $bundleStatus[('{0}|{1}' -f $b.Computer, $f.Check)] = $f }
+    foreach ($f in @($b.Findings | Where-Object { $_.Category -eq 'Run' })) {
+        $id = [string]$f.Check
+        if ($scriptCheckIds.ContainsKey($id)) { $id = $scriptCheckIds[$id] }
+        $bundleStatus[('{0}|{1}' -f $b.Computer, $id)] = $f
+    }
 }
 foreach ($computer in $computers) {
     foreach ($name in $auditScripts.Keys) {
-        $run = $runs | Where-Object { $_.Computer -eq $computer -and $_.ScriptName -eq $name } | Select-Object -First 1
+        $run = $runs | Where-Object { $_.Computer -eq $computer -and $_.CheckId -eq $name } | Select-Object -First 1
         if ($run) {
             $admin = 'No'
             if ($run.IsAdmin) { $admin = 'Yes' }
@@ -1012,7 +1103,7 @@ foreach ($computer in $computers) {
             $reason = 'Not run'
             $b = $bundleStatus[('{0}|{1}' -f $computer, $name)]
             if ($b -and $b.Status -eq 'ERROR') { $reason = 'Failed to run: {0}' -f $b.Detail }
-            elseif ($b -and $b.Status -eq 'SKIPPED') { $reason = 'Skipped by the technician' }
+            elseif ($b -and $b.Status -eq 'SKIPPED') { $reason = 'Not run: {0}' -f $b.Detail }
             Add-Html ('<tr><td>{0}</td><td>{1}</td><td colspan="7" class="muted">{2}</td></tr>' -f (ConvertTo-Html5Text $computer), (ConvertTo-Html5Text $auditScripts[$name]), (ConvertTo-Html5Text $reason))
         }
     }
@@ -1021,9 +1112,9 @@ Add-Html '</table>'
 
 # --- Router checklist ----------------------------------------------------------------------
 Add-Html '<h2 id="router">Router checklist</h2>'
-$checklist = @($allFindings | Where-Object { $_.ScriptName -eq 'Get-RouterSecurityCheck' -and $_.Category -eq 'Checklist' })
+$checklist = @($allFindings | Where-Object { $_.CheckId -eq 'A7' -and $_.Category -eq 'Checklist' })
 if ($checklist.Count -eq 0) {
-    Add-Html '<p class="muted">Get-RouterSecurityCheck.ps1 was not run, so router settings were not reviewed.</p>'
+    Add-Html '<p class="muted">The router check (A7: Get-RouterSecurityCheck.ps1 or get-router-security-check.sh) was not run, so router settings were not reviewed.</p>'
 }
 else {
     Add-Html '<table><tr><th>Result</th><th>Setting</th><th>Notes</th></tr>'
@@ -1037,13 +1128,73 @@ else {
     Add-Html '</table>'
 }
 
+# --- Other devices (manual checklist) --------------------------------------------------------
+Add-Html '<h2 id="other-devices">Other devices checklist</h2>'
+Add-Html '<p class="note">The audit scripts run on computers only. Go through these items with the client on each phone, tablet, TV, console and smart-home device, and tick them off on a printed copy. Anything that cannot be ticked goes on the remediation plan.</p>'
+# Devices the network map (A2) found, newest run per computer, once per MAC (or IP) address.
+# The computers in this report, the router and the computer that ran A2 are left out: they
+# have their own sections.
+$foundDevices = @{}
+foreach ($run in @($runs | Where-Object { $_.CheckId -eq 'A2' })) {
+    if (-not $run.Data -or -not $run.Data.Devices) { continue }
+    foreach ($d in @($run.Data.Devices)) {
+        if ("$($d.IsSelf)" -eq 'True' -or "$($d.IsGateway)" -eq 'True') { continue }
+        $name = [string]$d.Hostname
+        if ($name -and ($computers -contains ($name -replace '\..*$', ''))) { continue }
+        # Windows writes AA-BB-..., macOS/Linux AA:BB:...
+        $key = ([string]$d.MacAddress).ToUpperInvariant() -replace ':', '-'
+        if (-not $key) { $key = [string]$d.IPAddress }
+        if ($key -and -not $foundDevices.ContainsKey($key)) { $foundDevices[$key] = $d }
+    }
+}
+$grouped = @{}
+foreach ($d in $foundDevices.Values) {
+    $type = [string]$d.DeviceType
+    $groupName = 'Other / not identified'
+    foreach ($g in $deviceChecklist) { if ($g.Types -contains $type) { $groupName = $g.Group; break } }
+    if ($type -eq 'Computer') { $groupName = 'Computers (run the audit scripts on them)' }
+    if (-not $grouped.ContainsKey($groupName)) { $grouped[$groupName] = New-Object System.Collections.Generic.List[object] }
+    $grouped[$groupName].Add($d)
+}
+foreach ($g in $deviceChecklist) {
+    Add-Html ('<h3>{0}</h3>' -f (ConvertTo-Html5Text $g.Group))
+    Add-Html '<table><tr><th style="width:2em">Done</th><th>Check</th><th>How</th></tr>'
+    foreach ($item in $g.Items) {
+        Add-Html ('<tr><td>&#9744;</td><td>{0}</td><td class="small">{1}</td></tr>' -f (ConvertTo-Html5Text $item[0]), (ConvertTo-Html5Text $item[1]))
+    }
+    Add-Html '</table>'
+}
+Add-Html '<h3>Devices found on the network</h3>'
+if (@($runs | Where-Object { $_.CheckId -eq 'A2' }).Count -eq 0) {
+    Add-Html '<p class="muted">The network map (A2) was not run, so there is no list of devices. Ask the client which phones, tablets, TVs, consoles and smart-home devices are in the home.</p>'
+}
+elseif ($foundDevices.Count -eq 0) {
+    Add-Html '<p class="muted">The network map found no devices other than the computers in this report and the router. Ask the client which other devices are in the home; some only join the network when in use.</p>'
+}
+else {
+    Add-Html '<p class="small muted">From the network map (A2). Types are guesses from the maker and name; phones with a private (randomized) address cannot be told apart. Note which device each one is and tick it when its checklist is done.</p>'
+    Add-Html '<table><tr><th style="width:2em">Done</th><th>Checklist</th><th>Name</th><th>Maker (guess)</th><th>Address</th></tr>'
+    $order = @($deviceChecklist | ForEach-Object { $_.Group }) + @('Computers (run the audit scripts on them)', 'Other / not identified')
+    foreach ($groupName in $order) {
+        if (-not $grouped.ContainsKey($groupName)) { continue }
+        foreach ($d in @($grouped[$groupName] | Sort-Object -Property { [string]$_.Hostname }, { [string]$_.IPAddress })) {
+            $name = [string]$d.Hostname
+            if (-not $name) { $name = '(no name) ' + [string]$d.DeviceType }
+            Add-Html ('<tr><td>&#9744;</td><td>{0}</td><td>{1}</td><td>{2}</td><td>{3}</td></tr>' -f (ConvertTo-Html5Text $groupName), (ConvertTo-Html5Text $name), (ConvertTo-Html5Text $d.Vendor), (ConvertTo-Html5Text $d.IPAddress))
+        }
+    }
+    Add-Html '</table>'
+}
+
 # --- Per-device results ----------------------------------------------------------------------
 Add-Html '<h2 id="devices">Per-device results</h2>'
 foreach ($computer in $computers) {
-    Add-Html ('<h3>{0}</h3>' -f (ConvertTo-Html5Text $computer))
+    $platform = @($runs | Where-Object { $_.Computer -eq $computer -and $_.OSVersion } | ForEach-Object { [string]$_.OSVersion } | Select-Object -First 1)
+    if ($platform.Count -eq 0) { $platform = @($runs | Where-Object { $_.Computer -eq $computer } | ForEach-Object { [string]$_.Platform } | Select-Object -First 1) }
+    Add-Html ('<h3>{0} <span class="muted small">{1}</span></h3>' -f (ConvertTo-Html5Text $computer), (ConvertTo-Html5Text ($platform -join '')))
     foreach ($run in @($runs | Where-Object { $_.Computer -eq $computer })) {
         $label = $run.ScriptName
-        if ($auditScripts.Contains($run.ScriptName)) { $label = '{0} ({1})' -f $auditScripts[$run.ScriptName], $run.ScriptName }
+        if ($run.CheckId -and $auditScripts.Contains([string]$run.CheckId)) { $label = '{0} ({1})' -f $auditScripts[[string]$run.CheckId], $run.ScriptName }
         $findings = @($allFindings | Where-Object { $_.Computer -eq $computer -and $_.ScriptName -eq $run.ScriptName })
         $runIssues = @($findings | Where-Object { $_.Status -in @('FAIL', 'WARN') } | Sort-Object -Property @{ Expression = { $severityRank[(Get-IssuePriority -Finding $_)] } })
         Add-Html ('<p><b>{0}</b> <span class="muted small">v{1}, {2}, administrator: {3}</span></p>' -f (ConvertTo-Html5Text $label), (ConvertTo-Html5Text $run.ScriptVersion), ([datetime]$run.StartTime).ToString('yyyy-MM-dd HH:mm'), $(if ($run.IsAdmin) { 'yes' } else { 'no' }))

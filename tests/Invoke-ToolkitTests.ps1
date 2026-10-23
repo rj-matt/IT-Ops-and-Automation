@@ -26,6 +26,7 @@
       9  Logic tests that use mocked paths and run on any platform:
          tests/Test-ClearWindowsUpdateCacheLogic.ps1 (D1 repeat runs),
          tests/Test-ExportSecurityAuditReportIds.ps1 (A9 old/new finding IDs),
+         tests/Test-ExportSecurityAuditReportMixed.ps1 (A9 with Windows, macOS and Linux results),
          tests/Test-BatchBWindowsLogic.ps1 (B1-B3 Windows scripts against mocked cmdlets) and
          tests/bash/test-scripts-mocked.sh under every bash (Linux scripts, Linux branches and
          macOS paths not reachable here, with stub commands; no network traffic is possible)
@@ -482,6 +483,7 @@ foreach ($h in $hosts) {
 $logic = @(
     @{ Name = 'D1 repeat runs: backup names never reused or overwritten'; File = 'Test-ClearWindowsUpdateCacheLogic.ps1' }
     @{ Name = 'A9 reports a check once across result versions and platforms'; File = 'Test-ExportSecurityAuditReportIds.ps1' }
+    @{ Name = 'A9 coverage, router and device checklists from Windows, macOS and Linux results'; File = 'Test-ExportSecurityAuditReportMixed.ps1' }
     @{ Name = 'B1-B3 Windows scripts against mocked cmdlets'; File = 'Test-BatchBWindowsLogic.ps1' }
 )
 foreach ($t in $logic) {
@@ -564,7 +566,9 @@ else {
         @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'A5 browsers (macOS)'; Script = "$si/get-browser-security-check.sh"; Args = @(); Expect = @(0) }
         @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'A6 updates (macOS, last check, no --online)'; Script = "$si/get-update-compliance-macos.sh"; Args = @(); Expect = @(0) }
         @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'A8 inventory (macOS)'; Script = 'endpoint-systems/audit/software-inventory/get-home-device-inventory.sh'; Args = @(); Expect = @(0) }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'Bundle --passive (A7 not run) + A9 report'; Script = "$diag/run-home-audit-bundle.sh"; Args = @('--passive', '--technician', 'Test'); Expect = @(0); MustContain = 'Report written' }
         # Linux: the same, with the Linux scripts.
+        @{ Platform = 'Linux'; Name = 'Bundle --passive (A7 not run) + A9 report if pwsh is installed'; Script = "$diag/run-home-audit-bundle.sh"; Args = @('--passive', '--technician', 'Test'); Expect = @(0); MustContain = 'Not run with --passive' }
         @{ Platform = 'Linux'; Name = 'A1 endpoint security (Linux)'; Script = "$ep/get-endpoint-security-status-linux.sh"; Args = @(); Expect = @(0) }
         @{ Platform = 'Linux'; Name = 'A2 --passive (neighbor table only, nothing sent)'; Script = "$net/get-home-network-map.sh"; Args = @('--passive'); Expect = @(0); MustContain = 'Passive: nothing is sent' }
         @{ Platform = 'Linux'; Name = 'A3 Wi-Fi (Linux, local)'; Script = "$net/get-wifi-security-audit-linux.sh"; Args = @(); Expect = @(0) }
@@ -586,6 +590,8 @@ else {
         @{ Platform = 'Linux'; Name = 'A6 --online (Linux)'; Script = "$si/get-update-compliance-linux.sh"; Args = @('--online'); Expect = @(0); Active = 'distribution package servers and the Snap Store' }
         @{ Platform = 'Linux'; Name = 'A2 ping sweep (Linux)'; Script = "$net/get-home-network-map.sh"; Args = @(); Expect = @(0); Active = 'ping sweep of the whole local subnet + hostname lookups' }
         @{ Platform = 'Linux'; Name = 'A4 --scan-lan (Linux)'; Script = "$ep/get-open-port-scan.sh"; Args = @('--scan-lan'); Expect = @(0); Active = 'ping sweep + TCP probes of 11 ports on every device' }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'Bundle with A2 ping sweep and A7 (macOS)'; Script = "$diag/run-home-audit-bundle.sh"; Args = @(); Expect = @(0); Active = 'ping sweep + hostname lookups of the local subnet, TCP/HTTP to the gateway + SSDP multicast' }
+        @{ Platform = 'Linux'; Name = 'Bundle with A2 ping sweep and A7 (Linux)'; Script = "$diag/run-home-audit-bundle.sh"; Args = @(); Expect = @(0); Active = 'ping sweep + hostname lookups of the local subnet, TCP/HTTP to the gateway + SSDP multicast' }
         # Batch B. B2 without -Passive / --passive sends traffic (gateway, DNS, internet, web).
         @{ Platform = 'Windows'; Name = 'B1 health snapshot'; Script = "$si/Get-ClientHealthSnapshot.ps1"; Args = @(); Expect = @(0) }
         @{ Platform = 'Windows'; Name = 'B2 -Passive (configuration only, nothing sent)'; Script = $b2ps; Args = @('-Passive'); Expect = @(0) }

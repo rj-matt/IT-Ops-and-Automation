@@ -945,6 +945,67 @@ check_not 'B4 mac: mDNSResponder never kickstarted' "$CALLS" 'kickstart.*mDNSRes
 check 'B4 mac: cache result' "$OUT" '\[PASS\] +mDNSResponder: clear cache - DNS cache cleared\.'
 
 # =========================================================================================
+# Bundle run-home-audit-bundle.sh
+# =========================================================================================
+BUNDLE=security-operations/diagnostics/run-home-audit-bundle.sh
+
+# --- Linux, passive: A1-A8 in order, one folder, A7 not run ---------------------------------
+new_env bundle-linux
+linux_net 'default via 198.51.100.1 dev wlp2s0 proto dhcp metric 600' '3: wlp2s0    inet 198.51.100.23/24 brd 198.51.100.255 scope global dynamic wlp2s0'
+printf '198.51.100.1 lladdr 00:09:5b:11:22:33 REACHABLE\n198.51.100.40 lladdr 00:1e:8f:44:55:66 STALE\n198.51.100.50 lladdr 3a:11:22:33:44:55 STALE\n' >"$WORK/bundle-linux/neigh.txt"
+mkdir -p "$FAKE/etc"
+printf 'sudo:x:27:alice\n' >"$FAKE/etc/group"
+printf 'root:x:0:0:root:/root:/bin/bash\nalice:x:1000:1000::/home/alice:/bin/bash\n' >"$FAKE/etc/passwd"
+OUT="$WORK/bundle-linux.txt"
+run_script bundle-linux "$BUNDLE" "$OUT" --passive --output "$WORK/bundle-linux/out"
+check 'Bundle linux: exit 0' "$OUT.rc" '^0$'
+check 'Bundle linux: A1 linux script first' "$OUT" '\[1/8\] A1 get-endpoint-security-status-linux'
+check 'Bundle linux: A3 linux script' "$OUT" '\[3/8\] A3 get-wifi-security-audit-linux'
+check 'Bundle linux: A6 linux script' "$OUT" '\[6/8\] A6 get-update-compliance-linux'
+check 'Bundle linux: A2 passive' "$OUT" 'Passive: nothing is sent'
+check 'Bundle linux: A7 not run when passive' "$OUT" '\[SKIPPED\] get-router-security-check - Not run with --passive'
+check 'Bundle linux: results table' "$OUT" '^  8 +A8 +get-home-device-inventory .*Completed$'
+check_not 'Bundle linux: no script failed' "$OUT" 'Did not complete'
+folder=$(find "$WORK/bundle-linux/out" -maxdepth 1 -type d -name 'HomeAudit_mockhost_*' | head -n 1)
+check_exists 'Bundle linux: timestamped folder' "$folder"
+n=$(find "${folder:-/nonexistent}" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l | tr -d ' ')
+check 'Bundle linux: 7 script results + bundle result in one folder' <(printf '%s\n' "$n") '^8$'
+json=$(find "${folder:-/nonexistent}" -maxdepth 1 -name 'run-home-audit-bundle_*.json' 2>/dev/null | head -n 1)
+check_exists 'Bundle linux: bundle JSON' "$json"
+[ -n "$json" ] && check 'Bundle linux: CheckId Bundle' "$json" '"CheckId": "Bundle"'
+[ -n "$json" ] && check 'Bundle linux: Runs table' "$json" '"Step":8,"CheckId":"A8","Script":"get-home-device-inventory","Result":"Completed"'
+
+# --- Flat copy with one script missing and one that crashes: the rest still run -------------
+new_env bundle-flat
+flat="$WORK/bundle-flat/usb/toolkit/x"
+mkdir -p "$flat"
+cp "$REPO/$BUNDLE" "$flat/"
+cp "$REPO/security-operations/diagnostics/endpoint-posture/get-endpoint-security-status-linux.sh" "$flat/"
+printf '#!/usr/bin/env bash\necho "crashing on purpose"\nexit 3\n' >"$flat/get-home-network-map.sh"
+for s in core-infrastructure/networking/diagnostics/get-wifi-security-audit-linux.sh \
+    endpoint-systems/diagnostics/system-info/get-browser-security-check.sh \
+    endpoint-systems/diagnostics/system-info/get-update-compliance-linux.sh \
+    endpoint-systems/audit/software-inventory/get-home-device-inventory.sh; do
+    cp "$REPO/$s" "$flat/"
+done
+OUT="$WORK/bundle-flat.txt"
+PATH="$WORK/bundle-flat/bin:$PATH" MSP_TEST_ROOT="$WORK/bundle-flat/root" TMPDIR="$WORK/bundle-flat" NO_COLOR=1 HOME=/home/alice \
+    "$BASH" "$flat/run-home-audit-bundle.sh" --passive --skip A5,get-update-compliance-linux.sh --output "$WORK/bundle-flat/out" </dev/null >"$OUT" 2>&1
+printf '%s\n' "$?" >"$OUT.rc"
+check 'Bundle flat: exit 0 (some scripts completed)' "$OUT.rc" '^0$'
+check 'Bundle flat: crash reported as ERROR' "$OUT" '\[ERROR\] +get-home-network-map - Did not complete \(exited with code 3\)'
+check 'Bundle flat: missing script reported' "$OUT" '\[ERROR\] +get-open-port-scan - Script file get-open-port-scan\.sh was not found'
+check 'Bundle flat: --skip by ID' "$OUT" '\[SKIPPED\] get-browser-security-check - Skipped with --skip'
+check 'Bundle flat: --skip by file name' "$OUT" '\[SKIPPED\] get-update-compliance-linux - Skipped with --skip'
+check 'Bundle flat: scripts after the failures still ran' "$OUT" '^  8 +A8 +get-home-device-inventory .*Completed$'
+check 'Bundle flat: A1 found next to the bundle' "$OUT" '^  1 +A1 +get-endpoint-security-status-linux .*Completed$'
+
+# --- Options that would send traffic are refused with --passive ----------------------------
+OUT="$WORK/bundle-refuse.txt"
+run_script bundle-flat "$BUNDLE" "$OUT" --passive --scan-lan
+check 'Bundle: --passive with --scan-lan refused (exit 2)' "$OUT.rc" '^2$'
+
+# =========================================================================================
 for f in "$WORK"/*/network-calls; do
     if [ -s "$f" ]; then FAILED=$((FAILED + 1)); printf 'FAIL: network stub called (%s):\n' "$f"; cat "$f"; else PASSED=$((PASSED + 1)); fi
 done
