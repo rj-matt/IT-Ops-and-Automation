@@ -31,6 +31,8 @@
          tests/Test-BatchCCloudLogic.ps1 (C1/C2 against mocked Exchange Online / Graph cmdlets),
          tests/Test-SuspiciousActivityWindowsLogic.ps1 (C3 Windows against mocked cmdlets),
          tests/Test-BatchEWindowsLogic.ps1 (E1-E4 Windows against mocked cmdlets),
+         tests/Test-WindowsHardeningAuditLogic.ps1 (Set-InactivityTimeout and the RC4 audit; no
+         registry access),
          tests/Test-BatchBWindowsLogic.ps1 (B1-B3 Windows scripts against mocked cmdlets) and
          tests/bash/test-scripts-mocked.sh under every bash (Linux scripts, Linux branches and
          macOS paths not reachable here, with stub commands; no network traffic is possible)
@@ -493,6 +495,7 @@ $logic = @(
     @{ Name = 'C1/C2 against mocked Exchange Online and Graph'; File = 'Test-BatchCCloudLogic.ps1' }
     @{ Name = 'C3 Windows against mocked cmdlets'; File = 'Test-SuspiciousActivityWindowsLogic.ps1' }
     @{ Name = 'E1-E4 Windows against mocked cmdlets'; File = 'Test-BatchEWindowsLogic.ps1' }
+    @{ Name = 'Set-InactivityTimeout and RC4 audit against mocked cmdlets'; File = 'Test-WindowsHardeningAuditLogic.ps1' }
 )
 foreach ($t in $logic) {
     foreach ($h in $hosts) {
@@ -563,6 +566,9 @@ else {
         @{ Platform = 'Windows'; Name = 'D2 -WhatIf -SkipConnectivityTest'; Script = 'endpoint-systems/remediation/elevated/network-resets/Reset-NetworkStack.ps1'; Args = @('-WhatIf', '-SkipConnectivityTest'); Expect = @(0) }
         @{ Platform = 'Windows'; Name = 'D2 -BackupOnly -SkipConnectivityTest'; Script = 'endpoint-systems/remediation/elevated/network-resets/Reset-NetworkStack.ps1'; Args = @('-BackupOnly', '-SkipConnectivityTest'); Expect = @(0); CleanBackup = $true }
         @{ Platform = 'Windows'; Name = 'D2 non-interactive, no -Force (must refuse)'; Script = 'endpoint-systems/remediation/elevated/network-resets/Reset-NetworkStack.ps1'; Args = @('-SkipConnectivityTest'); Expect = @(1) }
+        @{ Platform = 'Windows'; Name = 'Set-InactivityTimeout -WhatIf'; Script = 'security-operations/hardening/server-hardening/Set-InactivityTimeout.ps1'; Args = @('-Minutes', '15', '-WhatIf'); Expect = @(0) }
+        @{ Platform = 'Windows'; Name = 'Set-InactivityTimeout non-interactive, no -Force (must refuse)'; Script = 'security-operations/hardening/server-hardening/Set-InactivityTimeout.ps1'; Args = @('-Minutes', '15'); Expect = @(0, 1) }
+        @{ Platform = 'Windows'; Name = 'Kerberos RC4 audit (SKIPPED unless a domain controller)'; Script = 'security-operations/audit/Get-KerberosRC4Usage.ps1'; Args = @(); Expect = @(0) }
         @{ Platform = 'Windows'; Name = 'D3 -WhatIf'; Script = 'cloud-services/m365/remediation/Reset-OutlookProfile.ps1'; Args = @('-WhatIf'); Expect = @(0) }
         @{ Platform = 'Windows'; Name = 'D3 non-interactive, no -Force (must refuse)'; Script = 'cloud-services/m365/remediation/Reset-OutlookProfile.ps1'; Args = @(); Expect = @(0, 1); CheckOutlook = $true }
         @{ Platform = 'Windows'; Name = 'B4 -WhatIf'; Script = 'endpoint-systems/remediation/safe/restart-services/Restart-CommonServices.ps1'; Args = @('-WhatIf'); Expect = @(0) }

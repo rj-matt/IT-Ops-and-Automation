@@ -89,8 +89,8 @@ Alternative if you prefer no renames: keep the 1.0 names and add only `CheckId`,
 
 | Item | Recommendation | Why |
 |---|---|---|
-| `security-operations/audit/Invoke-RC4AuditReport-SelfContained-v2.ps1` | **Keep**, rename `Get-KerberosRC4Usage.ps1`, bring to standard in Batch E | Real need: Microsoft is phasing out RC4 in Kerberos. Must stop writing account-name CSVs to its own folder and must carry the MIT notice for the Microsoft code it includes. Runs on DCs only, so it is not a home-audit script. |
-| `security-operations/hardening/server-hardening/Set-InactivityTimeout.ps1` | **Keep**, bring to standard in Batch D | Small, useful, already has ShouldProcess. Needs before/after, log, risk level (Elevated), and `-Force` renamed (it means "rewrite even if equal"). `_archive/README.md` names it as the reviewed source for the archived `.exe`. |
+| `security-operations/audit/Invoke-RC4AuditReport-SelfContained-v2.ps1` | **Done**: renamed `Get-KerberosRC4Usage.ps1` 3.0.0, to standard (mocked; not run on Windows; needs a domain controller). Was: keep, rename, bring to standard in Batch E | Real need: Microsoft is phasing out RC4 in Kerberos. Must stop writing account-name CSVs to its own folder and must carry the MIT notice for the Microsoft code it includes. Runs on DCs only, so it is not a home-audit script. |
+| `security-operations/hardening/server-hardening/Set-InactivityTimeout.ps1` | **Done**: 2.0.0 to standard (mocked; not run on Windows). Was: keep, bring to standard in Batch D | Small, useful, already has ShouldProcess. Needs before/after, log, risk level (Elevated), and `-Force` renamed (it means "rewrite even if equal"). `_archive/README.md` names it as the reviewed source for the archived `.exe`. |
 | `.playbooks/README.md` | **Archive** | Describes a `playbooks/` folder and five playbooks that do not exist; the folder name starts with a dot, so it is hidden on macOS/Linux. The bundle runners cover the only real playbook today. |
 | `docs/toolkit-review/` | Keep | This review. |
 
