@@ -30,6 +30,7 @@
          tests/Test-HomeAuditBundleWindowsLogic.ps1 (Windows bundle -Passive, mocked Start-Process),
          tests/Test-BatchCCloudLogic.ps1 (C1/C2 against mocked Exchange Online / Graph cmdlets),
          tests/Test-SuspiciousActivityWindowsLogic.ps1 (C3 Windows against mocked cmdlets),
+         tests/Test-BatchEWindowsLogic.ps1 (E1-E4 Windows against mocked cmdlets),
          tests/Test-BatchBWindowsLogic.ps1 (B1-B3 Windows scripts against mocked cmdlets) and
          tests/bash/test-scripts-mocked.sh under every bash (Linux scripts, Linux branches and
          macOS paths not reachable here, with stub commands; no network traffic is possible)
@@ -491,6 +492,7 @@ $logic = @(
     @{ Name = 'Windows bundle -Passive (mocked Start-Process; A2 -Passive, A7 not run)'; File = 'Test-HomeAuditBundleWindowsLogic.ps1' }
     @{ Name = 'C1/C2 against mocked Exchange Online and Graph'; File = 'Test-BatchCCloudLogic.ps1' }
     @{ Name = 'C3 Windows against mocked cmdlets'; File = 'Test-SuspiciousActivityWindowsLogic.ps1' }
+    @{ Name = 'E1-E4 Windows against mocked cmdlets'; File = 'Test-BatchEWindowsLogic.ps1' }
 )
 foreach ($t in $logic) {
     foreach ($h in $hosts) {
@@ -606,6 +608,18 @@ else {
         @{ Platform = 'Windows'; Name = 'C3 suspicious activity triage'; Script = "$ep/Get-SuspiciousActivityReport.ps1"; Args = @(); Expect = @(0) }
         @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'C3 suspicious activity triage (macOS)'; Script = "$ep/get-suspicious-activity-report-macos.sh"; Args = @(); Expect = @(0) }
         @{ Platform = 'Linux'; Name = 'C3 suspicious activity triage (Linux)'; Script = "$ep/get-suspicious-activity-report-linux.sh"; Args = @(); Expect = @(0) }
+        # Batch E. E4 is for servers; on a workstation it still runs and reports what it sees.
+        @{ Platform = 'Windows'; Name = 'E1 local admins'; Script = 'endpoint-systems/audit/local-admins/Get-LocalAdminReport.ps1'; Args = @(); Expect = @(0) }
+        @{ Platform = 'Windows'; Name = 'E2 installed software'; Script = 'endpoint-systems/audit/software-inventory/Get-InstalledSoftwareReport.ps1'; Args = @(); Expect = @(0) }
+        @{ Platform = 'Windows'; Name = 'E3 backup recency'; Script = 'core-infrastructure/backups-dr/diagnostics/Get-BackupRecency.ps1'; Args = @(); Expect = @(0) }
+        @{ Platform = 'Windows'; Name = 'E4 server health'; Script = 'core-infrastructure/servers/windows/diagnostics/Get-ServerHealthReport.ps1'; Args = @(); Expect = @(0) }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'E1 local admins (macOS)'; Script = 'endpoint-systems/audit/local-admins/get-local-admin-report.sh'; Args = @(); Expect = @(0) }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'E2 installed software (macOS)'; Script = 'endpoint-systems/audit/software-inventory/get-installed-software-report.sh'; Args = @(); Expect = @(0) }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'E3 backup recency (macOS)'; Script = 'core-infrastructure/backups-dr/diagnostics/get-backup-recency.sh'; Args = @(); Expect = @(0) }
+        @{ Platform = 'Linux'; Name = 'E1 local admins (Linux)'; Script = 'endpoint-systems/audit/local-admins/get-local-admin-report.sh'; Args = @(); Expect = @(0) }
+        @{ Platform = 'Linux'; Name = 'E2 installed software (Linux)'; Script = 'endpoint-systems/audit/software-inventory/get-installed-software-report.sh'; Args = @(); Expect = @(0) }
+        @{ Platform = 'Linux'; Name = 'E3 backup recency (Linux)'; Script = 'core-infrastructure/backups-dr/diagnostics/get-backup-recency.sh'; Args = @(); Expect = @(0) }
+        @{ Platform = 'Linux'; Name = 'E4 server health (Linux)'; Script = 'core-infrastructure/servers/linux/diagnostics/get-server-health-report.sh'; Args = @(); Expect = @(0) }
         @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'B1 health snapshot (macOS)'; Script = "$si/get-client-health-snapshot.sh"; Args = @(); Expect = @(0) }
         @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'B2 --passive (configuration only, nothing sent)'; Script = $b2sh; Args = @('--passive'); Expect = @(0); MustContain = 'Passive: nothing was sent' }
         @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'B3 recent critical errors (macOS)'; Script = $b3sh; Args = @(); Expect = @(0) }

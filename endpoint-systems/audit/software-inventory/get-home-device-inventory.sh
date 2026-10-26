@@ -42,7 +42,7 @@
 #                 the process list; changes nothing.
 # Prerequisites : macOS 12+ or Linux | bash 3.2+ | root: No (Linux: sudo adds serial number and
 #                 empty-password check; macOS: sudo with --all-users adds other users' apps)
-# Version       : 1.1.0
+# Version       : 1.1.1
 # Limitations   : macOS apps outside /Applications and ~/Applications (and one folder level
 #                 below them) and portable programs that are not running are not listed.
 #                 Without --all-users as root, other users' ~/Applications are not listed.
@@ -923,7 +923,7 @@ msp_complete() {
 #endregion MSPHelper:Core
 #endregion MSPToolkit (generated)
 
-SCRIPT_VERSION='1.1.0'
+SCRIPT_VERSION='1.1.1'
 OUTPUT=''
 APPROVED=''
 APPROVED_GIVEN=0
@@ -1113,7 +1113,8 @@ last_login() {
     # Most recent login of a user from wtmp, as epoch (empty if none recorded).
     local line
     if [ "$MSP_PLATFORM" = 'macOS' ]; then
-        line=$(last -1 "$1" 2>/dev/null | awk 'NF > 3 && $1 != "wtmp" { print $4, $5, $6, $7; exit }')
+        # The host column is empty for local logins, so find the date by its weekday.
+        line=$(last -1 "$1" 2>/dev/null | awk '$1 != "wtmp" { for (i = 2; i <= NF - 3; i++) if ($i ~ /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)$/) { print $i, $(i + 1), $(i + 2), $(i + 3); exit } }')
         [ -n "$line" ] || return 0
         # "Mon Oct 16 15:36" has no year: assume the most recent one not in the future.
         local y e
@@ -1122,7 +1123,7 @@ last_login() {
         [ -n "$e" ] && [ "$e" -gt "$NOW" ] && e=$(date -j -f '%a %b %d %H:%M %Y' "$line $((y - 1))" '+%s' 2>/dev/null)
         printf '%s' "$e"
     else
-        line=$(last -F -1 "$1" 2>/dev/null | awk 'NF > 8 && $1 != "wtmp" { print $4, $5, $6, $7, $8; exit }')
+        line=$(last -F -1 "$1" 2>/dev/null | awk '$1 != "wtmp" { for (i = 2; i <= NF - 4; i++) if ($i ~ /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)$/) { print $i, $(i + 1), $(i + 2), $(i + 3), $(i + 4); exit } }')
         [ -n "$line" ] && date -d "$line" '+%s' 2>/dev/null # linux-only: date -d
     fi
     return 0

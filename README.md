@@ -111,8 +111,9 @@ This repository exists to support those outcomes
 
 ## Script Catalog
 
-Scripts reviewed against the toolkit standards (Batches A-C: home network audit, client
-diagnostics, Microsoft 365 and triage, plus the safety fixes for the live remediation scripts). Every Windows script below runs on **Windows PowerShell
+Scripts reviewed against the toolkit standards (Batches A-C and E: home network audit, client
+diagnostics, Microsoft 365, triage, and audit / server reports, plus the safety fixes for the
+live remediation scripts). Every Windows script below runs on **Windows PowerShell
 5.1** with **built-in modules only**, works without admin (admin-only checks show `SKIPPED`), logs
 to `%TEMP%\MSP-Toolkit\`, and supports `-OutputPath` for JSON/CSV results. The macOS and Linux
 scripts are listed after them.
@@ -138,6 +139,10 @@ with `--what-if` and `--force`.
 | `Export-SecurityAuditReport.ps1` (A9) | `security-operations/diagnostics/` | One self-contained HTML report from the JSON results of Windows, macOS and Linux computers (matched by check ID), with a printable checklist for phones, TVs, consoles and smart-home devices | Read-Only (writes the report file) | No | 5.1, or 7 on Windows/macOS/Linux | Built-in |
 | `Invoke-HomeAuditBundle.ps1` | `security-operations/diagnostics/` | Runs A1-A8 in order into one timestamped folder; continues past failures; `-Passive` sends nothing (A2 neighbor table only, A7 not run); optional A9 | Read-Only | No (recommended: Yes) | 5.1 | Built-in |
 | `Get-SuspiciousActivityReport.ps1` (C3) | `security-operations/diagnostics/endpoint-posture/` | **First-look triage, not an antivirus or EDR.** Startup items (Run keys, Startup folders, scheduled tasks, services) in unusual folders, running scripts, unsigned or new; programs and connections from unusual folders; Defender detections and exclusions; new accounts, additions to Administrators and failed sign-ins (Security log); hosts file; proxy | Read-Only | No (admin adds the Security log, Defender exclusions and other users' programs) | 5.1 | Built-in |
+| `Get-LocalAdminReport.ps1` (E1) | `endpoint-systems/audit/local-admins/` | Members of Administrators; too many, built-in Administrator enabled, unused, old or empty passwords, orphaned SIDs, domain / Entra ID groups, LAPS policy | Read-Only | No | 5.1 | Built-in |
+| `Get-InstalledSoftwareReport.ps1` (E2) | `endpoint-systems/audit/software-inventory/` | Apps & Features inventory; end-of-support and watchlist programs from `software-watchlist.txt`; recent installs | Read-Only | No (Yes for `-IncludeOtherUsers`) | 5.1 | Built-in |
+| `Get-BackupRecency.ps1` (E3) | `core-infrastructure/backups-dr/diagnostics/` | File History, Windows Server Backup, OneDrive folder backup, System Restore (context only), known backup products; newest backup age | Read-Only | No (Yes adds Windows Server Backup and System Restore) | 5.1 | Built-in |
+| `Get-ServerHealthReport.ps1` (E4) | `core-infrastructure/servers/windows/diagnostics/` | Windows Server: uptime, restart pending, last update, disk space, memory, stopped automatic services, roles and their services, critical events, time sync, expiring certificates | Read-Only | No (recommended: Yes) | 5.1 | Built-in (ServerManager) |
 | `Get-ClientHealthSnapshot.ps1` (B1) | `endpoint-systems/diagnostics/system-info/` | System, uptime and pending restart, memory, CPU load, free space per drive, last update and updates waiting (cached) | Read-Only | No | 5.1 | Built-in |
 | `Get-NetworkConnectivityReport.ps1` (B2) | `endpoint-systems/diagnostics/networking/` | Adapter, address, gateway, DNS, internet, web (captive portal) in order, proxy, VPN; names the first failing layer. `-Passive` sends nothing | Read-Only (ping, DNS, TCP 443, HTTP(S)) | No | 5.1 | Built-in |
 | `Get-RecentCriticalErrors.ps1` (B3) | `endpoint-systems/diagnostics/event-logs/` | Last 48 h (`-Hours`): blue screens, unexpected shutdowns, disk errors, service failures, app crashes, error counts by source | Read-Only | No | 5.1 | Built-in |
@@ -199,6 +204,10 @@ shows the options.
 | `run-home-audit-bundle.sh` | `security-operations/diagnostics/` | macOS, Linux | Runs A1-A8 in order into one timestamped folder; continues past failures; `--passive` sends nothing (A2 neighbor table only, A7 not run); optional A9 with `--technician` (needs `pwsh`) | Read-Only | No (recommended: Yes) |
 | `get-suspicious-activity-report-macos.sh` (C3) | `security-operations/diagnostics/endpoint-posture/` | macOS | **First-look triage, not an antivirus or EDR.** Launch agents/daemons and cron in unusual folders, running scripts, unsigned or new; Background items; login shell files; programs and connections from unusual folders; SSH keys; hosts file; proxy | Read-Only | No (Yes adds other users and Background items) |
 | `get-suspicious-activity-report-linux.sh` (C3) | `security-operations/diagnostics/endpoint-posture/` | Linux | **First-look triage, not an antivirus or EDR.** systemd units, autostart, cron and rc.local in unusual folders, running scripts or new; `ld.so.preload`; login shell files; programs from unusual folders or memory only, and their connections; SSH keys; failed SSH sign-ins; hosts file; proxy | Read-Only | No (Yes, or the adm / systemd-journal group, for the journal; Yes for other users and every process) |
+| `get-local-admin-report.sh` (E1) | `endpoint-systems/audit/local-admins/` | macOS, Linux | Admin group (macOS) or sudo/wheel/admin (Linux) members; too many, root, unused, old passwords; Linux empty passwords; sudo rules | Read-Only | No (Yes adds sudo rules and Linux password checks) |
+| `get-installed-software-report.sh` (E2) | `endpoint-systems/audit/software-inventory/` | macOS, Linux | Apps or packages (dpkg/rpm, snaps, Flatpaks); end-of-support and watchlist entries from `software-watchlist.txt`; recent installs | Read-Only | No (macOS: Yes for `--all-users`) |
+| `get-backup-recency.sh` (E3) | `core-infrastructure/backups-dr/diagnostics/` | macOS, Linux | Time Machine (from its settings; the backup disk is never mounted), Deja Dup, Timeshift, known backup tools; newest backup age (Linux: SKIPPED when no known tool) | Read-Only | No |
+| `get-server-health-report.sh` (E4) | `core-infrastructure/servers/linux/diagnostics/` | Linux | Uptime, restart pending, load, memory, swap, disk space, inodes, failed units, RAID/ZFS, time sync, OOM kills, Let's Encrypt expiry, listening ports | Read-Only | No (Yes adds certificates; Yes or adm group for the journal) |
 | `get-client-health-snapshot.sh` (B1) | `endpoint-systems/diagnostics/system-info/` | macOS, Linux | System, uptime and pending restart, memory, load, free space per volume, last update and updates waiting (cached) | Read-Only | No (Linux: Yes adds serial number) |
 | `get-network-connectivity-report.sh` (B2) | `endpoint-systems/diagnostics/networking/` | macOS, Linux | Same layers and diagnosis as the Windows version; `--passive` sends nothing | Read-Only (ping, DNS, TCP 443, HTTP(S) via curl) | No |
 | `get-recent-critical-errors.sh` (B3) | `endpoint-systems/diagnostics/event-logs/` | macOS, Linux | macOS: panic and crash reports, restarts without shutdown, SMART (`--include-system-log` adds kernel disk errors; slow). Linux: journal (kernel crashes, disk errors, failed units, segfaults, error counts), `last -x`, apport | Read-Only | No (Linux: Yes, or the adm / systemd-journal group, for system messages) |
@@ -209,7 +218,13 @@ downloaded files does not apply to a script passed to bash). On macOS, macOS hid
 from Terminal unless it has Location Services permission; the A3 ratings still work and the
 name-matching checks say so. None of these scripts need Full Disk Access.
 
-Scripts not listed here have not yet been reviewed against the standards (Batch E).
+Scripts not listed here have not yet been reviewed against the standards (the RC4 audit in
+`security-operations/audit/`, planned for Batch E, is still to do).
+
+**`software-watchlist.txt`** (next to the E2 scripts) lists end-of-support and "flag this"
+software for E2 on every platform. Edit it for the MSP's needs; its header explains the format.
+Each end-of-support line records its source and the date it was checked (`unverified` until
+someone confirms it at the source).
 Superseded scripts and unsigned binaries are in `_archive/` (see `_archive/README.md`).
 
 ---
@@ -392,7 +407,7 @@ Category/Check text on every platform so their IDs match. Export file names:
 check plus a tamper test, the bash helper unit tests (under every bash it finds, including bash
 3.2.57), a JSON escaping round-trip into PowerShell, finding-ID and MAC-vendor parity between bash
 and PowerShell, schema validation, the PowerShell helper unit tests, logic tests with mocked paths
-(D1 repeat runs; A9; the Windows bundle; B1-B3 and C3 Windows against mocked cmdlets; C1 and C2
+(D1 repeat runs; A9; the Windows bundle; B1-B3, C3 and E1-E4 Windows against mocked cmdlets; C1 and C2
 against mocked Exchange Online and Microsoft Graph cmdlets, so no tenant is contacted), then
 runtime smoke tests of the scripts for the platform it runs on.
 

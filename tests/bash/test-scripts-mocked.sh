@@ -58,7 +58,7 @@ new_env() {
     # The signed-in user is "alice" (uid 1000); her groups come from the fake /etc/group.
     stub "$BIN" id 'case "$1" in -u) echo 1000 ;; -un) echo alice ;; -Gn) awk -F: -v u="${2:-alice}" '"'"'BEGIN { printf "%s", u } { n = split($4, m, ","); for (i = 1; i <= n; i++) if (m[i] == u) printf " %s", $1 } END { print "" }'"'"' "'"$FAKE"'/etc/group" 2>/dev/null ;; *) echo "uid=1000(alice)" ;; esac'
     # GNU forms used by -linux.sh scripts, mapped onto whatever date/stat this computer has.
-    stub "$BIN" date "case \"\$1\" in -d) v=\$2; shift 2; if $REAL_DATE -d @0 >/dev/null 2>&1; then exec $REAL_DATE -d \"\$v\" \"\$@\"; fi; case \"\$v\" in @*) e=\${v#@} ;; *) e=\$($REAL_DATE -j -f '%Y-%m-%d %H:%M:%S' \"\$v\" +%s 2>/dev/null || $REAL_DATE -j -f '%Y-%m-%d' \"\$v\" +%s 2>/dev/null || $REAL_DATE -j -f '%a %b %d %H:%M:%S %Y' \"\$v\" +%s 2>/dev/null) ;; esac; [ -n \"\$e\" ] || exit 1; exec $REAL_DATE -r \$e \"\$@\" ;; *) exec $REAL_DATE \"\$@\" ;; esac"
+    stub "$BIN" date "case \"\$1\" in -d) v=\$2; shift 2; if $REAL_DATE -d @0 >/dev/null 2>&1; then exec $REAL_DATE -d \"\$v\" \"\$@\"; fi; case \"\$v\" in @*) e=\${v#@} ;; *) e=\$($REAL_DATE -j -f '%Y-%m-%d %H:%M:%S' \"\$v\" +%s 2>/dev/null || $REAL_DATE -j -f '%Y-%m-%d' \"\$v\" +%s 2>/dev/null || $REAL_DATE -j -f '%a %b %d %H:%M:%S %Y' \"\$v\" +%s 2>/dev/null || $REAL_DATE -j -f '%b %d %H:%M:%S %Y %Z' \"\$v\" +%s 2>/dev/null) ;; esac; [ -n \"\$e\" ] || exit 1; exec $REAL_DATE -r \$e \"\$@\" ;; *) exec $REAL_DATE \"\$@\" ;; esac"
     stub "$BIN" stat "if [ \"\$1\" = -c ]; then f=\$2; shift 2; if $REAL_STAT -c %Y / >/dev/null 2>&1; then exec $REAL_STAT -c \"\$f\" \"\$@\"; elif [ \"\$f\" = %U ]; then exec $REAL_STAT -f %Su \"\$@\"; else exec $REAL_STAT -f %m \"\$@\"; fi; else exec $REAL_STAT \"\$@\"; fi"
     # Anything that would send traffic fails loudly and leaves a marker.
     for c in ping nc curl wget dig nslookup host avahi-resolve; do
@@ -1055,6 +1055,251 @@ check 'C3 mac: its connection only' "$OUT" '\[WARN\] +Connections from flagged p
 check 'C3 mac: hosts entry for XProtect' "$OUT" '\[WARN\] +Hosts file - 1 entr\(ies\), including: 127\.0\.0\.1 xprotect\.apple\.com'
 check 'C3 mac: proxy' "$OUT" '\[WARN\] +Proxy settings - Web traffic goes through: web proxy 127\.0\.0\.1:8080\.'
 check_not 'C3 mac: no ERROR findings' "$OUT" '\[ERROR\]'
+
+# =========================================================================================
+# Batch E: E1 local admins, E2 installed software, E3 backup recency, E4 server health
+# =========================================================================================
+E1S=endpoint-systems/audit/local-admins/get-local-admin-report.sh
+E2S=endpoint-systems/audit/software-inventory/get-installed-software-report.sh
+E3S=core-infrastructure/backups-dr/diagnostics/get-backup-recency.sh
+E4S=core-infrastructure/servers/linux/diagnostics/get-server-health-report.sh
+days_ago() {
+    # days_ago N FORMAT - a date N days ago (negative N: in the future), on BSD or GNU date.
+    local v="-$1"
+    case "$1" in -*) v="+${1#-}" ;; esac
+    "$REAL_DATE" -v"${v}"d "$2" 2>/dev/null || "$REAL_DATE" -d "$1 days ago" "$2"
+}
+utc_days_ago() { "$REAL_DATE" -u -v-"$1"d "$2" 2>/dev/null || "$REAL_DATE" -u -d "$1 days ago" "$2"; }
+LAST_FMT='+%a %b %e %H:%M:%S %Y'
+
+# --- E1 Linux, not root: groups, primary group, UID 0, unused accounts ----------------------
+new_env e1-linux
+mkdir -p "$FAKE/etc"
+printf 'sudo:x:27:alice,bob\nadmin:x:118:\nusers:x:100:\n' >"$FAKE/etc/group"
+printf 'root:x:0:0:root:/root:/bin/bash\nalice:x:1000:1000::/home/alice:/bin/bash\nbob:x:1001:1001::/home/bob:/bin/bash\ncarol:x:1002:27::/home/carol:/bin/bash\ntoor:x:0:0::/root:/bin/bash\n' >"$FAKE/etc/passwd"
+stub "$BIN" last "case \"\$*\" in
+    *alice*) echo \"alice    pts/0        198.51.100.5     $(days_ago 5 "$LAST_FMT") - crash\" ;;
+    *bob*) echo \"bob      pts/1        198.51.100.6     $(days_ago 200 "$LAST_FMT") - crash\" ;;
+esac; echo; echo 'wtmp begins Mon Jan  1 00:00:00 2024'"
+OUT="$WORK/e1-linux.txt"
+run_script e1-linux "$E1S" "$OUT" --output "$WORK/e1-linux/export"
+check 'E1 linux: exit 0' "$OUT.rc" '^0$'
+check 'E1 linux: sudo members, primary group and UID 0 listed' "$OUT" '\[INFO\] +Administrators - alice \(Local user \(sudo\)\); bob \(Local user \(sudo\)\); carol \(Local user \(sudo\)\); toor \(UID 0'
+check 'E1 linux: too many admins' "$OUT" '\[WARN\] +Number of administrators - 4 enabled administrator account\(s\), more than the 2 expected'
+check 'E1 linux: extra UID 0 = FAIL' "$OUT" '\[FAIL\] +Root account - Accounts other than root with root.s user ID \(0\): toor'
+check 'E1 linux: unused admins' "$OUT" '\[WARN\] +Unused administrator accounts - bob \(last sign-in .*carol \(no sign-in recorded\)'
+check_not 'E1 linux: alice is not unused' "$OUT" 'Unused administrator accounts - .*alice'
+check 'E1 linux: password age needs sudo' "$OUT" '\[SKIPPED\] Administrator password age - Skipped: requires root'
+check 'E1 linux: sudo rules need sudo' "$OUT" '\[SKIPPED\] Sudo rules - Skipped: requires root'
+check_not 'E1 linux: no ERROR findings' "$OUT" '\[ERROR\]'
+json=$(find "$WORK/e1-linux/export" -name '*.json' 2>/dev/null | head -n 1)
+[ -n "$json" ] && check 'E1 linux: Admins table' "$json" '"Name":"carol","Type":"Local user \(sudo\)"'
+
+# --- E1 Linux, root: shadow states and sudo rules -------------------------------------------
+new_env e1-linux-root
+mkdir -p "$FAKE/etc/sudoers.d"
+printf 'sudo:x:27:alice,bob,carol\n' >"$FAKE/etc/group"
+printf 'root:x:0:0:root:/root:/bin/bash\nalice:x:1000:1000::/home/alice:/bin/bash\nbob:x:1001:1001::/home/bob:/bin/bash\ncarol:x:1002:1002::/home/carol:/bin/bash\n' >"$FAKE/etc/passwd"
+printf 'root:!:19000:0:99999:7:::\nalice:$6$mock$hash:18000:0:99999:7:::\nbob:!$6$mock$hash:19500:0:99999:7:::\ncarol::20000:0:99999:7:::\n' >"$FAKE/etc/shadow"
+printf 'Defaults env_reset\nroot ALL=(ALL:ALL) ALL\n%%sudo ALL=(ALL:ALL) ALL\n' >"$FAKE/etc/sudoers"
+printf 'deploy ALL=(ALL) NOPASSWD: ALL\n' >"$FAKE/etc/sudoers.d/deploy"
+stub "$BIN" id 'case "$1" in -u) echo 0 ;; -un) echo root ;; *) echo "uid=0(root)" ;; esac'
+stub "$BIN" last "case \"\$*\" in *alice*|*carol*) echo \"\$3    pts/0        198.51.100.5     $(days_ago 3 "$LAST_FMT") - crash\" ;; esac"
+OUT="$WORK/e1-linux-root.txt"
+run_script e1-linux-root "$E1S" "$OUT"
+check 'E1 linux root: exit 0' "$OUT.rc" '^0$'
+check 'E1 linux root: bob locked = disabled' "$OUT" 'Administrators - .*bob \(Local user \(sudo\), disabled\)'
+check 'E1 linux root: root locked = PASS' "$OUT" '\[PASS\] +Root account - root cannot log in with a password'
+check 'E1 linux root: old password' "$OUT" '\[WARN\] +Administrator password age - alice \(set 2019-'
+check 'E1 linux root: empty password = FAIL' "$OUT" '\[FAIL\] +Administrators without a password - Empty password: carol\.'
+check 'E1 linux root: NOPASSWD rule' "$OUT" '\[WARN\] +Sudo rules - Full rights without a password: /etc/sudoers.d/deploy: deploy ALL=\(ALL\) NOPASSWD: ALL'
+check_not 'E1 linux root: no ERROR findings' "$OUT" '\[ERROR\]'
+
+# --- E1 macOS: admin group, disabled user, root enabled -------------------------------------
+new_env e1-mac
+stub "$BIN" uname 'case "$1" in -s) echo Darwin ;; -n) echo mockmac ;; *) echo Darwin ;; esac'
+stub "$BIN" sw_vers 'echo 26.0'
+stub "$BIN" id 'case "$1" in -u) echo 501 ;; -un) echo alice ;; *) echo "uid=501(alice)" ;; esac'
+stub "$BIN" dscl "case \"\$*\" in
+    *'/Groups/admin GroupMembership'*) echo 'GroupMembership: root alice _mbsetupuser bob' ;;
+    *'/Users/alice UniqueID'*) echo 'UniqueID: 501' ;;
+    *'/Users/bob UniqueID'*) echo 'UniqueID: 502' ;;
+    *'/Users/bob AuthenticationAuthority'*) echo 'AuthenticationAuthority: ;DisabledUser;;ShadowHash;HASHLIST:<SALTED-SHA512-PBKDF2>' ;;
+    *'/Users/root AuthenticationAuthority'*) echo 'AuthenticationAuthority: ;ShadowHash;HASHLIST:<SALTED-SHA512-PBKDF2>' ;;
+    *'/Users/alice accountPolicyData'*) printf '<dict>\n<key>passwordLastSetTime</key>\n<real>1500000000.25</real>\n</dict>\n' ;;
+esac"
+stub "$BIN" last 'exit 0'
+OUT="$WORK/e1-mac.txt"
+run_script e1-mac "$E1S" "$OUT"
+check 'E1 mac: exit 0' "$OUT.rc" '^0$'
+check 'E1 mac: admins without root and _ accounts' "$OUT" '\[INFO\] +Administrators - alice \(Local user\); bob \(Local user, disabled\)$'
+check 'E1 mac: one enabled admin' "$OUT" '\[PASS\] +Number of administrators - 1 enabled'
+check 'E1 mac: root enabled = WARN' "$OUT" '\[WARN\] +Root account - The root user is enabled'
+check 'E1 mac: password set in 2017' "$OUT" '\[WARN\] +Administrator password age - alice \(set 2017-'
+check_not 'E1 mac: no empty-password check on macOS' "$OUT" 'Administrators without a password'
+check_not 'E1 mac: no ERROR findings' "$OUT" '\[ERROR\]'
+
+# --- E2 Linux: packages, end of support, watchlist, recent ----------------------------------
+new_env e2-linux
+mkdir -p "$FAKE/var/lib/dpkg/info"
+for p in python2.7 transmission-gtk firefox coreutils; do : >"$FAKE/var/lib/dpkg/info/$p.list"; done
+old_file "$FAKE/var/lib/dpkg/info/python2.7.list" "$FAKE/var/lib/dpkg/info/transmission-gtk.list" "$FAKE/var/lib/dpkg/info/coreutils.list"
+stub "$BIN" dpkg-query 'printf "python2.7|2.7.18-13ubuntu1|package\ntransmission-gtk|3.00-2ubuntu2|package\nfirefox|131.0+build1|package\ncoreutils|9.4-3ubuntu6|package\n"'
+stub "$BIN" snap 'printf "Name     Version  Rev   Tracking       Publisher  Notes\nspotify  1.2.42   80    latest/stable  spotify    -\n"'
+OUT="$WORK/e2-linux.txt"
+run_script e2-linux "$E2S" "$OUT" --output "$WORK/e2-linux/export"
+check 'E2 linux: exit 0' "$OUT.rc" '^0$'
+check 'E2 linux: watchlist loaded' "$OUT" '\[INFO\] +Watchlist file - [0-9]+ Linux entr\(ies\)'
+check 'E2 linux: packages and snaps counted' "$OUT" '\[INFO\] +Installed software - 5 package\(s\), snaps and Flatpaks\.'
+check 'E2 linux: python2.7 end of support' "$OUT" '\[WARN\] +End-of-support software - python2\.7 2\.7\.18-13ubuntu1 \(no support since 2020-01-01, date unverified\)'
+check 'E2 linux: Transmission on the watchlist' "$OUT" '\[WARN\] +Watchlist software - transmission-gtk 3\.00-2ubuntu2: Peer-to-peer'
+check 'E2 linux: recent install' "$OUT" '\[INFO\] +Recently installed software - 1 installed in the last 30 day\(s\): firefox 131\.0\+build1'
+check_not 'E2 linux: no ERROR findings' "$OUT" '\[ERROR\]'
+json=$(find "$WORK/e2-linux/export" -name '*.json' 2>/dev/null | head -n 1)
+[ -n "$json" ] && check 'E2 linux: same check ID as Windows' "$json" '"Id": "E2\.Software\.End-of-support-software"'
+OUT="$WORK/e2-linux-nowatch.txt"
+run_script e2-linux "$E2S" "$OUT" --watchlist /nonexistent/watch.txt
+check 'E2 linux: missing watchlist = SKIPPED' "$OUT" '\[SKIPPED\] Watchlist file - Skipped: the watchlist file /nonexistent/watch\.txt was not found'
+check 'E2 linux: end of support SKIPPED too' "$OUT" '\[SKIPPED\] End-of-support software'
+check_not 'E2 linux nowatch: no ERROR findings' "$OUT" '\[ERROR\]'
+
+# --- E2 macOS: an old Office app and a cleaner ----------------------------------------------
+new_env e2-mac
+stub "$BIN" uname 'case "$1" in -s) echo Darwin ;; -n) echo mockmac ;; *) echo Darwin ;; esac'
+stub "$BIN" sw_vers 'echo 26.0'
+stub "$BIN" id 'case "$1" in -u) echo 501 ;; -un) echo alice ;; *) echo "uid=501(alice)" ;; esac'
+stub "$BIN" defaults '[ "$1" = read ] && [ -f "$2" ] && head -n 1 "$2"'
+for a in 'Microsoft Word:16.25.1' 'CCleaner:2.9' 'Safari:18.0'; do
+    mkdir -p "$FAKE/Applications/${a%%:*}.app/Contents" && printf '%s\n' "${a#*:}" >"$FAKE/Applications/${a%%:*}.app/Contents/Info.plist"
+done
+old_file "$FAKE/Applications/Microsoft Word.app" "$FAKE/Applications/CCleaner.app" "$FAKE/Applications/Safari.app"
+OUT="$WORK/e2-mac.txt"
+run_script e2-mac "$E2S" "$OUT"
+check 'E2 mac: exit 0' "$OUT.rc" '^0$'
+check 'E2 mac: three apps' "$OUT" '\[INFO\] +Installed software - 3 app\(s\)'
+check 'E2 mac: Word 16.25 end of support (version pattern)' "$OUT" '\[WARN\] +End-of-support software - Microsoft Word 16\.25\.1 \(no support since 2025-10-14'
+check 'E2 mac: CCleaner on the watchlist' "$OUT" '\[WARN\] +Watchlist software - CCleaner 2\.9: '
+check 'E2 mac: nothing recent' "$OUT" '\[INFO\] +Recently installed software - Nothing installed or changed'
+check_not 'E2 mac: no ERROR findings' "$OUT" '\[ERROR\]'
+
+# --- E3 Linux: Deja Dup 2 days ago, Timeshift 10 days ago, restic installed ------------------
+new_env e3-linux
+mkdir -p "$FAKE/etc/timeshift" "$FAKE/timeshift/snapshots/$(days_ago 10 '+%Y-%m-%d_%H-%M-%S')"
+: >"$FAKE/etc/timeshift/timeshift.json"
+stub "$BIN" gsettings "case \"\$*\" in
+    'list-keys org.gnome.DejaDup') echo last-backup ;;
+    'get org.gnome.DejaDup last-backup') echo \"'$(days_ago 2 '+%Y-%m-%d %H:%M:%S')'\" ;;
+    'get org.gnome.DejaDup backend') echo \"'google'\" ;;
+esac"
+stub "$BIN" restic 'exit 0'
+stub "$BIN" systemctl 'exit 0'
+OUT="$WORK/e3-linux.txt"
+run_script e3-linux "$E3S" "$OUT" --output "$WORK/e3-linux/export"
+check 'E3 linux: exit 0' "$OUT.rc" '^0$'
+check 'E3 linux: Deja Dup date read' "$OUT" '\[INFO\] +Deja Dup - Last successful backup .*\(2 day\(s\) ago\)'
+check 'E3 linux: Timeshift snapshot found' "$OUT" '\[INFO\] +Timeshift - Newest snapshot .*\(10 day\(s\) ago\)'
+check 'E3 linux: restic detected' "$OUT" '\[INFO\] +Other backup software - Found: restic'
+check 'E3 linux: newest = Deja Dup, PASS' "$OUT" '\[PASS\] +Backup recency - Newest backup: Deja Dup, .*Also present \(no date read\): restic'
+check_not 'E3 linux: no ERROR findings' "$OUT" '\[ERROR\]'
+
+# --- E3 Linux: nothing known = SKIPPED (per the plan) ----------------------------------------
+new_env e3-linux-none
+stub "$BIN" systemctl 'exit 0'
+OUT="$WORK/e3-linux-none.txt"
+PATH="$WORK/e3-linux-none/bin:/usr/bin:/bin" MSP_TEST_ROOT="$WORK/e3-linux-none/root" TMPDIR="$WORK/e3-linux-none" NO_COLOR=1 HOME=/home/alice \
+    "$BASH" "$REPO/$E3S" </dev/null >"$OUT" 2>&1
+printf '%s\n' "$?" >"$OUT.rc"
+check 'E3 linux none: exit 0' "$OUT.rc" '^0$'
+check 'E3 linux none: SKIPPED, not FAIL' "$OUT" '\[SKIPPED\] Backup recency - Skipped: no known backup tool was found'
+check_not 'E3 linux none: no ERROR findings' "$OUT" '\[ERROR\]'
+
+# --- E3 macOS: Time Machine settings file ----------------------------------------------------
+new_env e3-mac
+stub "$BIN" uname 'case "$1" in -s) echo Darwin ;; -n) echo mockmac ;; *) echo Darwin ;; esac'
+stub "$BIN" sw_vers 'echo 26.0'
+mkdir -p "$FAKE/Library/Preferences"
+TM_DATE=$(utc_days_ago 12 '+%Y-%m-%dT%H:%M:%SZ')
+printf 'Destinations=1\nDestinations.0=1\nDestinations.0.LastKnownVolumeName=TM Disk\nDestinations.0.SnapshotDates=<date>2020-01-01T00:00:00Z</date>\nDestinations.0.SnapshotDates=<date>%s</date>\nAutoBackup=false\n' "$TM_DATE" >"$FAKE/Library/Preferences/com.apple.TimeMachine.plist"
+stub "$BIN" plutil 'key=$2; f=$6; v=$(grep "^$key=" "$f" | sed "s/^[^=]*=//"); [ -n "$v" ] || exit 1; printf "%s\n" "$v"'
+OUT="$WORK/e3-mac.txt"
+run_script e3-mac "$E3S" "$OUT"
+check 'E3 mac: exit 0' "$OUT.rc" '^0$'
+if "$REAL_DATE" -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$TM_DATE" '+%s' >/dev/null 2>&1; then
+    check 'E3 mac: newest Time Machine date, auto off' "$OUT" '\[INFO\] +Time Machine - Backs up to TM Disk; newest backup .*\(12 day\(s\) ago\)\. Automatic backups are OFF\.'
+    check 'E3 mac: 12 days = WARN' "$OUT" '\[WARN\] +Backup recency - Newest backup: Time Machine'
+else
+    check 'E3 mac (no BSD date here): set up' "$OUT" '\[INFO\] +Time Machine - '
+fi
+check_not 'E3 mac: no ERROR findings' "$OUT" '\[ERROR\]'
+
+# --- E4 Linux: an unhealthy server -----------------------------------------------------------
+new_env e4-bad
+mkdir -p "$FAKE/proc" "$FAKE/var/run"
+printf '7776000.12 1000.00\n' >"$FAKE/proc/uptime"
+printf '9.00 8.50 8.00 1/200 1234\n' >"$FAKE/proc/loadavg"
+printf 'processor\t: 0\nprocessor\t: 1\nprocessor\t: 2\nprocessor\t: 3\n' >"$FAKE/proc/cpuinfo"
+printf 'MemTotal:        8388608 kB\nMemAvailable:     419430 kB\nSwapTotal:       2097152 kB\nSwapFree:         524288 kB\n' >"$FAKE/proc/meminfo"
+printf 'Personalities : [raid1]\nmd0 : active raid1 sdb1[1] sda1[0](F)\n      976630464 blocks super 1.2 [2/1] [U_]\n\nunused devices: <none>\n' >"$FAKE/proc/mdstat"
+: >"$FAKE/var/run/reboot-required"
+printf 'linux-image-6.8.0-48-generic\n' >"$FAKE/var/run/reboot-required.pkgs"
+stub "$BIN" df 'case "$*" in
+    *-i*) printf "Filesystem Inodes IUsed IFree IUse%% Mounted on\n/dev/sda2 1000000 950000 50000 95%% /\n/dev/sdb1 5000000 10000 4990000 1%% /srv\n" ;;
+    *) printf "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda2 104857600 101711872 3145728 97%% /\n/dev/sdb1 1073741824 104857600 968884224 10%% /srv\n" ;;
+esac'
+stub "$BIN" systemctl 'case "$*" in *--state=failed*) echo "nginx.service loaded failed failed A high performance web server" ;; esac'
+stub "$BIN" timedatectl 'case "$*" in *NTPSynchronized*) echo no ;; *NTP*) echo no ;; esac'
+stub "$BIN" journalctl 'case "$*" in *"-n 1"*) exit 0 ;; *-k*) printf "Out of memory: Killed process 4242 (java) total-vm:8000000kB\nOut of memory: Killed process 4300 (java) total-vm:8000000kB\n" ;; esac'
+stub "$BIN" zpool 'printf "  pool: tank\n state: DEGRADED\nstatus: One or more devices has been removed.\n"'
+stub "$BIN" ss 'printf "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\nLISTEN 0 128 127.0.0.1:5432 0.0.0.0:*\nLISTEN 0 128 [::]:443 [::]:*\n"'
+stub "$BIN" systemd-detect-virt 'echo kvm'
+OUT="$WORK/e4-bad.txt"
+run_script e4-bad "$E4S" "$OUT" --output "$WORK/e4-bad/export"
+check 'E4 bad: exit 0' "$OUT.rc" '^0$'
+check 'E4 bad: server line' "$OUT" '\[INFO\] +Server - .*kernel 6\.8\.0-mock, kvm'
+check 'E4 bad: 90-day uptime' "$OUT" '\[WARN\] +Uptime - Up 90 day'
+check 'E4 bad: restart pending with package' "$OUT" '\[WARN\] +Restart pending - Waiting for a restart: reboot-required \(linux-image-6\.8\.0-48-generic\)'
+check 'E4 bad: load 2 per CPU' "$OUT" '\[WARN\] +Load - 15-minute load 8\.00 on 4 CPU\(s\) \(2\.00 per CPU\)'
+check 'E4 bad: memory 95 %' "$OUT" '\[WARN\] +Memory - 95 % of 8 GB'
+check 'E4 bad: swap 75 %' "$OUT" '\[WARN\] +Swap usage - 75 %'
+check 'E4 bad: full root FAIL' "$OUT" '\[FAIL\] +System drive space - /: 3 GB free of 100 GB \(3 %\)'
+check 'E4 bad: big data disk fine' "$OUT" '\[PASS\] +Disk space /srv - '
+check 'E4 bad: inodes' "$OUT" '\[WARN\] +Inode usage - Nearly out of inodes: / \(95 %\)'
+check 'E4 bad: degraded RAID FAIL' "$OUT" '\[FAIL\] +RAID arrays - md0 missing a disk'
+check 'E4 bad: degraded ZFS FAIL' "$OUT" '\[FAIL\] +ZFS pools - pool: tank'
+check 'E4 bad: failed unit' "$OUT" '\[WARN\] +Failed services - nginx\.service'
+check 'E4 bad: clock not synchronized' "$OUT" '\[WARN\] +Time synchronization - The clock is NOT synchronized'
+check 'E4 bad: OOM kills' "$OUT" '\[WARN\] +Out-of-memory kills - .*java \(2\)'
+check 'E4 bad: certificates need sudo' "$OUT" '\[SKIPPED\] Certificates - Skipped: requires root'
+check 'E4 bad: listening on all addresses only' "$OUT" '\[INFO\] +Listening services - TCP ports open on all addresses: 22, 443\.'
+check_not 'E4 bad: no ERROR findings' "$OUT" '\[ERROR\]'
+
+# --- E4 Linux: a healthy server, as root, with a Let's Encrypt certificate -------------------
+new_env e4-good
+mkdir -p "$FAKE/proc" "$FAKE/etc/letsencrypt/live/www.example.com"
+printf '864000.00 1000.00\n' >"$FAKE/proc/uptime"
+printf '0.20 0.30 0.40 1/200 1234\n' >"$FAKE/proc/loadavg"
+printf 'processor\t: 0\nprocessor\t: 1\n' >"$FAKE/proc/cpuinfo"
+printf 'MemTotal:        8388608 kB\nMemAvailable:    6291456 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\n' >"$FAKE/proc/meminfo"
+: >"$FAKE/etc/letsencrypt/live/www.example.com/cert.pem"
+stub "$BIN" id 'case "$1" in -u) echo 0 ;; -un) echo root ;; *) echo "uid=0(root)" ;; esac'
+stub "$BIN" df 'case "$*" in
+    *-i*) printf "Filesystem Inodes IUsed IFree IUse%% Mounted on\n/dev/sda2 1000000 100000 900000 10%% /\n" ;;
+    *) printf "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda2 104857600 52428800 52428800 50%% /\n" ;;
+esac'
+stub "$BIN" systemctl 'exit 0'
+stub "$BIN" timedatectl 'case "$*" in *NTPSynchronized*) echo yes ;; *NTP*) echo yes ;; esac'
+stub "$BIN" journalctl 'exit 0'
+stub "$BIN" openssl "echo 'notAfter=$(days_ago -60 '+%b %e %H:%M:%S %Y') GMT'"
+stub "$BIN" ss 'printf "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*\n"'
+OUT="$WORK/e4-good.txt"
+run_script e4-good "$E4S" "$OUT"
+check 'E4 good: exit 0' "$OUT.rc" '^0$'
+for c in 'Uptime' 'Restart pending' 'Load' 'Memory' 'System drive space' 'Inode usage' 'Failed services' 'Time synchronization' 'Out-of-memory kills' 'Certificates'; do
+    check "E4 good: $c PASS" "$OUT" "\\[PASS\\] +$c - "
+done
+check 'E4 good: no swap' "$OUT" '\[INFO\] +Swap usage - No swap configured'
+check 'E4 good: no RAID' "$OUT" '\[INFO\] +RAID arrays - No Linux software RAID'
+check_not 'E4 good: no ERROR findings' "$OUT" '\[ERROR\]'
 
 # =========================================================================================
 # Bundle run-home-audit-bundle.sh
