@@ -1151,7 +1151,7 @@ run_script e2-linux "$E2S" "$OUT" --output "$WORK/e2-linux/export"
 check 'E2 linux: exit 0' "$OUT.rc" '^0$'
 check 'E2 linux: watchlist loaded' "$OUT" '\[INFO\] +Watchlist file - [0-9]+ Linux entr\(ies\)'
 check 'E2 linux: packages and snaps counted' "$OUT" '\[INFO\] +Installed software - 5 package\(s\), snaps and Flatpaks\.'
-check 'E2 linux: python2.7 end of support' "$OUT" '\[WARN\] +End-of-support software - python2\.7 2\.7\.18-13ubuntu1 \(no support since 2020-01-01, date unverified\)'
+check 'E2 linux: python2.7 end of support' "$OUT" '\[WARN\] +End-of-support software - python2\.7 2\.7\.18-13ubuntu1 \(no support since 2020-01-01\)'
 check 'E2 linux: Transmission on the watchlist' "$OUT" '\[WARN\] +Watchlist software - transmission-gtk 3\.00-2ubuntu2: Peer-to-peer'
 check 'E2 linux: recent install' "$OUT" '\[INFO\] +Recently installed software - 1 installed in the last 30 day\(s\): firefox 131\.0\+build1'
 check_not 'E2 linux: no ERROR findings' "$OUT" '\[ERROR\]'
@@ -1177,7 +1177,7 @@ OUT="$WORK/e2-mac.txt"
 run_script e2-mac "$E2S" "$OUT"
 check 'E2 mac: exit 0' "$OUT.rc" '^0$'
 check 'E2 mac: three apps' "$OUT" '\[INFO\] +Installed software - 3 app\(s\)'
-check 'E2 mac: Word 16.25 end of support (version pattern)' "$OUT" '\[WARN\] +End-of-support software - Microsoft Word 16\.25\.1 \(no support since 2025-10-14'
+check 'E2 mac: Word 16.25 end of support (version pattern)' "$OUT" '\[WARN\] +End-of-support software - Microsoft Word 16\.25\.1 \(no support since 2023-10-10\)'
 check 'E2 mac: CCleaner on the watchlist' "$OUT" '\[WARN\] +Watchlist software - CCleaner 2\.9: '
 check 'E2 mac: nothing recent' "$OUT" '\[INFO\] +Recently installed software - Nothing installed or changed'
 check_not 'E2 mac: no ERROR findings' "$OUT" '\[ERROR\]'

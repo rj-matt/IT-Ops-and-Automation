@@ -11,7 +11,8 @@
 
       E1  Built-in Administrator enabled, too many admins, an unused admin, an old password, an
           admin allowed an empty password, an orphaned SID, an Entra ID group, Windows LAPS.
-      E2  Apps & Features from fake uninstall keys: Flash and Office 2016 (end of support),
+      E2  Apps & Features from fake uninstall keys: Flash, Office 2016 and Java 7 (end of
+          support; Java's date is still unverified and must say so),
           CCleaner (watchlist), a recent install, a hidden system component; a missing
           watchlist file (SKIPPED, not ERROR).
       E3  File History 3 days old (PASS), 40 days old (FAIL), nothing at all (WARN High), only
@@ -178,6 +179,7 @@ $global:FakeSoftware = @(
     (New-FakeApp 'Adobe Flash Player 32 NPAPI' '32.0.0.465'),
     (New-FakeApp 'Microsoft Office Professional Plus 2016' '16.0.4266.1001' 'HKLM32'),
     (New-FakeApp 'CCleaner' '6.20'),
+    (New-FakeApp 'Java 7 Update 80' '7.0.800'),
     (New-FakeApp 'Google Chrome' '130.0.6723.92'),
     (New-FakeApp 'Notepad++ (64-bit x64)' '8.7' 'HKLM64' $today),
     (New-FakeApp 'Zoom Workplace' '6.2' 'HKCU'),
@@ -186,18 +188,19 @@ $global:FakeSoftware = @(
 '@
 $r = Invoke-Mocked 'e2' ($common + $e2) 'endpoint-systems/audit/software-inventory/Get-InstalledSoftwareReport.ps1'
 Assert-Finding $r 'E2: watchlist loaded, unverified dates counted' 'Watchlist file' 'INFO' 'Windows entr\(ies\).*not yet confirmed'
-Assert-Finding $r 'E2: six programs (system component hidden)' 'Installed software' 'INFO' '^6 program'
-Assert-Finding $r 'E2: Flash and Office 2016 end of support' 'End-of-support software' 'WARN' 'Adobe Flash Player 32 NPAPI .*no support since 2020-12-31, date unverified.*Office Professional Plus 2016'
+Assert-Finding $r 'E2: seven programs (system component hidden)' 'Installed software' 'INFO' '^7 program'
+Assert-Finding $r 'E2: Flash and Office 2016 end of support' 'End-of-support software' 'WARN' 'Adobe Flash Player 32 NPAPI .*no support since 2020-12-31\).*Office Professional Plus 2016 .*since 2025-10-14\)'
 Assert-True 'E2: Chrome not end of support' ([string](@($r.Findings | Where-Object { $_.Check -eq 'End-of-support software' })[0].Detail) -notmatch 'Chrome')
 Assert-Finding $r 'E2: CCleaner on the watchlist' 'Watchlist software' 'WARN' '^CCleaner 6\.20: '
 Assert-Finding $r 'E2: recent install' 'Recently installed software' 'INFO' '^1 in the last 30 day\(s\): Notepad\+\+'
-Assert-True 'E2: Flagged table' ($r -and @($r.Data.Flagged).Count -eq 3)
+Assert-True 'E2: unverified date says so' ([string](@($r.Findings | Where-Object { $_.Check -eq 'End-of-support software' })[0].Detail) -match 'Java 7 Update 80 7\.0\.800 \(no support since 2022-07-31, date unverified\)')
+Assert-True 'E2: Flagged table' ($r -and @($r.Data.Flagged).Count -eq 4)
 Assert-NoError $r 'E2: no ERROR findings'
 
 $r = Invoke-Mocked 'e2-nowatch' ($common + $e2) 'endpoint-systems/audit/software-inventory/Get-InstalledSoftwareReport.ps1' @('-WatchlistPath', (Join-Path $work 'missing.txt'))
 Assert-Finding $r 'E2 no watchlist: SKIPPED' 'Watchlist file' 'SKIPPED' 'was not found'
 Assert-Finding $r 'E2 no watchlist: end-of-support SKIPPED' 'End-of-support software' 'SKIPPED'
-Assert-Finding $r 'E2 no watchlist: inventory still listed' 'Installed software' 'INFO' '^6 program'
+Assert-Finding $r 'E2 no watchlist: inventory still listed' 'Installed software' 'INFO' '^7 program'
 Assert-NoError $r 'E2 no watchlist: no ERROR findings'
 
 # =========================================================================================

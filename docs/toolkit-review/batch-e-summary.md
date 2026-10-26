@@ -70,9 +70,15 @@ its weekday. Batch A's A8 status is unchanged (run on macOS); the fix itself ran
    Fifteen starter entries: 12 end-of-support (Flash, Silverlight, QuickTime for Windows,
    Windows Essentials, Office 2010/2013/2016/2019, Office 2019 for Mac builds, Python 2,
    Java 6/7) and 3 "watch" groups (cleaners / driver updaters, peer-to-peer, adware toolbars).
-5. **E2 end-of-support dates are all marked `unverified`.** I wrote them from the vendors'
-   announcements but did not open the source pages (no network approval for this run). The
-   report says "date unverified" next to each such hit. Hand test below.
+5. **E2 end-of-support dates verified 2026-10-26** from the vendors' own pages (10 of 12):
+   Flash (Adobe), Silverlight, Windows Essentials, Office 2010/2013/2016/2019, Office 2019 for
+   Mac (Microsoft), Python 2 (python.org). Two stay `unverified`: **QuickTime for Windows**
+   (Apple confirms it is no longer supported but gives no date) and **Java SE 6/7** (Oracle's
+   pages refuse automated readers; a search of oracle.com says "July 2022" without a day). The
+   report says "date unverified" next to those. **Correction:** Office 2019 for Mac ended
+   2023-10-10, not 2025-10-14 as first written; its rule now flags Word/Excel/PowerPoint/Outlook
+   older than 16.78 (the last build for Office 2019 licences), which also catches a Microsoft
+   365 copy that has stopped updating.
 6. **E1 Windows "Number of administrators"** counts enabled local admins and domain/Entra ID
    *users*, not groups (a group's size is unknown locally); default limit 2 (`-MaxAdmins`).
 7. **E4 stopped automatic services** ignores a fixed list of services that stop by design
@@ -88,7 +94,7 @@ its weekday. Batch A's A8 status is unchanged (run on macOS); the fix itself ran
   stop writing account names next to the script, add the MIT notice for the Microsoft code it
   includes). Not done: you asked for E1-E4. Say if it should be next; it can only be tested on
   a domain controller.
-- E2 end-of-support dates need confirming at their sources (design choice 5).
+- E2: QuickTime and Java SE 6/7 dates still unverified (design choice 5).
 - E3 Time Machine and macOS sudo paths of E1 were stubbed, not run.
 
 ## Outstanding hand tests
@@ -168,11 +174,12 @@ rules run; E2's package count matches `dpkg -l | grep -c ^ii` (or `rpm -qa | wc 
 snaps/Flatpaks; E3 finds Deja Dup or Timeshift if used (else SKIPPED); E4 disk numbers match
 `df -h`, and with sudo the journal and certificate checks run. Note any false positive.
 
-### E2 watchlist dates (needs web access; your approval)
+### E2 watchlist: the two unverified dates (any browser)
 
-Open each `Source` URL in `endpoint-systems/audit/software-inventory/software-watchlist.txt`,
-confirm the date, and replace `unverified` with the date you checked (`YYYY-MM-DD`), or correct
-the line. Nothing in the scripts needs changing.
+Open https://www.oracle.com/java/technologies/java-se-support-roadmap.html and confirm the end
+of Extended Support for Java SE 6 and 7; for QuickTime, find Apple's dated statement if there is
+one. Then correct the date in `software-watchlist.txt` and replace `unverified` with the day you
+checked (`YYYY-MM-DD`).
 
 ### Active network
 

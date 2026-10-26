@@ -10,27 +10,33 @@
 #             case-insensitive, matched against the whole program / app / package name
 #             (Windows: Apps & Features name; macOS: app name; Linux: package, snap or Flatpak name)
 #   Version   optional wildcard patterns (same rules) matched against the version; empty = any
-#   Date      end-of-support date (eol) or empty
+#   Date      last day the maker supported it (eol), or empty. Microsoft's lifecycle pages give
+#             the end as 6:59:59 AM Pacific on the following day; this file uses the day before.
 #   Reason    shown in the report
 #   Source    where the date comes from
 #   Checked   date the Source was last checked against this line, or "unverified"
 #
-# The EOL dates below were written from the vendors' published end-of-support announcements
-# but were NOT re-checked against the Source pages when this file was created (no network
-# access was allowed for that run): every line says "unverified" until someone confirms it.
+# Checked = the date the Source page was read and showed this date. "unverified" means no
+# official page could confirm it (the reason is in the comment above that line).
 # Lines starting with # and empty lines are ignored.
 
-eol|windows|Adobe Flash Player*||2020-12-31|Adobe stopped supporting Flash Player and blocks Flash content|https://www.adobe.com/products/flashplayer/end-of-life.html|unverified
-eol|windows|Microsoft Silverlight*||2021-10-12|Microsoft ended support for Silverlight|https://learn.microsoft.com/lifecycle/products/silverlight-5|unverified
-eol|windows|QuickTime,QuickTime 7*||2016-01-01|Apple stopped updating QuickTime for Windows in 2016 (known unpatched vulnerabilities)|https://support.apple.com/HT205771|unverified
-eol|windows|Windows Live Essentials*,Windows Essentials*||2017-01-10|Microsoft ended support for Windows Essentials 2012|https://support.microsoft.com/windows/windows-essentials-d79e0b51-0c8c-4f3c-8fb6-6b0b7a71c3f7|unverified
-eol|windows|Microsoft Office*2010*||2020-10-13|Office 2010 receives no security updates|https://learn.microsoft.com/lifecycle/products/microsoft-office-2010|unverified
-eol|windows|Microsoft Office*2013*||2023-04-11|Office 2013 receives no security updates|https://learn.microsoft.com/lifecycle/products/microsoft-office-2013|unverified
-eol|windows|Microsoft Office*2016*||2025-10-14|Office 2016 receives no security updates|https://learn.microsoft.com/lifecycle/products/microsoft-office-2016|unverified
-eol|windows|Microsoft Office*2019*||2025-10-14|Office 2019 receives no security updates|https://learn.microsoft.com/lifecycle/products/microsoft-office-2019|unverified
-eol|macos|Microsoft Word,Microsoft Excel,Microsoft PowerPoint,Microsoft Outlook|16.1?.*,16.2?.*|2025-10-14|Version 16.10-16.29 (2018-2019 builds, Office 2019 for Mac) no longer gets security updates|https://learn.microsoft.com/lifecycle/products/office-2019-for-mac|unverified
-eol|windows|Python 2.*||2020-01-01|Python 2 receives no fixes from the Python project|https://www.python.org/doc/sunset-python-2/|unverified
-eol|linux|python2,python2.?,python2.??||2020-01-01|Python 2 receives no fixes from the Python project|https://www.python.org/doc/sunset-python-2/|unverified
+eol|windows|Adobe Flash Player*||2020-12-31|Adobe stopped supporting Flash Player and blocks Flash content|https://www.adobe.com/products/flashplayer/end-of-life.html|2026-10-26
+eol|windows|Microsoft Silverlight*||2021-10-12|Microsoft ended support for Silverlight|https://learn.microsoft.com/en-us/lifecycle/products/silverlight-5|2026-10-26
+# Apple's page confirms QuickTime 7 for Windows "is no longer supported by Apple" but gives no date.
+eol|windows|QuickTime,QuickTime 7*||2016-01-01|Apple no longer supports QuickTime 7 for Windows (known unpatched vulnerabilities)|https://support.apple.com/en-us/106375|unverified
+eol|windows|Windows Live Essentials*,Windows Essentials*||2017-01-10|Microsoft ended support for Windows Essentials 2012|https://support.microsoft.com/en-us/windows/apps/support-for-windows-essentials-apps|2026-10-26
+eol|windows|Microsoft Office*2010*||2020-10-13|Office 2010 receives no security updates|https://learn.microsoft.com/en-us/lifecycle/products/microsoft-office-2010|2026-10-26
+eol|windows|Microsoft Office*2013*||2023-04-11|Office 2013 receives no security updates|https://learn.microsoft.com/en-us/lifecycle/products/microsoft-office-2013|2026-10-26
+eol|windows|Microsoft Office*2016*||2025-10-14|Office 2016 receives no security updates|https://learn.microsoft.com/en-us/lifecycle/products/microsoft-office-2016|2026-10-26
+eol|windows|Microsoft Office*2019*||2025-10-14|Office 2019 receives no security updates|https://learn.microsoft.com/en-us/lifecycle/products/microsoft-office-2019|2026-10-26
+# Office for Mac apps do not show whether they are Office 2019 or Microsoft 365. Office 2019 for
+# Mac licences stop at 16.78 (October 2023), so anything older is either Office 2019 for Mac or a
+# Microsoft 365 copy that has stopped updating; both need attention.
+eol|macos|Microsoft Word,Microsoft Excel,Microsoft PowerPoint,Microsoft Outlook|16.?.*,16.1?.*,16.2?.*,16.3?.*,16.4?.*,16.5?.*,16.6?.*,16.70.*,16.71.*,16.72.*,16.73.*,16.74.*,16.75.*,16.76.*,16.77.*|2023-10-10|Older than 16.78: Office 2019 for Mac (support ended) or a Microsoft 365 copy that stopped updating|https://support.microsoft.com/en-us/office/lifecycle/officeinstall/end-of-support-for-office-2019-for-mac|2026-10-26
+eol|windows|Python 2.*||2020-01-01|Python 2 receives no fixes from the Python project|https://www.python.org/doc/sunset-python-2/|2026-10-26
+eol|linux|python2,python2.?,python2.??||2020-01-01|Python 2 receives no fixes from the Python project|https://www.python.org/doc/sunset-python-2/|2026-10-26
+# Oracle's pages refuse automated readers (HTTP 403); a search of oracle.com says Java SE 7 left
+# Extended Support in "July 2022" without a day. Confirm in a browser.
 eol|windows|Java 6*,Java 7*,Java(TM) 6*,Java(TM) 7*||2022-07-31|Oracle Java SE 6 and 7 receive no updates|https://www.oracle.com/java/technologies/java-se-support-roadmap.html|unverified
 
 # Software MSPs commonly want to know about. Not malware; worth a conversation with the client.
