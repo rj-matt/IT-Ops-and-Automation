@@ -38,6 +38,7 @@ PowerShell 7 (23 of the 32 fail against A9 1.2.0).
 | Commit | Change |
 |---|---|
 | `d7eaef0` | B3 macOS 1.1.0: opt-in `--include-system-log` (see `batch-b-summary.md`) |
+| `9034075` | A8 macOS/Linux 1.1.1: last login read by weekday, not fixed columns of `last` (local macOS logins have no host column, so LastLogon was blank and "unused account" could not fire). Found while building E1; run on this Mac |
 | `a632f1c` | Windows bundle 1.2.0: `-Passive` (A2 `-Passive`, A7 not run, refused with `-ScanLan` / `-OnlineUpdateSearch`); mocked test (`tests/Test-HomeAuditBundleWindowsLogic.ps1`, 19 checks) and a Windows harness runtime case |
 | `ca105d9` | A9 1.3.0: coverage, areas and bundle lines keyed on the check ID (A1-A8), so macOS/Linux results fill the same rows; router checklist from any A7; "Other devices checklist" section; OS version per device. `run-home-audit-bundle.sh` 1.0.0. Tests, harness cases, README |
 

@@ -29,17 +29,17 @@ the schema and shared-helper changes in sections 2 and 5, which every Batch A sc
 | D1 | Clear-WindowsUpdateCache | endpoint-systems/remediation/safe/clear-caches/ | Safe | needs fixes (rename not delete, dry run) | N/A | N/A |
 | D2 | Reset-NetworkStack | endpoint-systems/remediation/elevated/network-resets/ (rename) | Elevated | needs fixes (exit codes, overclaim, dry run) | N/A | N/A |
 | D3 | Reset-OutlookProfile | cloud-services/m365/remediation/ | Elevated | needs fixes (keep old profile, overclaim) | N/A | N/A |
-| E1 | Get-LocalAdminReport / get-local-admin-report.sh | endpoint-systems/audit/local-admins/ | Read-Only | missing | missing | missing |
-| E2 | Get-InstalledSoftwareReport / get-installed-software-report.sh | endpoint-systems/audit/software-inventory/ | Read-Only | missing | missing | missing |
-| E3 | Get-BackupRecency / get-backup-recency.sh | core-infrastructure/backups-dr/diagnostics/ | Read-Only | missing | missing | missing (SKIPPED unless a known tool is found) |
-| E4 | Get-ServerHealthReport / get-server-health-report.sh | core-infrastructure/servers/{windows,linux}/diagnostics/ | Read-Only | missing | N/A | missing |
+| E1 | Get-LocalAdminReport / get-local-admin-report.sh | endpoint-systems/audit/local-admins/ | Read-Only | built (E; mocked; not run on Windows) | good (E; run on macOS 26, no sudo) | built (E; stub-tested only) |
+| E2 | Get-InstalledSoftwareReport / get-installed-software-report.sh | endpoint-systems/audit/software-inventory/ | Read-Only | built (E; mocked; not run on Windows) | good (E; run on macOS 26) | built (E; stub-tested only) |
+| E3 | Get-BackupRecency / get-backup-recency.sh | core-infrastructure/backups-dr/diagnostics/ | Read-Only | built (E; mocked; not run on Windows) | good (E; run on macOS 26 without Time Machine; Time Machine stub-tested) | built (E; stub-tested only; SKIPPED unless a known tool is found) |
+| E4 | Get-ServerHealthReport / get-server-health-report.sh | core-infrastructure/servers/{windows,linux}/diagnostics/ | Read-Only | built (E; mocked; not run on Windows Server) | N/A | built (E; stub-tested only) |
 
 Nothing was rated **good** at Phase 2: the schema change (section 2) reaches every Batch A script.
 Updated after steps A-1 (A1-A4) and A-2 (A5-A8): "good" = built to standard and run on that platform; "built" =
 built to standard, logic tested with stubbed commands, not yet run on a real machine of that
 platform. The A-1 Windows changes were parse- and analyzer-checked on pwsh 7 only.
 Current status, open items and hand tests for each batch: `batch-a-summary.md`, `batch-b-summary.md`,
-`batch-c-summary.md`.
+`batch-c-summary.md`, `batch-e-summary.md`.
 
 **Planned macOS/Linux splits** (single shared `.sh` otherwise): A1, A3, A6, C3. In each, the two
 platforms share almost no commands (FileVault/SIP/Gatekeeper vs LUKS/ufw/firewalld; `system_profiler`/`wdutil`
