@@ -31,6 +31,15 @@
     The token is kept for this PowerShell process only (-ContextScope Process) and the
     connection is closed at the end unless -KeepConnection is given.
 
+    FIRST SIGN-IN = TENANT-WIDE ADMIN CONSENT. The first time these scopes are used in a
+    tenant, Microsoft asks an administrator to consent "on behalf of your organization" for
+    Microsoft's own "Microsoft Graph Command Line Tools" app. That consent covers the whole
+    tenant and stays until an admin removes it: anyone in the tenant who signs in to that app
+    can then use these read scopes, within the limits of their own role. In a client's tenant,
+    get the client's approval before consenting and note it in the ticket (who approved,
+    when, which scopes). To remove it later: Entra admin center > Enterprise applications >
+    Microsoft Graph Command Line Tools > Permissions (or delete the app's service principal).
+
 .PARAMETER UserPrincipalName
     One or more users to report on (comma separated or an array).
 
@@ -66,17 +75,18 @@
     Scope         : The signed-in admin's Microsoft 365 tenant, read through Microsoft Graph.
                     Nothing on this computer is read or changed.
     Risk Level    : Read-Only -- read-only Graph scopes, Get- cmdlets only.
-    Prerequisites : PowerShell 7 (Windows, macOS, Linux) | Modules: Microsoft.Graph.Authentication,
+    Prerequisites : Windows PowerShell 5.1 or PowerShell 7 on Windows; PowerShell 7 on
+                    macOS and Linux | Modules: Microsoft.Graph.Authentication,
                     Microsoft.Graph.Users, Microsoft.Graph.Identity.DirectoryManagement
                     (Install-Module Microsoft.Graph -Scope CurrentUser) | Account: Global Reader
                     (or User Administrator plus Reports Reader for sign-in data). An admin must
                     consent to the three scopes once per tenant.
-    Version       : 2.0.0
+    Version       : 2.1.0
     Limitations   : Last sign-in needs Entra ID P1/P2 in the tenant and can lag by hours.
                     Friendly license names cover common SKUs only; the part number is always
                     shown. Group-based licensing is reported as assigned, not by group.
 #>
-#Requires -Version 7.0
+#Requires -Version 5.1
 [CmdletBinding(DefaultParameterSetName = 'Users')]
 param(
     [Parameter(Mandatory, ParameterSetName = 'Users')][string[]]$UserPrincipalName,
@@ -783,9 +793,19 @@ function Confirm-MSPChange {
 #endregion MSPHelper:Change
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '2.0.0'
+$ScriptVersion = '2.1.0'
 Initialize-MSPRun -ScriptName 'Get-UserLicenseReport' -ScriptVersion $ScriptVersion -CheckId 'C2' -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'Microsoft 365 licenses, service plans, sign-in and subscriptions (read-only)'
+
+# Windows PowerShell 5.1 or PowerShell 7 on Windows; PowerShell 7 on macOS and Linux (PowerShell 6
+# is out of support and the Microsoft modules no longer test against it).
+if ($PSVersionTable.PSEdition -eq 'Core' -and $PSVersionTable.PSVersion.Major -lt 7) {
+    Add-MSPFinding -Check 'PowerShell version' -Category 'Setup' -Status ERROR `
+        -Detail ('PowerShell {0} is not supported; nothing was read.' -f $PSVersionTable.PSVersion) `
+        -Recommendation 'Run it with PowerShell 7 (pwsh), or on Windows with Windows PowerShell 5.1 (powershell.exe).'
+    Complete-MSPRun
+    exit 1
+}
 
 # "pwsh -File" passes a list as one "a,b" string; split so both forms work.
 $UserPrincipalName = @($UserPrincipalName | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
@@ -971,7 +991,7 @@ Invoke-MSPCheck -Name 'Read users' -Category 'Input' -ScriptBlock {
         # Tenants without Entra ID P1/P2 refuse signInActivity; read the rest without it.
         if ($signInOk -and [string]$_.Exception.Message -match 'NonPremiumTenant|premium|P1|signInActivity') {
             $script:signInOk = $false
-            $script:signInReason = 'Sign-in activity needs an Entra ID P1 or P2 license in the tenant, which it does not have.'
+            $script:signInReason = 'This tenant has no Microsoft Entra ID P1 or P2 license, and Microsoft only shows last sign-in dates to tenants that do (P1 is included in Microsoft 365 Business Premium, E3 and E5).'
             $script:users = Read-User -WithSignIn $false
         }
         elseif (Test-AccessDenied $_) {

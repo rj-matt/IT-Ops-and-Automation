@@ -67,16 +67,17 @@
     Scope         : One mailbox in the signed-in admin's Exchange Online tenant. Nothing on this
                     computer is read or changed.
     Risk Level    : Read-Only -- Get- cmdlets only; the connection loads no other cmdlets.
-    Prerequisites : PowerShell 7 (Windows, macOS, Linux) | Module: ExchangeOnlineManagement 3.x
+    Prerequisites : Windows PowerShell 5.1 or PowerShell 7 on Windows; PowerShell 7 on
+                    macOS and Linux | Module: ExchangeOnlineManagement 3.x
                     (Install-Module ExchangeOnlineManagement -Scope CurrentUser) | Account:
                     Global Reader or View-Only Organization Management (Exchange)
-    Version       : 2.0.0
+    Version       : 2.1.0
     Limitations   : Rules created in other mail clients or hidden by an attacker through MAPI
                     may not be listed by Get-InboxRule; check the message trace and the
                     unified audit log in a suspected compromise. Transport (organization) rules
                     and outbound spam policy are not checked.
 #>
-#Requires -Version 7.0
+#Requires -Version 5.1
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][Alias('EmailAddress', 'Identity')][ValidateNotNullOrEmpty()][string]$UserPrincipalName,
@@ -781,9 +782,19 @@ function Confirm-MSPChange {
 #endregion MSPHelper:Change
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '2.0.0'
+$ScriptVersion = '2.1.0'
 Initialize-MSPRun -ScriptName 'Get-UserMailboxStatus' -ScriptVersion $ScriptVersion -CheckId 'C1' -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'Exchange Online mailbox: size, archive, holds, forwarding, rules, devices (read-only)'
+
+# Windows PowerShell 5.1 or PowerShell 7 on Windows; PowerShell 7 on macOS and Linux (PowerShell 6
+# is out of support and the Microsoft modules no longer test against it).
+if ($PSVersionTable.PSEdition -eq 'Core' -and $PSVersionTable.PSVersion.Major -lt 7) {
+    Add-MSPFinding -Check 'PowerShell version' -Category 'Setup' -Status ERROR `
+        -Detail ('PowerShell {0} is not supported; nothing was read.' -f $PSVersionTable.PSVersion) `
+        -Recommendation 'Run it with PowerShell 7 (pwsh), or on Windows with Windows PowerShell 5.1 (powershell.exe).'
+    Complete-MSPRun
+    exit 1
+}
 
 # The only Exchange cmdlets the connection loads (Get-EXO* cmdlets are part of the module).
 $readCmdlets = @('Get-InboxRule', 'Get-MailboxAutoReplyConfiguration', 'Get-AcceptedDomain')

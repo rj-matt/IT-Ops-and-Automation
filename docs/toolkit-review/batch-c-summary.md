@@ -1,6 +1,6 @@
 # Batch C summary (C1-C3)
 
-Updated 2026-10-23. Commits `a632f1c` (Windows bundle `-Passive`, finishing Batch A) and
+Updated 2026-10-26 (C1/C2 on Windows PowerShell 5.1, C2 P1 test, consent note). Commits `a632f1c` (Windows bundle `-Passive`, finishing Batch A) and
 `55fcb93` (Batch C). Development machine: macOS 26, PowerShell 7, bash 3.2.57 and 5.3,
 ShellCheck, PSScriptAnalyzer. No Microsoft 365 tenant was contacted.
 
@@ -26,13 +26,15 @@ Harness on macOS (`pwsh -NoProfile -File tests/Invoke-ToolkitTests.ps1`, passive
 
 | ID | Windows | macOS | Linux |
 |---|---|---|---|
-| C1 mailbox status (pwsh 7) | not run on Windows; mocked, no tenant | mocked, no tenant | not run |
-| C2 license report (pwsh 7) | not run on Windows; mocked, no tenant | mocked, no tenant | not run |
+| C1 mailbox status (5.1 / pwsh 7) | not run on Windows (5.1 or 7); mocked, no tenant | mocked, no tenant | not run |
+| C2 license report (5.1 / pwsh 7) | not run on Windows (5.1 or 7); mocked, no tenant | mocked, no tenant | not run |
 | C3 suspicious activity | not run on Windows; mocked | run (no sudo) | stubbed only |
 | Bundle `-Passive` (Batch A) | not run on Windows; mocked | (bash: run, Batch A) | (bash: stubbed, Batch A) |
 
-On Windows PowerShell 5.1 the C1/C2 test only checks that both scripts refuse to run
-(`#Requires -Version 7.0`); that has not run either.
+The C1/C2 mocked test runs the same scenarios on Windows PowerShell 5.1 and PowerShell 7 (the
+harness on Windows runs it under both); here it ran on PowerShell 7 only, plus a
+PSScriptAnalyzer check that C1, C2 and the test use no syntax newer than 5.1 (verified to flag
+`??` and the ternary operator).
 
 ## What changed
 
@@ -73,10 +75,17 @@ On Windows PowerShell 5.1 the C1/C2 test only checks that both scripts refuse to
 6. **C2 SKU names**: the old map called `O365_BUSINESS_PREMIUM` "Business Premium"; in
    Microsoft's list it is Microsoft 365 Business Standard (`SPB` is Business Premium). The part
    number is now always shown next to the name.
-7. **C1/C2 need PowerShell 7** (`#Requires -Version 7.0`), as the catalog says, though both
-   modules also work on 5.1. Say if you want 5.1 allowed.
+7. **C1/C2 run on Windows PowerShell 5.1 or PowerShell 7 on Windows, and PowerShell 7 on
+   macOS/Linux** (2.1.0, approved change). PowerShell 6 is refused with a plain message.
 8. **SKIPPED/ERROR findings in C1/C2 carry the user or mailbox as Target**, so an `-All` report
    says whose check could not run.
+9. **No Entra ID P1/P2 in the tenant**: C2's "Last sign-in" is SKIPPED for each user with
+   "This tenant has no Microsoft Entra ID P1 or P2 license, and Microsoft only shows last
+   sign-in dates to tenants that do (P1 is included in Microsoft 365 Business Premium, E3 and
+   E5)"; never ERROR, and the other checks still run (mocked test, named users and `-All`).
+10. **C2's first sign-in grants tenant-wide admin consent** to Microsoft's "Microsoft Graph
+    Command Line Tools" app; it stays until an admin removes it. In a client tenant this needs
+    the client's approval and a ticket note (C2 help text, README).
 
 ## Open items
 
@@ -101,8 +110,7 @@ PowerShell 5.1, once from a normal window and once from "Run as administrator":
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Invoke-ToolkitTests.ps1
 ```
 
-That adds, for Batch C: the C1/C2 refusal check on 5.1 and the full mocked test on 7 (if
-installed), the C3 mocked test on 5.1 and 7, the C3 runtime case, and the bundle `-Passive`
+That adds, for Batch C: the C1/C2 mocked test on 5.1 and on 7 (if installed), the C3 mocked test on 5.1 and 7, the C3 runtime case, and the bundle `-Passive`
 runtime and mocked cases. Then by hand, as administrator:
 
 ```powershell
@@ -120,7 +128,10 @@ starts nothing.
 
 ### Microsoft 365 tenant (C1, C2) - sends traffic to Microsoft; your approval per run
 
-Use a test tenant or a client tenant you are allowed to review. PowerShell 7 on any platform.
+Use a test tenant or a client tenant you are allowed to review. Run the steps below once in
+PowerShell 7 (any platform) and once on Windows in **Windows PowerShell 5.1**
+(`powershell.exe -NoProfile -ExecutionPolicy Bypass -File ...` instead of `pwsh -File ...`;
+install the modules in that shell too).
 
 1. Install the modules once (from the PowerShell Gallery; no admin rights):
 
@@ -129,7 +140,11 @@ Use a test tenant or a client tenant you are allowed to review. PowerShell 7 on 
    Install-Module Microsoft.Graph.Authentication, Microsoft.Graph.Users, Microsoft.Graph.Identity.DirectoryManagement -Scope CurrentUser
    ```
 
-2. **C2 first sign-in (consent).** The script asks Microsoft Graph for exactly these
+2. **C2 first sign-in (consent).** **This grants tenant-wide admin consent** to Microsoft's
+   "Microsoft Graph Command Line Tools" app, which stays until an admin removes it (Entra admin
+   center > Enterprise applications > Microsoft Graph Command Line Tools > Permissions). In a
+   client's tenant, get the client's approval first and note it in the ticket (who approved,
+   when, which scopes). Prefer a test tenant for this hand test. The script asks Microsoft Graph for exactly these
    delegated scopes; the sign-in page of the "Microsoft Graph Command Line Tools" app lists them:
 
    | Scope | Shown as (approximately) | Used for |
@@ -170,6 +185,8 @@ Use a test tenant or a client tenant you are allowed to review. PowerShell 7 on 
    - C1: mailbox size and quota match the Exchange admin center; inbox rules and forwarding
      match Outlook on the web (Settings > Mail > Rules / Forwarding); delegates match the
      mailbox's delegation page; the unknown address gives FAIL "No mailbox ...".
+   - On 5.1: the same results as on 7 (compare the two JSON files); browser sign-in and
+     `-DeviceCode` both work.
    - Both: after the run, `Get-MgContext` / `Get-ConnectionInformation` show no connection
      (the script disconnected), unless `-KeepConnection` was given.
    - Optional: run each once as an account **without** a reader role and note which checks

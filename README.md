@@ -148,10 +148,17 @@ with `--what-if` and `--force`.
 | `MSPToolkit.Common.psm1` | `endpoint-systems/utilities/` | Shared helper source (embedded into each script; not run directly) | Read-Only | - | 5.1 | - |
 | `Sync-MSPEmbeddedHelper.ps1` | `endpoint-systems/utilities/` | Regenerates / verifies (`-Check`) the embedded helper copies | Safe (repo files only) | No | 5.1 | - |
 
-**Microsoft 365 (C1, C2).** PowerShell 7 on Windows, macOS or Linux (`pwsh`), run from the
-technician's computer. They only read: C1 loads only Exchange `Get-` cmdlets, C2 asks Microsoft
+**Microsoft 365 (C1, C2).** Windows PowerShell 5.1 or PowerShell 7 on Windows; PowerShell 7
+(`pwsh`) on macOS or Linux. Run from the technician's computer. They only read: C1 loads only Exchange `Get-` cmdlets, C2 asks Microsoft
 Graph for read-only scopes. Each reuses an existing connection, otherwise signs in (browser, or
 `-DeviceCode`), and disconnects at the end unless `-KeepConnection`.
+
+**C2's first sign-in grants tenant-wide admin consent.** The first time C2's scopes are used in
+a tenant, an administrator consents "on behalf of your organization" to Microsoft's own
+"Microsoft Graph Command Line Tools" app. That consent applies to the whole tenant and stays
+until an admin removes it (Entra admin center > Enterprise applications > Microsoft Graph
+Command Line Tools > Permissions). **In a client's tenant, get the client's approval first and
+note it in the ticket** (who approved, when, which scopes).
 
 | Script | Folder | Purpose | Risk | Account | Modules |
 |---|---|---|---|---|---|

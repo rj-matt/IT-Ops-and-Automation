@@ -489,7 +489,7 @@ $logic = @(
     @{ Name = 'A9 coverage, router and device checklists from Windows, macOS and Linux results'; File = 'Test-ExportSecurityAuditReportMixed.ps1' }
     @{ Name = 'B1-B3 Windows scripts against mocked cmdlets'; File = 'Test-BatchBWindowsLogic.ps1' }
     @{ Name = 'Windows bundle -Passive (mocked Start-Process; A2 -Passive, A7 not run)'; File = 'Test-HomeAuditBundleWindowsLogic.ps1' }
-    @{ Name = 'C1/C2 against mocked Exchange Online and Graph (5.1: refusal only)'; File = 'Test-BatchCCloudLogic.ps1' }
+    @{ Name = 'C1/C2 against mocked Exchange Online and Graph'; File = 'Test-BatchCCloudLogic.ps1' }
     @{ Name = 'C3 Windows against mocked cmdlets'; File = 'Test-SuspiciousActivityWindowsLogic.ps1' }
 )
 foreach ($t in $logic) {

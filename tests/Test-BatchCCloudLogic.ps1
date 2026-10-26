@@ -8,14 +8,17 @@
     and Graph cmdlet the scripts call is replaced by a stand-in function defined in a wrapper
     script (functions are found before cmdlets), and the real modules are never imported.
 
-    PowerShell 7 (any platform): runs the scenarios below and checks the JSON results.
-    Windows PowerShell 5.1: checks that both scripts refuse to run (#Requires -Version 7.0).
+    Runs the scenarios below on whichever PowerShell runs it: Windows PowerShell 5.1 (the
+    Windows path of both scripts) or PowerShell 7 (any platform), and checks the JSON results.
+    Where PSScriptAnalyzer is installed it also checks that C1, C2 and this test use no syntax
+    newer than 5.1.
 
       C2  Sign-in with exactly the three read-only scopes, device code, process-only token,
           disconnect at the end; subscriptions over-assigned / in grace; disabled account
           with licenses; user without licenses; stale sign-in; pending service plan; unknown
           user; friendly SKU names. Tenant without Entra ID P1 (sign-in SKIPPED, the rest
-          still reported). Existing connection with write scopes (used, not closed, noted).
+          still reported, never ERROR, with a plain-English reason naming Business Premium;
+          also with -All). Existing connection with write scopes (used, not closed, noted).
           Not signed in and no terminal (SKIPPED, nothing connects).
       C1  A compromised-looking mailbox: full, no archive, litigation hold, recoverable items
           near full, external mailbox forwarding without a copy, a forwarding rule, a rule
@@ -29,7 +32,7 @@
 
 .NOTES
     Risk Level    : Safe -- writes and removes files in a temporary folder only; no network
-    Prerequisites : PowerShell 7 (Windows PowerShell 5.1 runs the refusal check only) | Admin: No
+    Prerequisites : Windows PowerShell 5.1 or PowerShell 7 | Admin: No
     Exit code     : 0 all passed, 1 any failure
     Version       : 1.0.0
 #>
@@ -95,16 +98,15 @@ function Assert-Finding {
     Assert-True $Label $ok $got
 }
 
-# --- Windows PowerShell 5.1: both scripts must refuse ----------------------------------------
-if ($PSVersionTable.PSVersion.Major -lt 7) {
-    foreach ($s in $c1, $c2) {
-        $out = & $exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $repo $s) -UserPrincipalName 'a@contoso.com' 2>&1 | Out-String
-        Assert-True ('{0} refuses on 5.1' -f (Split-Path $s -Leaf)) ($LASTEXITCODE -ne 0 -and $out -match '#requires|requires') $out
+# --- Static check: no syntax newer than Windows PowerShell 5.1 ------------------------------
+# The scenarios below run on whichever PowerShell runs this test (5.1 and 7 in the harness on
+# Windows); this also catches 7-only syntax when the test runs on macOS/Linux.
+if (Get-Command -Name Invoke-ScriptAnalyzer -ErrorAction SilentlyContinue) {
+    $compat = @{ Rules = @{ PSUseCompatibleSyntax = @{ Enable = $true; TargetVersions = @('5.1', '7.0') } } }
+    foreach ($s in $c1, $c2, 'tests/Test-BatchCCloudLogic.ps1') {
+        $hits = @(Invoke-ScriptAnalyzer -Path (Join-Path $repo $s) -IncludeRule PSUseCompatibleSyntax -Settings $compat)
+        Assert-True ('{0}: syntax works on 5.1 and 7' -f (Split-Path $s -Leaf)) ($hits.Count -eq 0) (($hits | ForEach-Object { '{0}: {1}' -f $_.Line, $_.Message }) -join '; ')
     }
-    Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Host ('{0} passed, {1} failed (PowerShell {2}; refusal check only)' -f $script:passed, $script:failed, $PSVersionTable.PSVersion)
-    if ($script:failed -gt 0) { exit 1 }
-    exit 0
 }
 
 # =========================================================================================
@@ -195,7 +197,15 @@ Assert-Equal 'C2: CheckId' 'C2' $r.Result.CheckId
 # --- C2: tenant without Entra ID P1 ----------------------------------------------------------
 $r = Invoke-Mocked 'c2-nopremium' ("{0}`n`$global:NoPremium = `$true`n`$global:GraphConnected = `$true`n{1}" -f $graphMocks, $readScopes) $c2 @('-UserPrincipalName', 'dave@contoso.com')
 Assert-Equal 'C2 no P1: exit 0' 0 $r.Code
-Assert-Finding $r 'C2 no P1: last sign-in SKIPPED with the reason' 'Last sign-in' 'SKIPPED' 'Entra ID P1 or P2' 'dave@contoso.com'
+Assert-Finding $r 'C2 no P1: last sign-in SKIPPED with the reason' 'Last sign-in' 'SKIPPED' 'no Microsoft Entra ID P1 or P2 license.*Business Premium' 'dave@contoso.com'
+Assert-True 'C2 no P1: no ERROR finding at all' (@($r.Result.Findings | Where-Object { $_.Status -eq 'ERROR' }).Count -eq 0) ((@($r.Result.Findings | Where-Object { $_.Status -eq 'ERROR' } | ForEach-Object { '{0}: {1}' -f $_.Check, $_.Detail })) -join '; ')
+Assert-True 'C2 no P1: users still read' (@($r.Result.Findings | Where-Object { $_.Check -eq 'Users read' -and $_.Status -eq 'INFO' }).Count -eq 1)
+
+# --- C2: tenant without Entra ID P1, -All ------------------------------------------------------
+$r = Invoke-Mocked 'c2-nopremium-all' ("{0}`n`$global:NoPremium = `$true`n`$global:GraphConnected = `$true`n{1}" -f $graphMocks, $readScopes) $c2 @('-All')
+Assert-Equal 'C2 no P1 -All: exit 0' 0 $r.Code
+Assert-Equal 'C2 no P1 -All: one SKIPPED last sign-in per licensed user' 4 @($r.Result.Findings | Where-Object { $_.Check -eq 'Last sign-in' -and $_.Status -eq 'SKIPPED' -and $_.Target -like '*@contoso.com' }).Count
+Assert-True 'C2 no P1 -All: no ERROR finding' (@($r.Result.Findings | Where-Object { $_.Status -eq 'ERROR' }).Count -eq 0)
 Assert-Finding $r 'C2 no P1: licenses still reported' 'Licenses' 'INFO' 'Business Standard' 'dave@contoso.com'
 Assert-True 'C2 no P1: existing connection not closed' ($r.Calls -notcontains 'Disconnect-MgGraph')
 
