@@ -207,8 +207,28 @@ Assert-NoError $r 'E2 no watchlist: no ERROR findings'
 # E3 Get-BackupRecency.ps1
 # =========================================================================================
 function Get-E3Scene {
-    param([int]$FileHistoryDays, [switch]$Veeam, [switch]$OneDrive)
-    $text = ''
+    <# -RestorePointDays -1: no System Restore on this edition (Windows Server). #>
+    param([int]$FileHistoryDays, [switch]$Veeam, [switch]$OneDrive, [int]$RestorePointDays = 5)
+    # System Restore is never read for real, even when elevated.
+    $text = @'
+function Get-CimClass {
+    [CmdletBinding()] param([string]$Namespace, [string]$ClassName)
+    if ($ClassName -eq 'SystemRestore') { return $global:FakeRestoreClass }
+    CimCmdlets\Get-CimClass @PSBoundParameters
+}
+function Get-CimInstance {
+    [CmdletBinding()] param([string]$Namespace, [string]$ClassName, [string]$Filter)
+    if ($ClassName -eq 'SystemRestore') { return $global:FakeRestorePoints }
+    CimCmdlets\Get-CimInstance @PSBoundParameters
+}
+$global:FakeRestoreClass = $null
+$global:FakeRestorePoints = @()
+
+'@
+    if ($RestorePointDays -ge 0) {
+        $text += "`$global:FakeRestoreClass = 'SystemRestore'`n"
+        $text += "`$global:FakeRestorePoints = @([pscustomobject]@{ CreationTime = (Get-Date).AddDays(-$RestorePointDays).ToString('yyyyMMddHHmmss') + '.000000-000'; Description = 'Windows Update' })`n"
+    }
     if ($FileHistoryDays -ge 0) { $text += "`$global:FakeReg['HKCU:\Software\Microsoft\Windows\CurrentVersion\FileHistory'] = [pscustomobject]@{ ProtectedUpToTime = (Get-Date).AddDays(-$FileHistoryDays).ToFileTime() }`n" }
     if ($OneDrive) { $text += "`$global:FakeReg['HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders'] = [pscustomobject]@{ Desktop = 'C:\Users\bob\OneDrive - Contoso\Desktop'; Personal = 'C:\Users\bob\OneDrive - Contoso\Documents'; 'My Pictures' = 'C:\Users\bob\Pictures' }`n" }
     if ($Veeam) { $text += "`$global:FakeSoftware = @((New-FakeApp 'Veeam Agent for Microsoft Windows' '6.2.0.121'))`n" }
@@ -222,6 +242,12 @@ Assert-Finding $r 'E3: 3-day-old backup PASS' 'Backup recency' 'PASS' 'Newest ba
 if ($r -and -not $r.IsAdmin) {
     Assert-Finding $r 'E3 (not admin): Windows Server Backup SKIPPED' 'Windows Server Backup' 'SKIPPED' 'administrator'
     Assert-Finding $r 'E3 (not admin): System Restore SKIPPED' 'System Restore' 'SKIPPED' 'administrator'
+}
+if ($r -and $r.IsAdmin) {
+    Assert-Finding $r 'E3 (admin): restore point listed, not a backup' 'System Restore' 'INFO' '^1 restore point\(s\), newest .*\(5 day\(s\) ago\) \("Windows Update"\)'
+    $s = Invoke-Mocked 'e3-server' ($common + (Get-E3Scene -FileHistoryDays 3 -RestorePointDays -1)) $e3
+    Assert-Finding $s 'E3 (admin): no System Restore on Windows Server = SKIPPED' 'System Restore' 'SKIPPED' 'Windows Server has none'
+    Assert-NoError $s 'E3 server: no ERROR findings'
 }
 Assert-NoError $r 'E3 recent: no ERROR findings'
 

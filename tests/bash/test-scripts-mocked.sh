@@ -17,6 +17,9 @@
 #
 #   bash tests/bash/test-scripts-mocked.sh [--keep]   exit 1 on any failure; --keep leaves the work folder
 set -u
+# The fake computer's signed-in user is "alice". When this test itself runs under sudo (CI runs it
+# as a separate account), SUDO_USER would point the scripts at the real caller instead.
+unset SUDO_USER SUDO_UID SUDO_GID SUDO_COMMAND
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
@@ -28,13 +31,21 @@ FAILED=0
 REAL_DATE=$(command -v date)
 REAL_STAT=$(command -v stat)
 
+show_output() {
+    # Prints the first lines of a failed case's output (fake computer only), once per file.
+    case " $SHOWN " in *" $1 "*) return ;; esac
+    SHOWN="$SHOWN $1"
+    [ -f "$1" ] && sed -n '1,60p' "$1" | sed 's/^/    | /'
+}
+SHOWN=''
+
 check() {
     # check NAME FILE REGEX - passes when the regex matches a line of FILE.
-    if grep -Eq -- "$3" "$2"; then PASSED=$((PASSED + 1)); else FAILED=$((FAILED + 1)); printf 'FAIL: %s\n  pattern: %s\n  output:  %s\n' "$1" "$3" "$2"; fi
+    if grep -Eq -- "$3" "$2"; then PASSED=$((PASSED + 1)); else FAILED=$((FAILED + 1)); printf 'FAIL: %s\n  pattern: %s\n  output:  %s\n' "$1" "$3" "$2"; show_output "$2"; fi
 }
 
 check_not() {
-    if grep -Eq -- "$3" "$2"; then FAILED=$((FAILED + 1)); printf 'FAIL: %s (unexpected match)\n  pattern: %s\n  output:  %s\n' "$1" "$3" "$2"; else PASSED=$((PASSED + 1)); fi
+    if grep -Eq -- "$3" "$2"; then FAILED=$((FAILED + 1)); printf 'FAIL: %s (unexpected match)\n  pattern: %s\n  output:  %s\n' "$1" "$3" "$2"; show_output "$2"; else PASSED=$((PASSED + 1)); fi
 }
 
 check_exists() {

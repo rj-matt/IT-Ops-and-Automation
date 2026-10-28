@@ -122,7 +122,7 @@ switch ($Action) {
         $icmp = @($seen | Where-Object { $_.Protocol -eq '1' })
         Write-Host ('canary ping                   {0}' -f $(if ($icmp) { 'blocked and logged' } else { 'NOT SEEN by the guard' }))
         if (-not $icmp) { $rc = 1 }
-        if ($rc -ne 0) { $seen | Format-Table -AutoSize | Out-String | Write-Host; Write-Host 'The guard did not see every canary attempt.' -ForegroundColor Red; exit 1 }
+        if ($rc -ne 0) { $seen | ForEach-Object { Write-Host ('  {0} -> {1}:{2} (protocol {3})' -f $_.Application, $_.Destination, $_.Port, $_.Protocol) }; Write-Host 'The guard did not see every canary attempt.' -ForegroundColor Red; exit 1 }
         $s | Add-Member -NotePropertyName Baseline -NotePropertyValue (Get-Date).ToString('o') -Force
         $s | ConvertTo-Json | Set-Content -LiteralPath $state -Encoding UTF8
         exit 0
@@ -134,7 +134,7 @@ switch ($Action) {
         $seen = @(Get-BlockedConnection -Since ([datetime]$s.Baseline) -Program $s.Programs)
         if ($seen.Count -gt 0) {
             Write-Host ('FAIL: {0} connection(s) were blocked: a script tried to reach beyond the runner.' -f $seen.Count) -ForegroundColor Red
-            $seen | Select-Object -First 40 | Format-Table -AutoSize | Out-String | Write-Host
+            $seen | Select-Object -First 40 | ForEach-Object { Write-Host ('  {0:HH:mm:ss}  {1} -> {2}:{3} (protocol {4})' -f $_.Time, $_.Application, $_.Destination, $_.Port, $_.Protocol) }
             $rc = 1
         }
         else { Write-Host 'PASS: no connection from the guarded programs was blocked after the canary.' }

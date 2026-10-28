@@ -10,7 +10,8 @@
       OneDrive folder backup   Desktop / Documents / Pictures redirected into OneDrive (they
                                sync to the cloud; the sync state itself is not checked).
       System Restore           Newest restore point (administrator). Listed for context only:
-                               a restore point is not a backup (it lives on the same disk).
+                               a restore point is not a backup (it lives on the same disk). SKIPPED on
+                               Windows Server, which has no System Restore.
       Other backup software    Known products (Veeam Agent, Macrium Reflect, Acronis,
                                Backblaze, Carbonite, CrashPlan, Datto, IDrive, Synology Active
                                Backup, Cove / N-able, Arq). Their dates are in their own
@@ -38,7 +39,7 @@
     Risk Level    : Read-Only -- changes nothing and starts no backup.
     Prerequisites : Windows PowerShell 5.1 | Admin: No (Yes adds Windows Server Backup and
                     System Restore) | Modules: built-in only
-    Version       : 1.0.0
+    Version       : 1.0.1
     Limitations   : Only knows the products listed above; a backup made another way (a copy to
                     a USB drive, a NAS job) is not seen, so "no backup found" means "ask the
                     client". Third-party products are detected, not read. File History's last
@@ -722,7 +723,7 @@ function Get-MSPInstalledSoftware {
 #endregion MSPHelper:Software
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '1.0.0'
+$ScriptVersion = '1.0.1'
 Initialize-MSPRun -ScriptName 'Get-BackupRecency' -ScriptVersion $ScriptVersion -CheckId 'E3' -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'When this PC was last backed up, and by what (read-only)' `
     -AdminSections @('Windows Server Backup', 'System Restore')
@@ -744,7 +745,11 @@ function Format-Age {
 Write-MSPSection -Title 'Backup sources'
 # =========================================================================================
 Invoke-MSPCheck -Name 'File History' -Category 'Backup' -ScriptBlock {
-    $configFolder = Join-Path -Path ([Environment]::GetFolderPath('LocalApplicationData')) -ChildPath 'Microsoft\Windows\FileHistory\Configuration'
+    # GetFolderPath returns '' when the folder does not exist (a profile never signed in to).
+    $localData = [Environment]::GetFolderPath('LocalApplicationData')
+    if (-not $localData) { $localData = $env:LOCALAPPDATA }
+    $configFolder = ''
+    if ($localData) { $configFolder = Join-Path -Path $localData -ChildPath 'Microsoft\Windows\FileHistory\Configuration' }
     $config = $null
     if ($configFolder -and (Test-Path -LiteralPath $configFolder)) { $config = @(Get-ChildItem -LiteralPath $configFolder -Filter 'Config*.xml' -File -ErrorAction SilentlyContinue) | Select-Object -First 1 }
     $reg = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\FileHistory' -ErrorAction SilentlyContinue
@@ -804,11 +809,19 @@ Invoke-MSPCheck -Name 'OneDrive folder backup' -Category 'Backup' -ScriptBlock {
 }
 
 Invoke-MSPCheck -Name 'System Restore' -Category 'Backup' -RequiresAdmin -AdminReason 'Restore points can only be listed as administrator.' -ScriptBlock {
-    $points = @(Get-ComputerRestorePoint -ErrorAction Stop)
+    # The WMI class works on Windows PowerShell 5.1 and PowerShell 7 (Get-ComputerRestorePoint is
+    # 5.1 only). Windows Server has no System Restore, so the class is missing there.
+    if (-not (Get-CimClass -Namespace 'root/default' -ClassName 'SystemRestore' -ErrorAction SilentlyContinue)) {
+        Add-MSPFinding -Check 'System Restore' -Category 'Backup' -Status SKIPPED -Detail 'System Restore is not part of this edition of Windows (Windows Server has none).'
+        return
+    }
+    $points = @(Get-CimInstance -Namespace 'root/default' -ClassName 'SystemRestore' -ErrorAction Stop)
     if ($points.Count -eq 0) { Add-MSPFinding -Check 'System Restore' -Category 'Backup' -Status INFO -Detail 'No restore points (System Restore is off or was cleared). A restore point is not a backup in any case.'; return }
-    $newest = @($points | Sort-Object { $_.ConvertToDateTime($_.CreationTime) } -Descending)[0]
+    # CreationTime is a WMI date string: yyyyMMddHHmmss.ffffff+UUU (local time).
+    $dated = @($points | ForEach-Object { [pscustomobject]@{ When = [datetime]::ParseExact(([string]$_.CreationTime).Substring(0, 14), 'yyyyMMddHHmmss', [System.Globalization.CultureInfo]::InvariantCulture); Description = $_.Description } })
+    $newest = @($dated | Sort-Object When -Descending)[0]
     Add-MSPFinding -Check 'System Restore' -Category 'Backup' -Status INFO `
-        -Detail ('{0} restore point(s), newest {1} ("{2}"). Restore points undo system changes; they are not a backup (same disk, files not kept).' -f $points.Count, (Format-Age ($newest.ConvertToDateTime($newest.CreationTime))), $newest.Description)
+        -Detail ('{0} restore point(s), newest {1} ("{2}"). Restore points undo system changes; they are not a backup (same disk, files not kept).' -f $points.Count, (Format-Age $newest.When), $newest.Description)
 }
 
 $knownProducts = [ordered]@{

@@ -21,6 +21,10 @@ concurrency:
 env:
   PSSA_VERSION: '1.25.0'
   SHELLCHECK_VERSION: 'v0.11.0'
+  # PowerShell 7 itself contacts Microsoft at startup (usage telemetry, update check) unless told
+  # not to; the network guard catches it. Off for every pwsh started in these jobs.
+  POWERSHELL_TELEMETRY_OPTOUT: '1'
+  POWERSHELL_UPDATECHECK: 'Off'
 
 jobs:
   windows:
@@ -123,15 +127,15 @@ jobs:
       - name: Harness (PowerShell 7, as the test account)
         if: ${{ !cancelled() && steps.guard.outcome == 'success' }}
         working-directory: /opt/msp-ci/repo
-        run: sudo -u msptest -H env PATH="$PATH" GITHUB_ACTIONS=true pwsh -NoProfile -NonInteractive -File tests/Invoke-ToolkitTests.ps1 -SummaryPath /opt/msp-ci/summary/harness-summary-linux.md
+        run: sudo -u msptest -H env PATH="$PATH" POWERSHELL_TELEMETRY_OPTOUT=1 POWERSHELL_UPDATECHECK=Off GITHUB_ACTIONS=true pwsh -NoProfile -NonInteractive -File tests/Invoke-ToolkitTests.ps1 -SummaryPath /opt/msp-ci/summary/harness-summary-linux.md
 
       - name: bash stub tests (as the test account)
         if: ${{ !cancelled() && steps.guard.outcome == 'success' }}
         working-directory: /opt/msp-ci/repo
         run: |
           bash --version | head -n 1
-          sudo -u msptest -H env PATH="$PATH" bash tests/bash/test-msp-helper.sh
-          sudo -u msptest -H env PATH="$PATH" bash tests/bash/test-scripts-mocked.sh
+          sudo -u msptest -H env PATH="$PATH" POWERSHELL_TELEMETRY_OPTOUT=1 POWERSHELL_UPDATECHECK=Off bash tests/bash/test-msp-helper.sh
+          sudo -u msptest -H env PATH="$PATH" POWERSHELL_TELEMETRY_OPTOUT=1 POWERSHELL_UPDATECHECK=Off bash tests/bash/test-scripts-mocked.sh
 
       - name: Network guard check
         if: ${{ !cancelled() && steps.guard.outcome == 'success' }}
@@ -199,15 +203,15 @@ jobs:
       - name: Harness (PowerShell 7, as the test account)
         if: ${{ !cancelled() && steps.guard.outcome == 'success' }}
         working-directory: /Users/Shared/msp-ci/repo
-        run: sudo -u msptest -H env PATH="$PATH" GITHUB_ACTIONS=true "$(command -v pwsh)" -NoProfile -NonInteractive -File tests/Invoke-ToolkitTests.ps1 -SummaryPath /Users/Shared/msp-ci/summary/harness-summary-macos.md
+        run: sudo -u msptest -H env PATH="$PATH" POWERSHELL_TELEMETRY_OPTOUT=1 POWERSHELL_UPDATECHECK=Off GITHUB_ACTIONS=true "$(command -v pwsh)" -NoProfile -NonInteractive -File tests/Invoke-ToolkitTests.ps1 -SummaryPath /Users/Shared/msp-ci/summary/harness-summary-macos.md
 
       - name: bash stub tests under /bin/bash 3.2 (as the test account)
         if: ${{ !cancelled() && steps.guard.outcome == 'success' }}
         working-directory: /Users/Shared/msp-ci/repo
         run: |
           /bin/bash --version | head -n 1
-          sudo -u msptest -H env PATH="$PATH" /bin/bash tests/bash/test-msp-helper.sh
-          sudo -u msptest -H env PATH="$PATH" /bin/bash tests/bash/test-scripts-mocked.sh
+          sudo -u msptest -H env PATH="$PATH" POWERSHELL_TELEMETRY_OPTOUT=1 POWERSHELL_UPDATECHECK=Off /bin/bash tests/bash/test-msp-helper.sh
+          sudo -u msptest -H env PATH="$PATH" POWERSHELL_TELEMETRY_OPTOUT=1 POWERSHELL_UPDATECHECK=Off /bin/bash tests/bash/test-scripts-mocked.sh
 
       - name: Network guard check
         if: ${{ !cancelled() && steps.guard.outcome == 'success' }}

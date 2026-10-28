@@ -113,6 +113,13 @@ function Get-CimInstance {
     }
 }
 function Get-HotFix { [CmdletBinding()] param() [pscustomobject]@{ HotFixID = 'KB5000001'; InstalledOn = (Get-Date).AddDays(-60) } }
+# The Windows Update agent is not available here, as on macOS/Linux, so a real Windows machine
+# running this test cannot add its own last-install date.
+function New-Object {
+    [CmdletBinding()] param([Parameter(Position = 0)][string]$TypeName, [Parameter(Position = 1)][object[]]$ArgumentList, [string]$ComObject)
+    if ($ComObject -like 'Microsoft.Update.*') { throw 'Windows Update agent not available (mocked).' }
+    Microsoft.PowerShell.Utility\New-Object @PSBoundParameters
+}
 $env:SystemDrive = 'C:'
 '@
     $r = Invoke-Mocked -Name 'b1' -Mocks $b1Mocks -Script 'endpoint-systems/diagnostics/system-info/Get-ClientHealthSnapshot.ps1'
