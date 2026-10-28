@@ -1,0 +1,227 @@
+# Toolkit CI: the test harness on Windows (Windows PowerShell 5.1 and PowerShell 7), Linux and
+# macOS, plus the bash stub tests. Passive only: the harness runs without its active-network switch
+# (and refuses it in CI), and a network guard blocks and counts every connection the tests try to
+# make beyond the runner; any blocked attempt fails the job. No secrets, no tenant connections.
+# Only the harness summary is uploaded; script results and logs stay on the runner.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PSSA_VERSION: '1.25.0'
+  SHELLCHECK_VERSION: 'v0.11.0'
+
+jobs:
+  windows:
+    name: Windows (PowerShell 5.1 and 7)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install PSScriptAnalyzer (shared by 5.1 and 7)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module -Name PSScriptAnalyzer -RequiredVersion $env:PSSA_VERSION -Scope AllUsers -Force -SkipPublisherCheck
+          Get-Module -ListAvailable PSScriptAnalyzer | Where-Object { $_.Version -ne [version]$env:PSSA_VERSION } | ForEach-Object { Remove-Item -LiteralPath $_.ModuleBase -Recurse -Force }
+          Get-Module -ListAvailable PSScriptAnalyzer | Format-Table Name, Version, ModuleBase -AutoSize
+
+      - name: Network guard on
+        id: guard
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests\ci\Invoke-CINetworkGuard.ps1 -Action Start
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests\ci\Invoke-CINetworkGuard.ps1 -Action Canary
+          exit $LASTEXITCODE
+
+      - name: Harness (Windows PowerShell 5.1)
+        if: ${{ !cancelled() && steps.guard.outcome == 'success' }}
+        shell: cmd
+        run: powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests\Invoke-ToolkitTests.ps1 -SummaryPath "%RUNNER_TEMP%\ci-summary\harness-summary-windows-ps51.md"
+
+      - name: Harness (PowerShell 7)
+        if: ${{ !cancelled() && steps.guard.outcome == 'success' }}
+        shell: cmd
+        run: pwsh.exe -NoProfile -NonInteractive -File tests\Invoke-ToolkitTests.ps1 -SummaryPath "%RUNNER_TEMP%\ci-summary\harness-summary-windows-ps7.md"
+
+      - name: Network guard check
+        if: ${{ !cancelled() && steps.guard.outcome == 'success' }}
+        shell: powershell
+        run: |
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests\ci\Invoke-CINetworkGuard.ps1 -Action Check -RepositoryPath $env:GITHUB_WORKSPACE -SummaryDirectory "$env:RUNNER_TEMP\ci-summary"
+          exit $LASTEXITCODE
+
+      - name: Show harness summary
+        if: ${{ !cancelled() }}
+        shell: powershell
+        run: Get-ChildItem "$env:RUNNER_TEMP\ci-summary\harness-summary-*.md" -ErrorAction SilentlyContinue | Get-Content | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload harness summary (summary only, no results or logs)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: harness-summary-windows
+          path: ${{ runner.temp }}/ci-summary/harness-summary-*.md
+          if-no-files-found: warn
+          retention-days: 30
+
+  linux:
+    name: Linux (PowerShell 7, bash)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install ShellCheck (pinned, checksum verified)
+        run: |
+          set -eu
+          f="shellcheck-$SHELLCHECK_VERSION.linux.x86_64.tar.xz"
+          curl -fsSL -o "$RUNNER_TEMP/$f" "https://github.com/koalaman/shellcheck/releases/download/$SHELLCHECK_VERSION/$f"
+          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  $RUNNER_TEMP/$f" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/$f" -C "$RUNNER_TEMP"
+          sudo install -m 0755 "$RUNNER_TEMP/shellcheck-$SHELLCHECK_VERSION/shellcheck" /usr/local/bin/shellcheck
+          shellcheck --version
+
+      - name: Install PSScriptAnalyzer
+        run: |
+          sudo pwsh -NoProfile -Command "\$ErrorActionPreference = 'Stop'; Set-PSRepository -Name PSGallery -InstallationPolicy Trusted; Install-Module -Name PSScriptAnalyzer -RequiredVersion $PSSA_VERSION -Scope AllUsers -Force; Get-Module -ListAvailable PSScriptAnalyzer | Where-Object { \$_.Version -ne [version]'$PSSA_VERSION' } | ForEach-Object { Remove-Item -LiteralPath \$_.ModuleBase -Recurse -Force }"
+
+      - name: Test account and repository copy
+        run: |
+          set -eu
+          sudo useradd --create-home --shell /bin/bash msptest
+          sudo mkdir -p /opt/msp-ci/summary
+          sudo cp -R "$GITHUB_WORKSPACE" /opt/msp-ci/repo
+          sudo chown -R msptest /opt/msp-ci
+
+      - name: Network guard on
+        id: guard
+        run: |
+          sudo GITHUB_ACTIONS=true bash tests/ci/network-guard.sh start msptest
+          sudo GITHUB_ACTIONS=true bash tests/ci/network-guard.sh canary msptest
+
+      - name: Harness (PowerShell 7, as the test account)
+        if: ${{ !cancelled() && steps.guard.outcome == 'success' }}
+        working-directory: /opt/msp-ci/repo
+        run: sudo -u msptest -H env PATH="$PATH" GITHUB_ACTIONS=true pwsh -NoProfile -NonInteractive -File tests/Invoke-ToolkitTests.ps1 -SummaryPath /opt/msp-ci/summary/harness-summary-linux.md
+
+      - name: bash stub tests (as the test account)
+        if: ${{ !cancelled() && steps.guard.outcome == 'success' }}
+        working-directory: /opt/msp-ci/repo
+        run: |
+          bash --version | head -n 1
+          sudo -u msptest -H env PATH="$PATH" bash tests/bash/test-msp-helper.sh
+          sudo -u msptest -H env PATH="$PATH" bash tests/bash/test-scripts-mocked.sh
+
+      - name: Network guard check
+        if: ${{ !cancelled() && steps.guard.outcome == 'success' }}
+        run: sudo GITHUB_ACTIONS=true bash tests/ci/network-guard.sh check "$GITHUB_WORKSPACE" /opt/msp-ci/summary
+
+      - name: Show harness summary
+        if: ${{ !cancelled() }}
+        run: cat /opt/msp-ci/summary/harness-summary-*.md >>"$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
+      - name: Upload harness summary (summary only, no results or logs)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: harness-summary-linux
+          path: /opt/msp-ci/summary/harness-summary-*.md
+          if-no-files-found: warn
+          retention-days: 30
+
+  macos:
+    name: macOS (PowerShell 7, /bin/bash 3.2)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install ShellCheck (pinned, checksum verified)
+        run: |
+          set -eu
+          case "$(uname -m)" in
+            arm64) f="shellcheck-$SHELLCHECK_VERSION.darwin.aarch64.tar.xz"; sum=56affdd8de5527894dca6dc3d7e0a99a873b0f004d7aabc30ae407d3f48b0a79 ;;
+            *) f="shellcheck-$SHELLCHECK_VERSION.darwin.x86_64.tar.xz"; sum=3c89db4edcab7cf1c27bff178882e0f6f27f7afdf54e859fa041fca10febe4c6 ;;
+          esac
+          curl -fsSL -o "$RUNNER_TEMP/$f" "https://github.com/koalaman/shellcheck/releases/download/$SHELLCHECK_VERSION/$f"
+          echo "$sum  $RUNNER_TEMP/$f" | shasum -a 256 -c -
+          tar -xJf "$RUNNER_TEMP/$f" -C "$RUNNER_TEMP"
+          sudo mkdir -p /usr/local/bin
+          sudo install -m 0755 "$RUNNER_TEMP/shellcheck-$SHELLCHECK_VERSION/shellcheck" /usr/local/bin/shellcheck
+          /usr/local/bin/shellcheck --version
+
+      - name: Install PSScriptAnalyzer
+        run: |
+          sudo "$(command -v pwsh)" -NoProfile -Command "\$ErrorActionPreference = 'Stop'; Set-PSRepository -Name PSGallery -InstallationPolicy Trusted; Install-Module -Name PSScriptAnalyzer -RequiredVersion $PSSA_VERSION -Scope AllUsers -Force; Get-Module -ListAvailable PSScriptAnalyzer | Where-Object { \$_.Version -ne [version]'$PSSA_VERSION' } | ForEach-Object { Remove-Item -LiteralPath \$_.ModuleBase -Recurse -Force }"
+
+      - name: Test account and repository copy
+        run: |
+          set -eu
+          sudo dscl . -create /Users/msptest
+          sudo dscl . -create /Users/msptest UserShell /bin/bash
+          sudo dscl . -create /Users/msptest UniqueID 550
+          sudo dscl . -create /Users/msptest PrimaryGroupID 20
+          sudo dscl . -create /Users/msptest NFSHomeDirectory /Users/msptest
+          sudo mkdir -p /Users/msptest /Users/Shared/msp-ci/summary
+          sudo cp -R "$GITHUB_WORKSPACE" /Users/Shared/msp-ci/repo
+          sudo chown -R msptest:staff /Users/msptest /Users/Shared/msp-ci
+          id msptest
+
+      - name: Network guard on
+        id: guard
+        run: |
+          sudo GITHUB_ACTIONS=true /bin/bash tests/ci/network-guard.sh start msptest
+          sudo GITHUB_ACTIONS=true /bin/bash tests/ci/network-guard.sh canary msptest
+
+      - name: Harness (PowerShell 7, as the test account)
+        if: ${{ !cancelled() && steps.guard.outcome == 'success' }}
+        working-directory: /Users/Shared/msp-ci/repo
+        run: sudo -u msptest -H env PATH="$PATH" GITHUB_ACTIONS=true "$(command -v pwsh)" -NoProfile -NonInteractive -File tests/Invoke-ToolkitTests.ps1 -SummaryPath /Users/Shared/msp-ci/summary/harness-summary-macos.md
+
+      - name: bash stub tests under /bin/bash 3.2 (as the test account)
+        if: ${{ !cancelled() && steps.guard.outcome == 'success' }}
+        working-directory: /Users/Shared/msp-ci/repo
+        run: |
+          /bin/bash --version | head -n 1
+          sudo -u msptest -H env PATH="$PATH" /bin/bash tests/bash/test-msp-helper.sh
+          sudo -u msptest -H env PATH="$PATH" /bin/bash tests/bash/test-scripts-mocked.sh
+
+      - name: Network guard check
+        if: ${{ !cancelled() && steps.guard.outcome == 'success' }}
+        run: sudo GITHUB_ACTIONS=true /bin/bash tests/ci/network-guard.sh check "$GITHUB_WORKSPACE" /Users/Shared/msp-ci/summary
+
+      - name: Show harness summary
+        if: ${{ !cancelled() }}
+        run: cat /Users/Shared/msp-ci/summary/harness-summary-*.md >>"$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
+      - name: Upload harness summary (summary only, no results or logs)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: harness-summary-macos
+          path: /Users/Shared/msp-ci/summary/harness-summary-*.md
+          if-no-files-found: warn
+          retention-days: 30

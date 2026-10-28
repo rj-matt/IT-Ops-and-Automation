@@ -1,5 +1,7 @@
 # Scripting & Automation
 
+[![CI](https://github.com/rj-matt/IT-Ops-and-Automation/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rj-matt/IT-Ops-and-Automation/actions/workflows/ci.yml)
+
 ## Overview
 This repository contains operational scripts used to support troubleshooting,
 diagnostics, remediation, auditing, and repeatable administrative tasks across
@@ -450,4 +452,30 @@ stubbed bash tests (`tests/bash/test-scripts-mocked.sh`) also cover the sweep an
 paths, against stub `ping`/`nc` commands and the documentation-only range 198.51.100.0/24. Pass `-AllowActiveNetwork` only with approval for that
 network; the subnet is printed before anything is sent. Remediation scripts are only ever run
 with `-WhatIf`, `-BackupOnly`, or in non-interactive mode without `-Force` (which must refuse).
+
+### Continuous integration (GitHub Actions)
+
+`.github/workflows/ci.yml` runs on every push and pull request to `main`, on GitHub-hosted
+runners: Windows (the harness under Windows PowerShell 5.1, then under PowerShell 7), Linux
+(PowerShell 7 harness plus the bash stub tests) and macOS (PowerShell 7 harness plus the bash
+tests under `/bin/bash` 3.2). ShellCheck and PSScriptAnalyzer are pinned to the versions used on
+the development machine.
+
+- **Passive only.** The harness refuses `-AllowActiveNetwork` when `GITHUB_ACTIONS=true`, so the
+  active cases (A2 sweeps, A4 LAN scan, A7, A6 online search, B2 full test) are never run in CI.
+  On top of that, `tests/ci/` puts a network guard on each runner before the tests and checks it
+  afterwards; any blocked attempt fails the job. Linux and macOS: the tests run as a separate
+  account, `msptest`, and its traffic beyond loopback and its DNS queries are blocked and counted
+  (iptables / pf); on macOS name lookups go through mDNSResponder and are not tied to the account.
+  Windows: outbound connections from PowerShell and the Windows network tools, and every ping,
+  are blocked and logged (Windows Firewall, Security event 5157); name lookups go through the DNS
+  Client service and are not covered. Each guard first proves it works with a blocked attempt to
+  192.0.2.1 (a documentation-only address).
+- **No secrets.** No tenant connections, no M365 sign-ins: C1/C2 are covered by their mocked tests.
+- **Only the harness summary is uploaded** (step names and results). Script results and logs stay
+  on the runner.
+- **CI does not replace the hand tests.** A runner is a fresh VM with no Wi-Fi, no BitLocker, no
+  real users, no domain and no client software, so most checks there return SKIPPED or INFO. CI
+  proves the scripts start, refuse what they must and write valid results on a real Windows and
+  Linux machine; the hand tests in `docs/toolkit-review/final-summary.md` are still needed.
 

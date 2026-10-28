@@ -45,6 +45,8 @@
          -AllowActiveNetwork is given.
     _archive/ is never scanned.
 
+    In GitHub Actions (GITHUB_ACTIONS=true) -AllowActiveNetwork is refused: CI is passive only.
+
 .PARAMETER Path
     Limit steps 1-5 to these files or folders (relative to the repository root). Default: all.
 
@@ -61,6 +63,10 @@
 .PARAMETER SkipRuntime
     Skip step 10 (runtime smoke tests).
 
+.PARAMETER SummaryPath
+    Also write the step table to this Markdown file (used as the CI job artifact). It holds step
+    names, results and the first line of each detail only: no script results, no console logs.
+
 .EXAMPLE
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Invoke-ToolkitTests.ps1
 
@@ -76,7 +82,7 @@
                     macOS/Linux: PowerShell 7 and bash
                     All: PSScriptAnalyzer (module path or %LOCALAPPDATA%\PSModules), ShellCheck
     Exit code     : 0 when every step that ran passed, 1 otherwise
-    Version       : 2.3.0
+    Version       : 2.4.0
 #>
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPositionalParameters', '', Justification = 'Add-Result (Step, Result, Detail) is called ~50 times; positional calls keep each step on one readable line.')]
 [CmdletBinding()]
@@ -85,10 +91,15 @@ param(
     [string]$Distro = 'Ubuntu',
     [string]$TestUser = 'msptest',
     [switch]$AllowActiveNetwork,
-    [switch]$SkipRuntime
+    [switch]$SkipRuntime,
+    [string]$SummaryPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
+if ($AllowActiveNetwork -and $env:GITHUB_ACTIONS -eq 'true') {
+    Write-Host 'Refused: -AllowActiveNetwork is never used in CI. Run the active cases by hand, with approval for that network.' -ForegroundColor Red
+    exit 1
+}
 # "powershell.exe -File" passes a list as one "a,b" string; split so both forms work.
 $Path = @($Path | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $here = $PSScriptRoot
@@ -141,7 +152,7 @@ $shellcheck = (Get-Command shellcheck -ErrorAction SilentlyContinue).Source
 if (-not $shellcheck -and $onWindows) {
     $shellcheck = Get-ChildItem "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Recurse -Filter shellcheck.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
 }
-$pssa = Get-Module -ListAvailable PSScriptAnalyzer | Select-Object -First 1
+$pssa = Get-Module -ListAvailable PSScriptAnalyzer | Sort-Object Version -Descending | Select-Object -First 1
 if (-not $pssa -and $onWindows -and (Test-Path "$env:LOCALAPPDATA\PSModules\PSScriptAnalyzer")) { $pssa = "$env:LOCALAPPDATA\PSModules\PSScriptAnalyzer" }
 
 function Format-BashQuote { param([string]$Text) return ("'{0}'" -f ($Text -replace "'", "'\''")) }
@@ -216,7 +227,7 @@ $psFiles = Get-RepoFile -Extension @('.ps1', '.psm1')
 $shFiles = Get-RepoFile -Extension @('.sh')
 Write-Host ('Platform: {0} | PowerShell {1} | bash: {2} | ShellCheck: {3} | PSScriptAnalyzer: {4}' -f $platform, $PSVersionTable.PSVersion,
     $(if ($bashShells) { ($bashShells | ForEach-Object { '{0} ({1})' -f $_.Label, $_.Shell }) -join ', ' } else { 'none' }),
-    $(if ($shellcheck) { 'yes' } else { 'no' }), $(if ($pssa) { 'yes' } else { 'no' })) -ForegroundColor Cyan
+    $(if ($shellcheck) { 'yes' } else { 'no' }), $(if ($pssa -is [psmoduleinfo]) { $pssa.Version } elseif ($pssa) { 'yes' } else { 'no' })) -ForegroundColor Cyan
 
 # --- 1 Parsers ---------------------------------------------------------------------------
 function Get-ParseError {
@@ -641,6 +652,7 @@ else {
         @{ Platform = 'Linux'; Name = 'B2 full connectivity test (Linux)'; Script = $b2sh; Args = @(); Expect = @(0); Active = 'ping gateway, DNS lookup, TCP 443 to 1.1.1.1/8.8.8.8, HTTP(S) to www.msftconnecttest.com and 3 cloud endpoints' }
         @{ Platform = 'Windows'; Name = 'D2 -WhatIf with connectivity test'; Script = 'endpoint-systems/remediation/elevated/network-resets/Reset-NetworkStack.ps1'; Args = @('-WhatIf'); Expect = @(0); Active = 'ping gateway, DNS lookup, TCP to www.msftconnecttest.com' }
     )
+    $activeRun = 0
     if ($AllowActiveNetwork) {
         Write-Host ('-AllowActiveNetwork: active cases WILL send traffic on {0}.' -f (Get-ActiveScope)) -ForegroundColor Yellow
     }
@@ -654,6 +666,7 @@ else {
             Add-Result $label 'NOT RUN' ('active network ({0}); needs -AllowActiveNetwork and approval' -f $case.Active)
             continue
         }
+        if ($case.Active) { $activeRun++ }
         $script = Join-RepoPath $case.Script
         if (-not (Test-Path -LiteralPath $script)) { Add-Result $label FAIL ('script not found: {0}' -f $case.Script); continue }
         $out = Join-Path $work ('runtime-{0}' -f ($case.Name -replace '[^A-Za-z0-9]+', '-'))
@@ -708,7 +721,34 @@ else {
 Write-Host ''
 $failed = @($results | Where-Object { $_.Result -eq 'FAIL' }).Count
 $notRun = @($results | Where-Object { $_.Result -eq 'NOT RUN' }).Count
-Write-Host ('{0} step(s): {1} passed, {2} failed, {3} not run. Work folder: {4}' -f $results.Count, @($results | Where-Object { $_.Result -eq 'PASS' }).Count, $failed, $notRun, $work)
+$totals = '{0} step(s): {1} passed, {2} failed, {3} not run.' -f $results.Count, @($results | Where-Object { $_.Result -eq 'PASS' }).Count, $failed, $notRun
+Write-Host ('{0} Work folder: {1}' -f $totals, $work)
+if ($SummaryPath) {
+    # Step table only. Script results and console logs stay in the work folder (host and user details).
+    $activeLine = 'not reached (-SkipRuntime)'
+    if (-not $SkipRuntime) { $activeLine = [string]$activeRun }
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add('# Toolkit test harness summary')
+    $lines.Add('')
+    $lines.Add(('Platform: {0} | PowerShell {1} ({2}) | {3:yyyy-MM-dd HH:mm} UTC' -f $platform, $PSVersionTable.PSVersion, $PSVersionTable.PSEdition, (Get-Date).ToUniversalTime()))
+    $lines.Add('')
+    $lines.Add(('-AllowActiveNetwork: {0}' -f $(if ($AllowActiveNetwork) { 'given' } else { 'not given' })))
+    $lines.Add('')
+    $lines.Add(('Active network cases run: {0}' -f $activeLine))
+    $lines.Add('')
+    $lines.Add($totals)
+    $lines.Add('')
+    $lines.Add('| Step | Result | Detail |')
+    $lines.Add('|---|---|---|')
+    foreach ($r in $results) {
+        $first = ([string]$r.Detail -split "`n")[0]
+        if ($first.Length -gt 200) { $first = $first.Substring(0, 200) + '...' }
+        $lines.Add(('| {0} | {1} | {2} |' -f ($r.Step -replace '\|', '/'), $r.Result, ($first -replace '\|', '/')))
+    }
+    $folder = Split-Path -Path $SummaryPath -Parent
+    if ($folder -and -not (Test-Path -LiteralPath $folder)) { $null = New-Item -ItemType Directory -Path $folder -Force }
+    [System.IO.File]::WriteAllLines($SummaryPath, [string[]]$lines, (New-Object System.Text.UTF8Encoding($false)))
+}
 Write-Host 'The work folder holds this run''s logs and exported results; it is outside the repository and is not committed.' -ForegroundColor DarkGray
 if ($failed -gt 0) { exit 1 }
 exit 0
