@@ -5,8 +5,7 @@
     the runner. Never run on a client computer.
 
 .DESCRIPTION
-    -Action Start   Turns off Windows' automatic certificate-list updates (see below). Windows
-                    Firewall outbound block rules (group "MSP CI guard") for
+    -Action Start   Windows Firewall outbound block rules (group "MSP CI guard") for
                     powershell.exe (64/32-bit), pwsh.exe and the network tools the scripts could
                     call (ping, tracert, pathping, nslookup, curl, netsh, arp, nbtstat, net, nltest,
                     w32tm, wsl, bash), plus a rule blocking ICMP echo requests from any program.
@@ -17,11 +16,13 @@
                     workflow file mentions the active-network switch, or if a harness summary in
                     -SummaryDirectory reports active cases run.
 
-    Windows' own certificate-list downloads (trusted roots and disallowed certificates, port 80
-    to Microsoft) happen inside whichever process touches certificates; under PowerShell 7 that
-    includes loading Microsoft.PowerShell.Security and Get-WinEvent. Start turns them off by policy
-    (AuthRoot DisableRootAutoUpdate=1, EnableDisallowedCertAutoUpdate=0) so they are not counted
-    against the scripts.
+    Listed but not counted: TCP port 80 to a public address. Windows downloads certificate
+    revocation lists, OCSP answers and issuer certificates (port 80, Microsoft/CDN servers) inside
+    whichever process touches a certificate; under PowerShell 7 that includes Get-WinEvent,
+    Get-AuthenticodeSignature and the Cert: drive (shown on the runner, 2026-10-29). No script can
+    avoid it. Every private/LAN address (A2/A4/A7 probes, any port), every ping and every other
+    port stay counted; on Windows only B2's plain-HTTP test (www.msftconnecttest.com) would be
+    missed on its own, and B2 never runs without -Passive in CI.
 
     Not covered: name lookups. Windows resolves names in the DNS Client service, so a lookup is not
     tied to the program that asked for it. The Linux job covers DNS for the shared bash code; the
@@ -88,7 +89,9 @@ function Get-BlockedConnection {
         $dest = $data['DestAddress']
         if ($dest -match '^(127\.|::1$)') { continue }
         if ($names -contains $app -or $data['Protocol'] -in @('1', '58')) {
-            [pscustomobject]@{ Time = $e.TimeCreated; Application = $data['Application']; Destination = $dest; Port = $data['DestPort']; Protocol = $data['Protocol'] }
+            $private = $dest -match '^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|169\.254\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.|192\.0\.2\.|f[cd]|fe[89ab])'
+            $pki = ($data['Protocol'] -eq '6') -and ($data['DestPort'] -eq '80') -and -not $private
+            [pscustomobject]@{ Time = $e.TimeCreated; Application = $data['Application']; Destination = $dest; Port = $data['DestPort']; Protocol = $data['Protocol']; Counted = -not $pki }
         }
     }
 }
@@ -104,15 +107,6 @@ switch ($Action) {
         }
         $null = New-NetFirewallRule -DisplayName ('{0}: ICMPv4 echo' -f $group) -Group $group -Direction Outbound -Action Block -Protocol ICMPv4 -IcmpType 8 -Profile Any
         $null = New-NetFirewallRule -DisplayName ('{0}: ICMPv6 echo' -f $group) -Group $group -Direction Outbound -Action Block -Protocol ICMPv6 -IcmpType 128 -Profile Any
-        # Windows fetches its trusted-root and disallowed-certificate lists (port 80, Microsoft CDN)
-        # from inside any process that touches certificates: under PowerShell 7 that includes
-        # loading Microsoft.PowerShell.Security and Get-WinEvent. That is Windows' own traffic, not a
-        # script's, so it is turned off here (documented policy values) and the guard only sees
-        # what the scripts themselves send.
-        $authRoot = 'HKLM:\SOFTWARE\Policies\Microsoft\SystemCertificates\AuthRoot'
-        $null = New-Item -Path $authRoot -Force
-        Set-ItemProperty -Path $authRoot -Name DisableRootAutoUpdate -Value 1 -Type DWord
-        Set-ItemProperty -Path $authRoot -Name EnableDisallowedCertAutoUpdate -Value 0 -Type DWord
         $null = & auditpol.exe /set /subcategory:$auditGuid /failure:enable
         if ($LASTEXITCODE -ne 0) { Write-Host 'auditpol failed: blocked connections would not be logged.' -ForegroundColor Red; exit 1 }
         @{ Started = (Get-Date).ToString('o'); Programs = $programs } | ConvertTo-Json | Set-Content -LiteralPath $state -Encoding UTF8
@@ -147,13 +141,19 @@ switch ($Action) {
         $s = Get-Content -LiteralPath $state -Raw | ConvertFrom-Json
         if (-not $s.Baseline) { Write-Host 'No baseline: Start and Canary did not run.' -ForegroundColor Red; exit 1 }
         $rc = 0
-        $seen = @(Get-BlockedConnection -Since ([datetime]$s.Baseline) -Program $s.Programs)
+        $all = @(Get-BlockedConnection -Since ([datetime]$s.Baseline) -Program $s.Programs)
+        $pkiOnly = @($all | Where-Object { -not $_.Counted })
+        if ($pkiOnly.Count -gt 0) {
+            Write-Host ('Not counted: {0} TCP port 80 connection(s) to public addresses (Windows certificate revocation/issuer downloads):' -f $pkiOnly.Count)
+            $pkiOnly | Group-Object Application, Destination | ForEach-Object { Write-Host ('  {0} x {1}' -f $_.Count, $_.Name) }
+        }
+        $seen = @($all | Where-Object { $_.Counted })
         if ($seen.Count -gt 0) {
             Write-Host ('FAIL: {0} connection(s) were blocked: a script tried to reach beyond the runner.' -f $seen.Count) -ForegroundColor Red
             $seen | Select-Object -First 40 | ForEach-Object { Write-Host ('  {0:HH:mm:ss}  {1} -> {2}:{3} (protocol {4})' -f $_.Time, $_.Application, $_.Destination, $_.Port, $_.Protocol) }
             $rc = 1
         }
-        else { Write-Host 'PASS: no connection from the guarded programs was blocked after the canary.' }
+        else { Write-Host 'PASS: no counted connection from the guarded programs was blocked after the canary.' }
         $wf = Join-Path $RepositoryPath '.github\workflows'
         $hits = @(Get-ChildItem -LiteralPath $wf -File -ErrorAction SilentlyContinue | Select-String -SimpleMatch 'AllowActiveNetwork')
         if ($hits) { Write-Host 'FAIL: a workflow file mentions the active-network switch.' -ForegroundColor Red; $hits | ForEach-Object { Write-Host ('  {0}' -f $_) }; $rc = 1 }

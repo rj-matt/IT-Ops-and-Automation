@@ -468,8 +468,11 @@ the development machine.
   account, `msptest`, and its traffic beyond loopback and its DNS queries are blocked and counted
   (iptables / pf); on macOS name lookups go through mDNSResponder and are not tied to the account.
   Windows: outbound connections from PowerShell and the Windows network tools, and every ping,
-  are blocked and logged (Windows Firewall, Security event 5157); name lookups go through the DNS
-  Client service and are not covered. Each guard first proves it works with a blocked attempt to
+  are blocked and logged (Windows Firewall, Security event 5157). Two gaps on Windows: name
+  lookups go through the DNS Client service and are not tied to a program; and TCP port 80 to a
+  public address is listed but not counted, because Windows downloads certificate revocation
+  data on port 80 inside any PowerShell process that touches a certificate (Get-WinEvent is
+  enough). LAN addresses on any port stay counted. Each guard first proves it works with a blocked attempt to
   192.0.2.1 (a documentation-only address).
 - **No secrets.** No tenant connections, no M365 sign-ins: C1/C2 are covered by their mocked tests.
 - **Only the harness summary is uploaded** (step names and results). Script results and logs stay

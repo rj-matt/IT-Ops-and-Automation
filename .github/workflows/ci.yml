@@ -56,40 +56,6 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests\ci\Invoke-CINetworkGuard.ps1 -Action Canary
           exit $LASTEXITCODE
 
-      - name: TEMPORARY diagnosis of pwsh 7 traffic
-        if: ${{ !cancelled() && steps.guard.outcome == 'success' }}
-        shell: powershell
-        run: |
-          $pw = (Get-Command pwsh.exe).Source
-          function Test-Case([string]$Name, [string]$Code, [string]$ModulePath) {
-            $since = Get-Date
-            $saved = $env:PSModulePath
-            if ($ModulePath) { $env:PSModulePath = $ModulePath }
-            $t = Measure-Command { $null = & $pw -NoProfile -NonInteractive -Command $Code 2>&1 }
-            $env:PSModulePath = $saved
-            Start-Sleep -Seconds 2
-            $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 5157; StartTime = $since } -ErrorAction SilentlyContinue | ForEach-Object {
-              $d = @{}; foreach ($x in ([xml]$_.ToXml()).Event.EventData.Data) { $d[$x.Name] = [string]$x.'#text' }
-              if ($d['DestAddress'] -notmatch '^(127\.|::1$)') { '{0}:{1}' -f $d['DestAddress'], $d['DestPort'] } })
-            Write-Host ("{0,-44} {1,5:N1}s  blocked: {2}  {3}" -f $Name, $t.TotalSeconds, $ev.Count, (($ev | Select-Object -Unique) -join '; '))
-          }
-          Test-Case 'pwsh -c exit' 'exit 0'
-          Test-Case 'X509Store LocalMachine My (.NET)' '$s = New-Object System.Security.Cryptography.X509Certificates.X509Store(''My'', ''LocalMachine''); $s.Open(''ReadOnly''); $s.Certificates | ForEach-Object { $_.Subject, $_.NotAfter } | Out-Null; $s.Close()'
-          Test-Case 'Import-Module NetTCPIP' 'Import-Module NetTCPIP'
-          Test-Case 'Import-Module NetAdapter' 'Import-Module NetAdapter'
-          Test-Case 'Import-Module Defender' 'Import-Module Defender'
-          Test-Case 'Import-Module Microsoft.PowerShell.LocalAccounts' 'Import-Module Microsoft.PowerShell.LocalAccounts'
-          Test-Case 'Import-Module Microsoft.PowerShell.Security' 'Import-Module Microsoft.PowerShell.Security'
-          Test-Case 'Get-NetTCPConnection' 'Get-NetTCPConnection -State Listen | Out-Null'
-          Test-Case 'Get-AuthenticodeSignature notepad' 'Get-AuthenticodeSignature C:\Windows\System32\notepad.exe | Out-Null'
-          Test-Case 'Cert:\LocalMachine\My' 'Get-ChildItem Cert:\LocalMachine\My | Out-Null'
-          Test-Case 'Cert:\LocalMachine\My (2nd time)' 'Get-ChildItem Cert:\LocalMachine\My | Out-Null'
-          Test-Case 'Import-Module NetTCPIP (2nd time)' 'Import-Module NetTCPIP'
-          Test-Case 'Get-WinEvent System 24h' 'Get-WinEvent -FilterHashtable @{ LogName = ''System''; Level = 1, 2; StartTime = (Get-Date).AddHours(-24) } -ErrorAction SilentlyContinue | Out-Null'
-          Test-Case 'Get-WinEvent System 24h (2nd time)' 'Get-WinEvent -FilterHashtable @{ LogName = ''System''; Level = 1, 2; StartTime = (Get-Date).AddHours(-24) } -ErrorAction SilentlyContinue | Out-Null'
-          Test-Case 'pwsh A5 browsers script' ('& ''{0}\endpoint-systems\diagnostics\system-info\Get-BrowserSecurityCheck.ps1'' -OutputPath $env:TEMP | Out-Null' -f $env:GITHUB_WORKSPACE)
-          Test-Case 'pwsh A4 listening ports script' ('& ''{0}\security-operations\diagnostics\endpoint-posture\Get-OpenPortScan.ps1'' -OutputPath $env:TEMP | Out-Null' -f $env:GITHUB_WORKSPACE)
-
       - name: Harness (Windows PowerShell 5.1)
         if: ${{ !cancelled() && steps.guard.outcome == 'success' }}
         shell: cmd
