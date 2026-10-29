@@ -5,7 +5,8 @@
     the runner. Never run on a client computer.
 
 .DESCRIPTION
-    -Action Start   Windows Firewall outbound block rules (group "MSP CI guard") for
+    -Action Start   Turns off Windows' automatic certificate-list updates (see below). Windows
+                    Firewall outbound block rules (group "MSP CI guard") for
                     powershell.exe (64/32-bit), pwsh.exe and the network tools the scripts could
                     call (ping, tracert, pathping, nslookup, curl, netsh, arp, nbtstat, net, nltest,
                     w32tm, wsl, bash), plus a rule blocking ICMP echo requests from any program.
@@ -15,6 +16,12 @@
     -Action Check   Fails if any connection from those programs was blocked after the canary, if a
                     workflow file mentions the active-network switch, or if a harness summary in
                     -SummaryDirectory reports active cases run.
+
+    Windows' own certificate-list downloads (trusted roots and disallowed certificates, port 80
+    to Microsoft) happen inside whichever process touches certificates; under PowerShell 7 that
+    includes loading Microsoft.PowerShell.Security and Get-WinEvent. Start turns them off by policy
+    (AuthRoot DisableRootAutoUpdate=1, EnableDisallowedCertAutoUpdate=0) so they are not counted
+    against the scripts.
 
     Not covered: name lookups. Windows resolves names in the DNS Client service, so a lookup is not
     tied to the program that asked for it. The Linux job covers DNS for the shared bash code; the
@@ -36,7 +43,7 @@
 .NOTES
     Risk Level    : Changes firewall and audit settings: GitHub Actions runners only (refuses elsewhere)
     Exit code     : 0 when the step passed, 1 otherwise
-    Version       : 1.0.0
+    Version       : 1.1.0
 #>
 [CmdletBinding()]
 param(
@@ -97,6 +104,15 @@ switch ($Action) {
         }
         $null = New-NetFirewallRule -DisplayName ('{0}: ICMPv4 echo' -f $group) -Group $group -Direction Outbound -Action Block -Protocol ICMPv4 -IcmpType 8 -Profile Any
         $null = New-NetFirewallRule -DisplayName ('{0}: ICMPv6 echo' -f $group) -Group $group -Direction Outbound -Action Block -Protocol ICMPv6 -IcmpType 128 -Profile Any
+        # Windows fetches its trusted-root and disallowed-certificate lists (port 80, Microsoft CDN)
+        # from inside any process that touches certificates: under PowerShell 7 that includes
+        # loading Microsoft.PowerShell.Security and Get-WinEvent. That is Windows' own traffic, not a
+        # script's, so it is turned off here (documented policy values) and the guard only sees
+        # what the scripts themselves send.
+        $authRoot = 'HKLM:\SOFTWARE\Policies\Microsoft\SystemCertificates\AuthRoot'
+        $null = New-Item -Path $authRoot -Force
+        Set-ItemProperty -Path $authRoot -Name DisableRootAutoUpdate -Value 1 -Type DWord
+        Set-ItemProperty -Path $authRoot -Name EnableDisallowedCertAutoUpdate -Value 0 -Type DWord
         $null = & auditpol.exe /set /subcategory:$auditGuid /failure:enable
         if ($LASTEXITCODE -ne 0) { Write-Host 'auditpol failed: blocked connections would not be logged.' -ForegroundColor Red; exit 1 }
         @{ Started = (Get-Date).ToString('o'); Programs = $programs } | ConvertTo-Json | Set-Content -LiteralPath $state -Encoding UTF8
