@@ -318,7 +318,8 @@ msp_detect_platform() {
             ;;
         Linux)
             MSP_PLATFORM='Linux'
-            MSP_OS_VERSION=$(sed -n 's/^PRETTY_NAME=//p' /etc/os-release 2>/dev/null | head -n 1 | sed 's/^"//; s/"$//')
+            # MSP_TEST_ROOT: the tests' fake root (unset on a real computer).
+            MSP_OS_VERSION=$(sed -n 's/^PRETTY_NAME=//p' "${MSP_TEST_ROOT:-}/etc/os-release" 2>/dev/null | head -n 1 | sed 's/^"//; s/"$//')
             [ -n "$MSP_OS_VERSION" ] || MSP_OS_VERSION="Linux $(uname -r 2>/dev/null)"
             ;;
         *)

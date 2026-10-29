@@ -76,7 +76,7 @@
     Exit codes    : 0 reset done (restart required), or -WhatIf/-BackupOnly completed; 1 nothing
                     changed (not admin, not confirmed, non-interactive without -Force); 2 a step
                     failed (see findings; backup failure means nothing was changed)
-    Version       : 2.0.0
+    Version       : 2.0.1
     Limitations   : Cannot verify the result until after the restart (run
                     Get-NetworkConnectivityReport.ps1 then). Does not fix driver, hardware, router or
                     ISP problems. Static settings are detected for IPv4 only.
@@ -784,7 +784,7 @@ function Confirm-MSPChange {
 #endregion MSPHelper:Change
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '2.0.0'
+$ScriptVersion = '2.0.1'
 # Read -WhatIf into our own flag, then switch it off so it cannot reach the log writes and
 # module loading. The dry run prints its own "What if:" lines with Write-MSPWhatIf.
 $dryRun = [bool]$WhatIfPreference
@@ -832,8 +832,10 @@ Invoke-MSPCheck -Name 'IPv4 settings' -Category 'Preflight' -ScriptBlock {
             Add-MSPFinding -Check ('IPv4: {0}' -f $a.Name) -Category 'Preflight' -Status INFO -Detail ('{0}: virtual or VPN adapter ({1}); its settings come from its own software.' -f $a.Name, $a.InterfaceDescription)
             continue
         }
-        $ipIf = Get-NetIPInterface -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
-        $cfg = Get-NetIPConfiguration -InterfaceIndex $a.ifIndex -ErrorAction SilentlyContinue
+        # 2>$null as well: on an adapter without IPv4, Get-NetIPConfiguration's internal
+        # Get-NetIPInterface call writes "No MSFT_NetIPInterface objects found" despite -ErrorAction.
+        $ipIf = Get-NetIPInterface -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue 2>$null
+        $cfg = Get-NetIPConfiguration -InterfaceIndex $a.ifIndex -ErrorAction SilentlyContinue 2>$null
         $addr = @($cfg.IPv4Address | Where-Object { $_ })
         $gw = @($cfg.IPv4DefaultGateway | ForEach-Object { $_.NextHop })
         $dns = @((Get-DnsClientServerAddress -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses)

@@ -31,6 +31,32 @@ FAILED=0
 REAL_DATE=$(command -v date)
 REAL_STAT=$(command -v stat)
 
+# The cases' PATH: their stubs first, then this computer's commands. On a Linux host the real
+# platform commands (apt, snap, systemctl, mokutil, ...) would answer where a case expects "not
+# installed", as it is on a Mac; they are left out, so each case sees only its own stubs.
+SYS_PATH=$PATH
+if [ "$(uname -s)" = Linux ]; then
+    HIDE=' apt apt-get apt-cache apt-config aptitude dpkg dpkg-query rpm dnf yum zypper pacman snap flatpak
+        systemctl journalctl loginctl timedatectl hostnamectl resolvectl lsblk findmnt blkid ip ss nmcli
+        iw iwconfig iwgetid lastlog lastlog2 chage faillock mokutil aa-status apparmor_status sestatus
+        getenforce ufw firewall-cmd nft iptables ip6tables needrestart fwupdmgr cryptsetup dmsetup lsmod
+        systemd-detect-virt dmidecode lspci lsusb unattended-upgrade unattended-upgrades checkupdates '
+    SYS_PATH="$WORK/sysbin"
+    mkdir -p "$SYS_PATH"
+    old_ifs=$IFS
+    IFS=:
+    for d in $PATH; do
+        [ -d "$d" ] || continue
+        for f in "$d"/*; do
+            n=${f##*/}
+            [ -x "$f" ] && [ ! -d "$f" ] && [ ! -e "$SYS_PATH/$n" ] || continue
+            case "$HIDE" in *[[:space:]]"$n"[[:space:]]*) continue ;; esac
+            ln -s "$f" "$SYS_PATH/$n"
+        done
+    done
+    IFS=$old_ifs
+fi
+
 show_output() {
     # Prints the first lines of a failed case's output (fake computer only), once per file.
     case " $SHOWN " in *" $1 "*) return ;; esac
@@ -59,6 +85,74 @@ stub() {
     chmod +x "$1/$2"
 }
 
+write_date_stat_stubs() {
+    cat >"$1/date" <<EOF
+#!/bin/sh
+R=$REAL_DATE
+gnu=0
+\$R -d @0 >/dev/null 2>&1 && gnu=1
+case "\$1" in
+    -d)
+        v=\$2
+        shift 2
+        [ \$gnu = 1 ] && exec \$R -d "\$v" "\$@"
+        case "\$v" in
+            @*) e=\${v#@} ;;
+            *) e=\$(\$R -j -f '%Y-%m-%d %H:%M:%S' "\$v" +%s 2>/dev/null || \$R -j -f '%Y-%m-%d' "\$v" +%s 2>/dev/null || \$R -j -f '%a %b %d %H:%M:%S %Y' "\$v" +%s 2>/dev/null || \$R -j -f '%b %d %H:%M:%S %Y %Z' "\$v" +%s 2>/dev/null) ;;
+        esac
+        [ -n "\$e" ] || exit 1
+        exec \$R -r "\$e" "\$@"
+        ;;
+    -r)
+        # BSD: -r SECONDS. GNU: -d @SECONDS (GNU -r is a file's time).
+        if [ \$gnu = 1 ]; then
+            case "\$2" in '' | *[!0-9]*) exec \$R "\$@" ;; esac
+            v=\$2
+            shift 2
+            exec \$R -d "@\$v" "\$@"
+        fi
+        exec \$R "\$@"
+        ;;
+    -j)
+        # BSD: -j [-u] -f INPUT_FORMAT VALUE +OUTPUT. GNU parses VALUE without a format.
+        if [ \$gnu = 1 ]; then
+            shift
+            u=''
+            if [ "\$1" = -u ]; then u=-u; shift; fi
+            [ "\$1" = -f ] && shift 2
+            v=\$1
+            shift
+            exec \$R \$u -d "\$v" "\$@"
+        fi
+        exec \$R "\$@"
+        ;;
+    *) exec \$R "\$@" ;;
+esac
+EOF
+    cat >"$1/stat" <<EOF
+#!/bin/sh
+R=$REAL_STAT
+gnu=0
+\$R -c %Y / >/dev/null 2>&1 && gnu=1
+if [ "\$1" = -c ]; then
+    f=\$2
+    shift 2
+    [ \$gnu = 1 ] && exec \$R -c "\$f" "\$@"
+    [ "\$f" = %U ] && exec \$R -f %Su "\$@"
+    exec \$R -f %m "\$@"
+fi
+if [ "\$1" = -f ] && [ \$gnu = 1 ]; then
+    # BSD -f FORMAT (GNU -f means file system status).
+    f=\$2
+    shift 2
+    case "\$f" in %Su) f=%U ;; %m) f=%Y ;; %z) f=%s ;; esac
+    exec \$R -c "\$f" "\$@"
+fi
+exec \$R "\$@"
+EOF
+    chmod +x "$1/date" "$1/stat"
+}
+
 new_env() {
     # new_env NAME - fresh stub folder and fake root. Sets BIN and FAKE.
     BIN="$WORK/$1/bin"
@@ -68,9 +162,9 @@ new_env() {
     stub "$BIN" uname 'case "$1" in -s) echo Linux ;; -n) echo mockhost ;; -r) echo 6.8.0-mock ;; *) echo Linux ;; esac'
     # The signed-in user is "alice" (uid 1000); her groups come from the fake /etc/group.
     stub "$BIN" id 'case "$1" in -u) echo 1000 ;; -un) echo alice ;; -Gn) awk -F: -v u="${2:-alice}" '"'"'BEGIN { printf "%s", u } { n = split($4, m, ","); for (i = 1; i <= n; i++) if (m[i] == u) printf " %s", $1 } END { print "" }'"'"' "'"$FAKE"'/etc/group" 2>/dev/null ;; *) echo "uid=1000(alice)" ;; esac'
-    # GNU forms used by -linux.sh scripts, mapped onto whatever date/stat this computer has.
-    stub "$BIN" date "case \"\$1\" in -d) v=\$2; shift 2; if $REAL_DATE -d @0 >/dev/null 2>&1; then exec $REAL_DATE -d \"\$v\" \"\$@\"; fi; case \"\$v\" in @*) e=\${v#@} ;; *) e=\$($REAL_DATE -j -f '%Y-%m-%d %H:%M:%S' \"\$v\" +%s 2>/dev/null || $REAL_DATE -j -f '%Y-%m-%d' \"\$v\" +%s 2>/dev/null || $REAL_DATE -j -f '%a %b %d %H:%M:%S %Y' \"\$v\" +%s 2>/dev/null || $REAL_DATE -j -f '%b %d %H:%M:%S %Y %Z' \"\$v\" +%s 2>/dev/null) ;; esac; [ -n \"\$e\" ] || exit 1; exec $REAL_DATE -r \$e \"\$@\" ;; *) exec $REAL_DATE \"\$@\" ;; esac"
-    stub "$BIN" stat "if [ \"\$1\" = -c ]; then f=\$2; shift 2; if $REAL_STAT -c %Y / >/dev/null 2>&1; then exec $REAL_STAT -c \"\$f\" \"\$@\"; elif [ \"\$f\" = %U ]; then exec $REAL_STAT -f %Su \"\$@\"; else exec $REAL_STAT -f %m \"\$@\"; fi; else exec $REAL_STAT \"\$@\"; fi"
+    # date/stat: GNU forms (-linux.sh scripts) and BSD forms (-macos.sh scripts) both work,
+    # whichever date/stat this computer has.
+    write_date_stat_stubs "$BIN"
     # Anything that would send traffic fails loudly and leaves a marker.
     for c in ping nc curl wget dig nslookup host avahi-resolve; do
         stub "$BIN" "$c" "echo \"NETWORK STUB CALLED: $c \$*\" >>\"$WORK/$1/network-calls\"; exit 1"
@@ -89,7 +183,7 @@ run_script() {
     # fake root, and stdin closed.
     local env=$1 script=$2 out=$3
     shift 3
-    PATH="$WORK/$env/bin:$PATH" MSP_TEST_ROOT="$WORK/$env/root" TMPDIR="$WORK/$env" NO_COLOR=1 HOME=/home/alice \
+    PATH="$WORK/$env/bin:$SYS_PATH" MSP_TEST_ROOT="$WORK/$env/root" TMPDIR="$WORK/$env" NO_COLOR=1 HOME=/home/alice \
         "$BASH" "$REPO/$script" "$@" </dev/null >"$out" 2>&1
     printf '%s\n' "$?" >"$out.rc"
 }
@@ -1357,7 +1451,7 @@ for s in core-infrastructure/networking/diagnostics/get-wifi-security-audit-linu
     cp "$REPO/$s" "$flat/"
 done
 OUT="$WORK/bundle-flat.txt"
-PATH="$WORK/bundle-flat/bin:$PATH" MSP_TEST_ROOT="$WORK/bundle-flat/root" TMPDIR="$WORK/bundle-flat" NO_COLOR=1 HOME=/home/alice \
+PATH="$WORK/bundle-flat/bin:$SYS_PATH" MSP_TEST_ROOT="$WORK/bundle-flat/root" TMPDIR="$WORK/bundle-flat" NO_COLOR=1 HOME=/home/alice \
     "$BASH" "$flat/run-home-audit-bundle.sh" --passive --skip A5,get-update-compliance-linux.sh --output "$WORK/bundle-flat/out" </dev/null >"$OUT" 2>&1
 printf '%s\n' "$?" >"$OUT.rc"
 check 'Bundle flat: exit 0 (some scripts completed)' "$OUT.rc" '^0$'

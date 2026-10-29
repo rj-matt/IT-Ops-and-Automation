@@ -56,6 +56,60 @@ jobs:
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests\ci\Invoke-CINetworkGuard.ps1 -Action Canary
           exit $LASTEXITCODE
 
+      - name: TEMPORARY diagnosis of pwsh 7 traffic (powershell.exe parent)
+        if: ${{ !cancelled() && steps.guard.outcome == 'success' }}
+        shell: powershell
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP ('diag-' + [guid]::NewGuid().ToString('N'))
+          $null = New-Item -ItemType Directory -Path $out -Force
+          $pw = (Get-Command pwsh.exe).Source
+          Write-Host ("Parent: {0} {1}; PSModulePath: {2}" -f $PSVersionTable.PSEdition, $PSVersionTable.PSVersion, $env:PSModulePath)
+          $cases = @(
+            @{ N = 'pwsh -c exit'; A = @('-NoProfile', '-NonInteractive', '-Command', 'exit 0') },
+            @{ N = 'pwsh -c Get-Command Get-Nothing'; A = @('-NoProfile', '-NonInteractive', '-Command', 'Get-Command Get-NothingAtAll -ErrorAction SilentlyContinue; exit 0') },
+            @{ N = 'pwsh D1 refusal'; A = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', 'endpoint-systems\remediation\safe\clear-caches\Clear-WindowsUpdateCache.ps1', '-OutputPath', $out) },
+            @{ N = 'pwsh E1 local admins'; A = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', 'endpoint-systems\audit\local-admins\Get-LocalAdminReport.ps1', '-OutputPath', $out) },
+            @{ N = 'pwsh E4 server health'; A = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', 'core-infrastructure\servers\windows\diagnostics\Get-ServerHealthReport.ps1', '-OutputPath', $out) },
+            @{ N = 'pwsh Import PSScriptAnalyzer'; A = @('-NoProfile', '-NonInteractive', '-Command', 'Import-Module PSScriptAnalyzer; exit 0') }
+          )
+          foreach ($c in $cases) {
+            $since = Get-Date
+            $t = Measure-Command { $null = & $pw @($c.A) 2>&1 }
+            Start-Sleep -Seconds 2
+            $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 5157; StartTime = $since } -ErrorAction SilentlyContinue | ForEach-Object {
+              $d = @{}; foreach ($x in ([xml]$_.ToXml()).Event.EventData.Data) { $d[$x.Name] = [string]$x.'#text' }
+              if ($d['DestAddress'] -notmatch '^(127\.|::1$)') { '{0} -> {1}:{2}' -f (Split-Path $d['Application'] -Leaf), $d['DestAddress'], $d['DestPort'] } })
+            Write-Host ("{0,-34} {1,5:N1}s  blocked: {2}  {3}" -f $c.N, $t.TotalSeconds, $ev.Count, (($ev | Select-Object -Unique) -join '; '))
+          }
+          Remove-Item -LiteralPath $out -Recurse -Force
+
+      - name: TEMPORARY diagnosis of pwsh 7 traffic (pwsh parent)
+        if: ${{ !cancelled() && steps.guard.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP ('diag-' + [guid]::NewGuid().ToString('N'))
+          $null = New-Item -ItemType Directory -Path $out -Force
+          $pw = (Get-Command pwsh.exe).Source
+          Write-Host ("Parent: {0} {1}; PSModulePath: {2}" -f $PSVersionTable.PSEdition, $PSVersionTable.PSVersion, $env:PSModulePath)
+          $cases = @(
+            @{ N = 'pwsh -c exit'; A = @('-NoProfile', '-NonInteractive', '-Command', 'exit 0') },
+            @{ N = 'pwsh -c Get-Command Get-Nothing'; A = @('-NoProfile', '-NonInteractive', '-Command', 'Get-Command Get-NothingAtAll -ErrorAction SilentlyContinue; exit 0') },
+            @{ N = 'pwsh D1 refusal'; A = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', 'endpoint-systems\remediation\safe\clear-caches\Clear-WindowsUpdateCache.ps1', '-OutputPath', $out) },
+            @{ N = 'pwsh E1 local admins'; A = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', 'endpoint-systems\audit\local-admins\Get-LocalAdminReport.ps1', '-OutputPath', $out) },
+            @{ N = 'pwsh E4 server health'; A = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', 'core-infrastructure\servers\windows\diagnostics\Get-ServerHealthReport.ps1', '-OutputPath', $out) },
+            @{ N = 'pwsh Import PSScriptAnalyzer'; A = @('-NoProfile', '-NonInteractive', '-Command', 'Import-Module PSScriptAnalyzer; exit 0') }
+          )
+          foreach ($c in $cases) {
+            $since = Get-Date
+            $t = Measure-Command { $null = & $pw @($c.A) 2>&1 }
+            Start-Sleep -Seconds 2
+            $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 5157; StartTime = $since } -ErrorAction SilentlyContinue | ForEach-Object {
+              $d = @{}; foreach ($x in ([xml]$_.ToXml()).Event.EventData.Data) { $d[$x.Name] = [string]$x.'#text' }
+              if ($d['DestAddress'] -notmatch '^(127\.|::1$)') { '{0} -> {1}:{2}' -f (Split-Path $d['Application'] -Leaf), $d['DestAddress'], $d['DestPort'] } })
+            Write-Host ("{0,-34} {1,5:N1}s  blocked: {2}  {3}" -f $c.N, $t.TotalSeconds, $ev.Count, (($ev | Select-Object -Unique) -join '; '))
+          }
+          Remove-Item -LiteralPath $out -Recurse -Force
+
       - name: Harness (Windows PowerShell 5.1)
         if: ${{ !cancelled() && steps.guard.outcome == 'success' }}
         shell: cmd

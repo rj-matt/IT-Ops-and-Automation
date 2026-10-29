@@ -51,7 +51,7 @@ MSP_SCRIPT_FILE=$0
 
 #region MSPToolkit (generated) Sections=Core,Net
 # DO NOT EDIT — regenerate with Sync-MSPEmbeddedHelper.ps1
-# Source: endpoint-systems/utilities/msp-toolkit-common.sh | Sections: Core,Net | SHA256: 8b0a39b6f1d44dfe10d316541a8ca96d75bce82def24957f4df55f0db051051d
+# Source: endpoint-systems/utilities/msp-toolkit-common.sh | Sections: Core,Net | SHA256: 8569a585c0f77693f9226c0fd1702fe364e582537e7c18b5e7d39da6f2f6bea0
 #region MSPHelper:Core
 # --- Run state ------------------------------------------------------------------------------
 # One toolkit script = one "run": one log file, one findings list, one optional export.
@@ -328,7 +328,8 @@ msp_detect_platform() {
             ;;
         Linux)
             MSP_PLATFORM='Linux'
-            MSP_OS_VERSION=$(sed -n 's/^PRETTY_NAME=//p' /etc/os-release 2>/dev/null | head -n 1 | sed 's/^"//; s/"$//')
+            # MSP_TEST_ROOT: the tests' fake root (unset on a real computer).
+            MSP_OS_VERSION=$(sed -n 's/^PRETTY_NAME=//p' "${MSP_TEST_ROOT:-}/etc/os-release" 2>/dev/null | head -n 1 | sed 's/^"//; s/"$//')
             [ -n "$MSP_OS_VERSION" ] || MSP_OS_VERSION="Linux $(uname -r 2>/dev/null)"
             ;;
         *)

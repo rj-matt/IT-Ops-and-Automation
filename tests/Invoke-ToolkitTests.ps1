@@ -96,6 +96,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Child processes run with 'Continue' (& { ... }): Windows PowerShell 5.1 turns any stderr line of
+# a native command into a terminating error under 'Stop', which would end the whole harness.
 if ($AllowActiveNetwork -and $env:GITHUB_ACTIONS -eq 'true') {
     Write-Host 'Refused: -AllowActiveNetwork is never used in CI. Run the active cases by hand, with approval for that network.' -ForegroundColor Red
     exit 1
@@ -188,6 +190,7 @@ function Invoke-Bash {
         account and the bash binary. Off Windows it runs as the current account (never sudo).
     #>
     param([string]$Command, [string]$User = '', [string]$Shell = 'bash')
+    $ErrorActionPreference = 'Continue'
     if ($onWindows) {
         if (-not $User) { $User = 'root' }
         $out = & wsl.exe -d $Distro -u $User -- $Shell -c $Command 2>&1
@@ -332,7 +335,7 @@ else {
     Push-Location $root
     try {
         $rel = $shFiles | ForEach-Object { Get-Relative $_.FullName }
-        $out = & $shellcheck -s bash -x @rel 2>&1
+        $out = & { $ErrorActionPreference = 'Continue'; & $shellcheck -s bash -x @rel 2>&1 }
         $code = $LASTEXITCODE
     }
     finally { Pop-Location }
@@ -353,7 +356,7 @@ else {
 
 # --- 6 Embedded helpers ------------------------------------------------------------------
 $sync = Join-RepoPath 'endpoint-systems/utilities/Sync-MSPEmbeddedHelper.ps1'
-$out = & $psExe -NoProfile -ExecutionPolicy Bypass -File $sync -Check 2>&1
+$out = & { $ErrorActionPreference = 'Continue'; & $psExe -NoProfile -ExecutionPolicy Bypass -File $sync -Check 2>&1 }
 if ($LASTEXITCODE -eq 0) { Add-Result 'Embedded helpers (Sync -Check)' PASS ((@($out) | Select-Object -Last 1) -join '') }
 else { Add-Result 'Embedded helpers (Sync -Check)' FAIL ((@($out) | Where-Object { "$_" -match 'MISMATCH|PROBLEM' }) -join "`n") }
 
@@ -477,7 +480,7 @@ else {
         # Schema validation of the bash export.
         $export = Join-Path $local 'export'
         if (Test-Path $export) {
-            $out = & $psExe -NoProfile -ExecutionPolicy Bypass -File $validator -Path $export 2>&1
+            $out = & { $ErrorActionPreference = 'Continue'; & $psExe -NoProfile -ExecutionPolicy Bypass -File $validator -Path $export 2>&1 }
             if ($LASTEXITCODE -eq 0) { Add-Result ('Schema 2.0 validation of bash export ({0})' -f $run.Label) PASS ((@($out) | Select-Object -Last 1) -join '') }
             else { Add-Result ('Schema 2.0 validation of bash export ({0})' -f $run.Label) FAIL ((@($out) | Where-Object { "$_" -match 'error|FAIL' }) -join "`n") }
         }
@@ -491,7 +494,7 @@ if ($winPs) { $hosts += [pscustomobject]@{ Label = '5.1'; Exe = $winPs } }
 else { Add-Result 'PowerShell helper unit tests (5.1)' 'NOT RUN' 'Windows only: run this harness on a Windows PC' }
 if ($pwsh) { $hosts += [pscustomobject]@{ Label = '7'; Exe = $pwsh } }
 foreach ($h in $hosts) {
-    $out = & $h.Exe -NoProfile -ExecutionPolicy Bypass -File $unit 2>&1
+    $out = & { $ErrorActionPreference = 'Continue'; & $h.Exe -NoProfile -ExecutionPolicy Bypass -File $unit 2>&1 }
     if ($LASTEXITCODE -eq 0) { Add-Result ('PowerShell helper unit tests ({0})' -f $h.Label) PASS ((@($out) | Select-Object -Last 1) -join '') }
     else { Add-Result ('PowerShell helper unit tests ({0})' -f $h.Label) FAIL ((@($out) | Where-Object { "$_" -match 'FAIL|passed' }) -join "`n") }
 }
@@ -510,7 +513,7 @@ $logic = @(
 )
 foreach ($t in $logic) {
     foreach ($h in $hosts) {
-        $out = & $h.Exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $here $t.File) 2>&1
+        $out = & { $ErrorActionPreference = 'Continue'; & $h.Exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $here $t.File) 2>&1 }
         $label = 'Logic: {0} (PowerShell {1})' -f $t.Name, $h.Label
         if ($LASTEXITCODE -eq 0) { Add-Result $label PASS ((@($out) | Select-Object -Last 1) -join '') }
         else { Add-Result $label FAIL ((@($out) | Where-Object { "$_" -match 'FAIL|passed' }) -join "`n") }
@@ -683,7 +686,7 @@ else {
         else {
             # -NonInteractive: nothing may ever wait for keyboard input, and confirmation must refuse.
             $argList = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $script) + $case.Args + @('-OutputPath', $out)
-            $console = & $psExe @argList 2>&1
+            $console = & { $ErrorActionPreference = 'Continue'; & $psExe @argList 2>&1 }
             $code = $LASTEXITCODE
         }
         ($console | Out-String) | Set-Content -LiteralPath (Join-Path $out 'console.txt') -Encoding UTF8
@@ -696,7 +699,7 @@ else {
         $json = @(Get-ChildItem -LiteralPath $out -Filter '*.json' -File -Recurse)
         if ($json.Count -eq 0) { $problems += 'no JSON result written' }
         else {
-            $v = & $psExe -NoProfile -ExecutionPolicy Bypass -File $validator -Path $out 2>&1
+            $v = & { $ErrorActionPreference = 'Continue'; & $psExe -NoProfile -ExecutionPolicy Bypass -File $validator -Path $out 2>&1 }
             if ($LASTEXITCODE -ne 0) { $problems += ('schema: {0}' -f ((@($v) | Where-Object { "$_" -match 'error' } | Select-Object -First 3) -join '; ')) }
             foreach ($j in $json) {
                 $result = Get-Content -LiteralPath $j.FullName -Raw | ConvertFrom-Json
