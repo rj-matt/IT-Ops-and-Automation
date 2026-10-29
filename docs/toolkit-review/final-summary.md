@@ -1,6 +1,6 @@
 # Final summary: MSP toolkit review (Batches A-E, Phase 5)
 
-Updated 2026-10-26. Development machine: macOS 26 (Apple silicon), PowerShell 7, bash 3.2.57
+Updated 2026-10-29 (CI added). Development machine: macOS 26 (Apple silicon), PowerShell 7, bash 3.2.57
 and 5.3, ShellCheck, PSScriptAnalyzer. The per-batch details are in `batch-a-summary.md`,
 `batch-b-summary.md`, `batch-c-summary.md` and `batch-e-summary.md`; this file is the overall
 status and the one list of what still has to be run by hand.
@@ -10,52 +10,81 @@ Last full harness on macOS (`pwsh -NoProfile -File tests/Invoke-ToolkitTests.ps1
 Stubbed bash tests: 459 passed under bash 3.2 and 5.3. PSScriptAnalyzer: no findings in any
 script (the known-issues baseline is empty and was removed).
 
+**GitHub Actions CI** (`.github/workflows/ci.yml`, details in the README) now runs the same
+harness, passive only, on every push and pull request to `main`:
+
+| Runner | Harness | Result (run 7, 2026-10-29, commit fab9f51) |
+|---|---|---|
+| windows-latest (Windows Server 2025), Windows PowerShell 5.1, administrator | 113 steps | 54 passed, 0 failed, 59 not run |
+| windows-latest, PowerShell 7.6, administrator | 113 steps | 54 passed, 0 failed, 59 not run |
+| ubuntu-latest (Ubuntu 24.04), PowerShell 7.6, bash 5.2, normal account `msptest` | 111 steps | 41 passed, 0 failed, 70 not run; stubbed bash tests 450 passed (one B3 block runs only on a macOS host) |
+| macos-latest (macOS 26, arm64), PowerShell 7.6, `/bin/bash` 3.2, normal account `msptest` | 109 steps | 40 passed, 0 failed, 69 not run; stubbed bash tests 459 passed |
+
+Network guard on every runner: canary attempts to 192.0.2.1 blocked and counted, then nothing
+counted during the tests. On Windows, 27 TCP port 80 connections to Microsoft/CDN addresses
+(Windows certificate downloads inside PowerShell, 25 of them from pwsh 7) were listed and not
+counted (see open items). Only the four harness summaries were uploaded as artifacts.
+
+NOT RUN in CI, by design: active network cases, other platforms' cases, root/sudo runs, bash 3.2
+on Linux, and on Windows the bash steps (no WSL distribution) and ShellCheck (it runs on Linux
+and macOS).
+
+**CI does not replace the hand tests below.** A runner is a fresh VM: no Wi-Fi, no BitLocker,
+no TPM checks worth reading, no real users or their browsers, no domain, no client software,
+Windows Server rather than Windows 10/11. CI proves that each script starts on a real Windows
+and Linux machine, writes schema-valid results without ERROR findings, refuses what it must
+(non-interactive without `-Force`), changes nothing with `-WhatIf`, and in its passive modes
+sends nothing the network guard counts (within the guard's limits listed under open items). It does not prove the findings are right on a client's computer.
+
 ## Status by script and platform
 
 **Tested** = run for real on that platform (Y/N). The status says how far it got:
 
 - **run**: run for real (passive and without admin/sudo unless noted).
-- **mocked**: logic run on PowerShell 7 on the Mac against stand-in cmdlets. **Not run on
-  Windows**: no Windows machine has run any script in this review.
-- **stubbed**: logic run against stub commands and a fake file system on the Mac. No Linux
-  machine has run any of it.
-- **runtime only**: covered by the Windows harness runtime cases, which have not been run yet.
+- **CI only**: run for real on a GitHub-hosted runner (Windows Server 2025 under 5.1 and 7, or
+  Ubuntu 24.04 as a normal account) in its passive/`-WhatIf`/refusal form, and nothing else.
+  Not run on a client-like Windows 10/11 PC or Linux desktop: the hand tests still apply.
+  Tested column: "CI".
+- **mocked**: logic run against stand-in cmdlets (on the Mac, and in CI on Windows under 5.1 and 7).
+- **stubbed**: logic run against stub commands and a fake file system (on the Mac, and in CI on
+  Linux and macOS).
 - **-**: no version for that platform.
 
 | ID | Script(s) | Windows | Tested | macOS | Tested | Linux | Tested |
 |---|---|---|---|---|---|---|---|
-| A1 | Get-EndpointSecurityStatus / get-endpoint-security-status-{macos,linux} | not run on Windows | N | run | Y | stubbed | N |
-| A2 | Get-HomeNetworkMap / get-home-network-map | not run on Windows | N | run (`--passive` only) | Y | stubbed | N |
-| A3 | Get-WiFiSecurityAudit / get-wifi-security-audit-{macos,linux} | not run on Windows | N | run | Y | stubbed | N |
-| A4 | Get-OpenPortScan / get-open-port-scan | not run on Windows | N | run (no `--scan-lan`) | Y | stubbed | N |
-| A5 | Get-BrowserSecurityCheck / get-browser-security-check | not run on Windows | N | run | Y | stubbed | N |
-| A6 | Get-WindowsUpdateCompliance / get-update-compliance-{macos,linux} | not run on Windows | N | run (no `--online`) | Y | stubbed | N |
-| A7 | Get-RouterSecurityCheck / get-router-security-check | not run on Windows | N | stubbed (active network) | N | stubbed | N |
-| A8 | Get-HomeDeviceInventory / get-home-device-inventory | not run on Windows | N | run (1.1.1 last-login fix included) | Y | stubbed | N |
-| A9 | Export-SecurityAuditReport | not run on Windows (5.1 or 7); mixed-platform test mocked | N | run (pwsh 7, mixed Windows/macOS/Linux results) | Y | not run | N |
-| Bundle | Invoke-HomeAuditBundle / run-home-audit-bundle | not run on Windows; `-Passive` mocked | N | run (`--passive`) | Y | stubbed | N |
-| B1 | Get-ClientHealthSnapshot / get-client-health-snapshot | not run on Windows; mocked | N | run | Y | stubbed | N |
-| B2 | Get-NetworkConnectivityReport / get-network-connectivity-report | not run on Windows; `-Passive` mocked | N | run (`--passive` only) | Y | stubbed | N |
-| B3 | Get-RecentCriticalErrors / get-recent-critical-errors | not run on Windows; mocked | N | run (also `--include-system-log`) | Y | stubbed | N |
-| B4 | Restart-CommonServices / restart-common-services | not run on Windows; runtime only | N | run (`--what-if` and refusal only; changes stubbed) | Y (partly) | stubbed | N |
-| C1 | Get-UserMailboxStatus (5.1 / pwsh 7) | not run on Windows; mocked, no tenant | N | mocked, no tenant | N | not run | N |
-| C2 | Get-UserLicenseReport (5.1 / pwsh 7) | not run on Windows; mocked, no tenant | N | mocked, no tenant | N | not run | N |
-| C3 | Get-SuspiciousActivityReport / get-suspicious-activity-report-{macos,linux} | not run on Windows; mocked | N | run (no sudo) | Y | stubbed | N |
-| D1 | Clear-WindowsUpdateCache | not run on Windows; repeat-run logic mocked | N | - | - | - | - |
-| D2 | Reset-NetworkStack | not run on Windows; runtime only | N | - | - | - | - |
-| D3 | Reset-OutlookProfile | not run on Windows; runtime only | N | - | - | - | - |
-| E1 | Get-LocalAdminReport / get-local-admin-report | not run on Windows; mocked | N | run (no sudo) | Y | stubbed (user and root) | N |
-| E2 | Get-InstalledSoftwareReport / get-installed-software-report | not run on Windows; mocked | N | run | Y | stubbed | N |
-| E3 | Get-BackupRecency / get-backup-recency | not run on Windows; mocked | N | run (no Time Machine on this Mac; Time Machine parsing stubbed) | Y | stubbed | N |
-| E4 | Get-ServerHealthReport / get-server-health-report | not run on Windows Server; mocked | N | - | - | stubbed | N |
-| RC4 | Get-KerberosRC4Usage (needs a domain controller) | not run on Windows; mocked | N | - | - | - | - |
-| IdleLock | Set-InactivityTimeout | not run on Windows; mocked (no registry access) | N | - | - | - | - |
+| A1 | Get-EndpointSecurityStatus / get-endpoint-security-status-{macos,linux} | CI only | CI | run | Y | CI only | CI |
+| A2 | Get-HomeNetworkMap / get-home-network-map | CI only (`-Passive`) | CI | run (`--passive` only) | Y | CI only (`--passive`) | CI |
+| A3 | Get-WiFiSecurityAudit / get-wifi-security-audit-{macos,linux} | CI only (runner has no Wi-Fi) | CI | run | Y | CI only (no Wi-Fi) | CI |
+| A4 | Get-OpenPortScan / get-open-port-scan | CI only (no `-ScanLan`) | CI | run (no `--scan-lan`) | Y | CI only (no `--scan-lan`) | CI |
+| A5 | Get-BrowserSecurityCheck / get-browser-security-check | CI only | CI | run | Y | CI only | CI |
+| A6 | Get-WindowsUpdateCompliance / get-update-compliance-{macos,linux} | CI only (no `-Online`) | CI | run (no `--online`) | Y | CI only (no `--online`) | CI |
+| A7 | Get-RouterSecurityCheck / get-router-security-check | not run on Windows (active network) | N | stubbed (active network) | N | stubbed | N |
+| A8 | Get-HomeDeviceInventory / get-home-device-inventory | CI only | CI | run (1.1.1 last-login fix included) | Y | CI only | CI |
+| A9 | Export-SecurityAuditReport | CI only (inside the bundle cases, 5.1 and 7); mixed-platform test mocked | CI | run (pwsh 7, mixed Windows/macOS/Linux results) | Y | CI only (inside the bundle, pwsh 7) | CI |
+| Bundle | Invoke-HomeAuditBundle / run-home-audit-bundle | CI only (`-Passive`, and without A2/A7) | CI | run (`--passive`) | Y | CI only (`--passive`) | CI |
+| B1 | Get-ClientHealthSnapshot / get-client-health-snapshot | CI only; mocked | CI | run | Y | CI only | CI |
+| B2 | Get-NetworkConnectivityReport / get-network-connectivity-report | CI only (`-Passive`); mocked | CI | run (`--passive` only) | Y | CI only (`--passive`) | CI |
+| B3 | Get-RecentCriticalErrors / get-recent-critical-errors | CI only; mocked | CI | run (also `--include-system-log`) | Y | CI only | CI |
+| B4 | Restart-CommonServices / restart-common-services | CI only (`-WhatIf` and refusal) | CI | run (`--what-if` and refusal only; changes stubbed) | Y (partly) | CI only (`--what-if` and refusal) | CI |
+| C1 | Get-UserMailboxStatus (5.1 / pwsh 7) | mocked (also in CI on 5.1 and 7), no tenant | N | mocked, no tenant | N | not run | N |
+| C2 | Get-UserLicenseReport (5.1 / pwsh 7) | mocked (also in CI on 5.1 and 7), no tenant | N | mocked, no tenant | N | not run | N |
+| C3 | Get-SuspiciousActivityReport / get-suspicious-activity-report-{macos,linux} | CI only; mocked | CI | run (no sudo) | Y | CI only (no sudo) | CI |
+| D1 | Clear-WindowsUpdateCache | CI only (`-WhatIf` and refusal); repeat-run logic mocked | CI | - | - | - | - |
+| D2 | Reset-NetworkStack | CI only (`-WhatIf`, `-BackupOnly`, refusal; no connectivity test) | CI | - | - | - | - |
+| D3 | Reset-OutlookProfile | CI only (`-WhatIf` and refusal; no Outlook on the runner) | CI | - | - | - | - |
+| E1 | Get-LocalAdminReport / get-local-admin-report | CI only; mocked | CI | run (no sudo) | Y | CI only (no sudo) | CI |
+| E2 | Get-InstalledSoftwareReport / get-installed-software-report | CI only; mocked | CI | run | Y | CI only | CI |
+| E3 | Get-BackupRecency / get-backup-recency | CI only; mocked | CI | run (no Time Machine on this Mac; Time Machine parsing stubbed) | Y | CI only | CI |
+| E4 | Get-ServerHealthReport / get-server-health-report | CI only (Windows Server 2025, no roles); mocked | CI | - | - | CI only | CI |
+| RC4 | Get-KerberosRC4Usage (needs a domain controller) | CI only (SKIPPED path: not a DC); mocked | CI | - | - | - | - |
+| IdleLock | Set-InactivityTimeout | CI only (`-WhatIf` and refusal); mocked (no registry access) | CI | - | - | - | - |
 
-Totals: on Windows, mocked logic tests exist for A9, the bundle, B1-B3, C1-C3, D1, E1-E4, RC4
-and Set-InactivityTimeout; A1-A8, B4, D2 and D3 are parse- and analyzer-checked only, with
-Windows harness runtime cases waiting to be run. Every bash script has stubbed tests. On macOS, 17 of the 20 IDs with a macOS
-version ran for real (not A7: active network; not C1/C2: no tenant). No Windows script (26 IDs)
-and no Linux script (21 IDs, counting A9 and C1/C2 under pwsh) has run on its own platform.
+Totals: on Windows, 24 of the 26 IDs now run in CI (all but A7, active network, and C1/C2, no
+tenant; C1/C2's mocked tests run there on 5.1 and 7). On Linux, 19 of the 21 IDs run in CI (all
+but A7 and C1/C2). On macOS, 17 of the 20 IDs ran for real on the Mac (not A7: active network;
+not C1/C2: no tenant), and the same cases also pass on the macOS runner. Nothing has run on a
+Windows 10/11 PC, a Windows Server with roles, a domain controller, a Microsoft 365 tenant, a
+Linux desktop or any computer with root/sudo: that is the hand-test list below.
 
 ## Found and fixed by testing (for the record)
 
@@ -69,16 +98,50 @@ and no Linux script (21 IDs, counting A9 and C1/C2 under pwsh) has run on its ow
 - The old RC4 audit's "RC4 disabled by end of Q2 2026" line did not match KB5073381; the new
   audit follows the KB (enforcement from April 2026, KDC events 201-209).
 
+Found by the first CI runs (2026-10-28/29) and fixed:
+
+- E3 1.0.1: System Restore used `Get-ComputerRestorePoint`, which exists only in Windows
+  PowerShell 5.1, so under PowerShell 7 the check was an ERROR on every PC; and Windows Server has
+  no System Restore at all. Now read through the `SystemRestore` WMI class and SKIPPED where the
+  class is missing. File History also ERRORed for a profile without a LocalApplicationData folder.
+- D2 2.0.1: on an adapter without IPv4, `Get-NetIPConfiguration` printed "No MSFT_NetIPInterface
+  objects found" despite `-ErrorAction`; now silenced.
+- Harness 2.4.0: under Windows PowerShell 5.1 a child process's stderr line ended the whole run.
+- bash helper: the banner's OS version read the real `/etc/os-release` instead of the tests'
+  fake root (tests only; no effect on clients).
+- Test gaps that only showed on real Windows/Linux: the B1 test let the real Windows Update agent
+  answer, the E3 test read the real System Restore when elevated, and the stubbed bash tests saw
+  the runner's real `apt`, `snap` and `mokutil`, GNU `date`/`stat`, and `SUDO_USER`.
+- The network guard caught PowerShell 7 itself contacting Microsoft at startup (usage telemetry,
+  `dc.services.visualstudio.com`) and Windows downloading certificate revocation data inside
+  PowerShell 7 (see open items).
+
 ## Open items
 
-- Everything in the hand-test list below. Nothing on Windows, Windows Server, a domain
-  controller, a Microsoft 365 tenant or real Linux has run.
+- Everything in the hand-test list below. CI covers only the passive runs on clean runners.
+- **Decide: Windows guard exemption.** On Windows, PowerShell 7 downloads certificate
+  revocation data and issuer certificates (TCP port 80 to Microsoft/CDN servers) whenever a script
+  touches a certificate; `Get-WinEvent`, `Get-AuthenticodeSignature` and the `Cert:` drive all do,
+  and turning off Windows' root-list updates did not stop it. The Windows guard therefore lists
+  but does not count TCP port 80 to public addresses. LAN addresses on any port, pings and every
+  other port stay counted; the only active-mode traffic it would miss on its own is B2's
+  plain-HTTP test. Keep, or treat it as a failure?
+- **PowerShell 7 telemetry on client computers.** pwsh 7 sends usage telemetry to Microsoft at
+  startup unless `POWERSHELL_TELEMETRY_OPTOUT=1` is set. CI sets it. On a client, the bash
+  bundle's A9 step and any script run under pwsh would send it, so "`--passive`: nothing is sent"
+  is not strictly true there. Suggested fix (not done): set the variable in
+  `run-home-audit-bundle.sh` before it starts pwsh, and say so in the README.
+- **Guard gaps:** name lookups are not tied to a program on Windows or macOS (Linux covers them
+  for the bash scripts), so a script that only resolved names would not be caught there.
 - `software-watchlist.txt`: QuickTime for Windows and Java SE 6/7 dates are still `unverified`
   (Apple gives no date; Oracle's pages refuse automated readers). Confirm them in a browser.
 - E4 "Stopped automatic services" ignore list and C3 "unusual folders" rules will need tuning
   after the first real Windows/Linux runs (note any false positive with its path).
 
 ## Outstanding hand tests
+
+CI does not replace any of these: it runs on clean runner VMs, passively, without a client's
+hardware, accounts, software or network.
 
 Run from the repository root. Validate any result folder with
 `pwsh -NoProfile -File tests/Test-MSPResultSchema.ps1 -Path <folder>`. Delete hand-test result
