@@ -73,18 +73,22 @@ jobs:
               if ($d['DestAddress'] -notmatch '^(127\.|::1$)') { '{0}:{1}' -f $d['DestAddress'], $d['DestPort'] } })
             Write-Host ("{0,-44} {1,5:N1}s  blocked: {2}  {3}" -f $Name, $t.TotalSeconds, $ev.Count, (($ev | Select-Object -Unique) -join '; '))
           }
-          Test-Case 'Cert:\LocalMachine\My' 'Get-ChildItem Cert:\LocalMachine\My | ForEach-Object { $_.Subject, $_.NotAfter, $_.Thumbprint } | Out-Null'
-          Test-Case 'Get-HotFix' 'Get-HotFix | Out-Null'
-          Test-Case 'Get-CimInstance Win32_Service' 'Get-CimInstance Win32_Service | Out-Null'
+          Test-Case 'pwsh -c exit' 'exit 0'
+          Test-Case 'X509Store LocalMachine My (.NET)' '$s = New-Object System.Security.Cryptography.X509Certificates.X509Store(''My'', ''LocalMachine''); $s.Open(''ReadOnly''); $s.Certificates | ForEach-Object { $_.Subject, $_.NotAfter } | Out-Null; $s.Close()'
+          Test-Case 'Import-Module NetTCPIP' 'Import-Module NetTCPIP'
+          Test-Case 'Import-Module NetAdapter' 'Import-Module NetAdapter'
+          Test-Case 'Import-Module Defender' 'Import-Module Defender'
+          Test-Case 'Import-Module Microsoft.PowerShell.LocalAccounts' 'Import-Module Microsoft.PowerShell.LocalAccounts'
+          Test-Case 'Import-Module Microsoft.PowerShell.Security' 'Import-Module Microsoft.PowerShell.Security'
+          Test-Case 'Get-NetTCPConnection' 'Get-NetTCPConnection -State Listen | Out-Null'
+          Test-Case 'Get-AuthenticodeSignature notepad' 'Get-AuthenticodeSignature C:\Windows\System32\notepad.exe | Out-Null'
+          Test-Case 'Cert:\LocalMachine\My' 'Get-ChildItem Cert:\LocalMachine\My | Out-Null'
+          Test-Case 'Cert:\LocalMachine\My (2nd time)' 'Get-ChildItem Cert:\LocalMachine\My | Out-Null'
+          Test-Case 'Import-Module NetTCPIP (2nd time)' 'Import-Module NetTCPIP'
           Test-Case 'Get-WinEvent System 24h' 'Get-WinEvent -FilterHashtable @{ LogName = ''System''; Level = 1, 2; StartTime = (Get-Date).AddHours(-24) } -ErrorAction SilentlyContinue | Out-Null'
-          Test-Case 'w32tm /query /status' 'w32tm.exe /query /status | Out-Null'
-          Test-Case 'Get-Command Get-WindowsFeature' 'Get-Command Get-WindowsFeature -ErrorAction SilentlyContinue | Out-Null'
-          Test-Case 'Get-WindowsFeature' 'Get-WindowsFeature | Out-Null'
-          Test-Case 'Import-Module ServerManager -UseWindowsPowerShell' 'Import-Module ServerManager -UseWindowsPowerShell'
-          Test-Case 'Get-WindowsFeature (2nd time)' 'Get-WindowsFeature | Out-Null'
-          $pwshPaths = (& $pw -NoProfile -Command '$env:PSModulePath') -split ';'
-          Write-Host ('pwsh PSModulePath when started from a pwsh parent: {0}' -f ($pwshPaths -join ' | '))
-          foreach ($m in $pwshPaths) { if ($m) { Test-Case ('discovery only in ' + $m) 'Get-Command Get-NothingAtAll -ErrorAction SilentlyContinue' $m } }
+          Test-Case 'Get-WinEvent System 24h (2nd time)' 'Get-WinEvent -FilterHashtable @{ LogName = ''System''; Level = 1, 2; StartTime = (Get-Date).AddHours(-24) } -ErrorAction SilentlyContinue | Out-Null'
+          Test-Case 'pwsh A5 browsers script' ('& ''{0}\endpoint-systems\diagnostics\system-info\Get-BrowserSecurityCheck.ps1'' -OutputPath $env:TEMP | Out-Null' -f $env:GITHUB_WORKSPACE)
+          Test-Case 'pwsh A4 listening ports script' ('& ''{0}\security-operations\diagnostics\endpoint-posture\Get-OpenPortScan.ps1'' -OutputPath $env:TEMP | Out-Null' -f $env:GITHUB_WORKSPACE)
 
       - name: Harness (Windows PowerShell 5.1)
         if: ${{ !cancelled() && steps.guard.outcome == 'success' }}
