@@ -3,11 +3,14 @@
 # (and refuses it in CI), and a network guard blocks and counts every connection the tests try to
 # make beyond the runner; any blocked attempt fails the job. No secrets, no tenant connections.
 # Only the harness summary is uploaded; script results and logs stay on the runner.
+# On a version tag (v*), after all three test jobs pass, the release job builds the technician
+# package with tools/Build-Release.ps1 and uploads it as an artifact.
 name: CI
 
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
     branches: [main]
 
@@ -229,3 +232,29 @@ jobs:
           path: /Users/Shared/msp-ci/summary/harness-summary-*.md
           if-no-files-found: warn
           retention-days: 30
+
+  release:
+    name: Release package (tags only)
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    needs: [windows, linux, macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the package
+        env:
+          TAG: ${{ github.ref_name }}
+        run: pwsh -NoProfile -NonInteractive -File tools/Build-Release.ps1 -Version "$TAG"
+
+      - name: Upload the package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: MSP-Toolkit-${{ github.ref_name }}
+          path: |
+            dist/MSP-Toolkit-*.zip
+            dist/MSP-Toolkit-*.zip.sha256
+          if-no-files-found: error
+          retention-days: 90

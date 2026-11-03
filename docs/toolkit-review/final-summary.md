@@ -86,6 +86,16 @@ not C1/C2: no tenant), and the same cases also pass on the macOS runner. Nothing
 Windows 10/11 PC, a Windows Server with roles, a domain controller, a Microsoft 365 tenant, a
 Linux desktop or any computer with root/sudo: that is the hand-test list below.
 
+## Release package (added 2026-11-02)
+
+`tools/Build-Release.ps1` builds `dist/MSP-Toolkit-<version>.zip` (scripts, the two data files,
+README, `SHA256SUMS`, `START-HERE.txt`) and refuses to build when the embedded-helper check fails.
+`tests/Test-BuildRelease.ps1` (32 checks, in the harness on PowerShell 7) covers the contents,
+checksums, executable `.sh` entries and the refusals. The CI release job runs only on a `v*` tag
+and has not run yet: no tag has been pushed. To make the first release (sends the tag to GitHub):
+`git tag v1.0.0 && git push origin v1.0.0`, then download the `MSP-Toolkit-v1.0.0` artifact from
+that run and check it with `shasum -a 256 -c` / `sha256sum -c` against the `.sha256` file.
+
 ## Found and fixed by testing (for the record)
 
 - A8 macOS/Linux read the last login from fixed columns of `last`; local macOS logins have no

@@ -33,7 +33,9 @@
          tests/Test-BatchEWindowsLogic.ps1 (E1-E4 Windows against mocked cmdlets),
          tests/Test-WindowsHardeningAuditLogic.ps1 (Set-InactivityTimeout and the RC4 audit; no
          registry access),
-         tests/Test-BatchBWindowsLogic.ps1 (B1-B3 Windows scripts against mocked cmdlets) and
+         tests/Test-BatchBWindowsLogic.ps1 (B1-B3 Windows scripts against mocked cmdlets),
+         tests/Test-BuildRelease.ps1 (tools/Build-Release.ps1 package contents and refusals,
+         PowerShell 7 only) and
          tests/bash/test-scripts-mocked.sh under every bash (Linux scripts, Linux branches and
          macOS paths not reachable here, with stub commands; no network traffic is possible)
      10  Runtime smoke tests of the scripts for THIS platform, results validated against schema
@@ -82,7 +84,7 @@
                     macOS/Linux: PowerShell 7 and bash
                     All: PSScriptAnalyzer (module path or %LOCALAPPDATA%\PSModules), ShellCheck
     Exit code     : 0 when every step that ran passed, 1 otherwise
-    Version       : 2.4.0
+    Version       : 2.5.0
 #>
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPositionalParameters', '', Justification = 'Add-Result (Step, Result, Detail) is called ~50 times; positional calls keep each step on one readable line.')]
 [CmdletBinding()]
@@ -519,6 +521,14 @@ foreach ($t in $logic) {
         else { Add-Result $label FAIL ((@($out) | Where-Object { "$_" -match 'FAIL|passed' }) -join "`n") }
     }
 }
+
+# The release build needs PowerShell 7 (any platform).
+if ($pwsh) {
+    $out = & { $ErrorActionPreference = 'Continue'; & $pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $here 'Test-BuildRelease.ps1') 2>&1 }
+    if ($LASTEXITCODE -eq 0) { Add-Result 'Release build: contents, checksums, refusals (PowerShell 7)' PASS ((@($out) | Select-Object -Last 1) -join '') }
+    else { Add-Result 'Release build: contents, checksums, refusals (PowerShell 7)' FAIL ((@($out) | Where-Object { "$_" -match 'FAIL|passed' }) -join "`n") }
+}
+else { Add-Result 'Release build: contents, checksums, refusals' 'NOT RUN' 'needs PowerShell 7 (pwsh)' }
 
 if (-not $bashOk) { Add-Result 'Logic: bash scripts with stubbed platform commands' 'NOT RUN' $bashWhy }
 foreach ($b in $bashShells) {
