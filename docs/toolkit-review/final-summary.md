@@ -139,6 +139,14 @@ Found by the first CI runs (2026-10-28/29) and fixed:
   the HTML report with `POWERSHELL_TELEMETRY_OPTOUT=1` for that process only; a stubbed test checks
   it. No Windows script starts pwsh (the Windows bundle starts Windows PowerShell 5.1, which has
   no telemetry).
+- **Decide: intermittent Windows Update pings on the runner.** On PR #1's first run (2026-11-03,
+  run 41558479313) the Windows guard counted 3 ICMP echo requests from the System process to
+  `download.windowsupdate.com`, during the D2 `-BackupOnly -SkipConnectivityTest` case, and failed
+  the job. D2 has no ping on that path, no toolkit script refers to that host, and the re-run of
+  the same commit passed with no ping; it is most likely Windows Update activity on the fresh
+  runner. The guard counts every ping from any program on purpose, so this can fail a run again
+  at random. Options: leave it (re-run when it happens), or exempt pings only to Windows Update
+  hosts (matched by name like the revocation hosts). Not changed.
 - **Guard gap: name lookups.** A DNS lookup is not tied to the program that made it on Windows
   (the DNS Client service does the lookup) or on macOS (mDNSResponder does), so a script whose
   only traffic was a name lookup would not fail the Windows or macOS job. On Linux the bash
