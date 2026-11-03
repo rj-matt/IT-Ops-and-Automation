@@ -145,6 +145,7 @@ for that platform.
 | B3 | `Get-RecentCriticalErrors.ps1` | `get-recent-critical-errors.sh` | same | `endpoint-systems/diagnostics/event-logs/` | Crashes, unexpected shutdowns, disk errors, service failures, app crashes (48 h by default) | Read-Only | None; Linux: sudo or the adm / systemd-journal group for the journal | - |
 | B4 | `Restart-CommonServices.ps1` | `restart-common-services.sh` | same | `endpoint-systems/remediation/safe/restart-services/` | Restarts an allow-list of services (printing, Windows Update, DNS cache...) with before/after state | **Safe** (changes) | admin/sudo (not for `-WhatIf` / `--what-if`) | - |
 | C1 | `Get-UserMailboxStatus.ps1` | same `.ps1` with `pwsh` | same `.ps1` with `pwsh` | `cloud-services/m365/diagnostics/` | One Exchange Online mailbox: size, archive, holds, forwarding and hiding rules, apps, devices, delegates | Read-Only | Exchange: Global Reader or View-Only Organization Management | ExchangeOnlineManagement 3.x |
+| C4 | `Get-M365SecurityPosture.ps1` | same `.ps1` with `pwsh` | same `.ps1` with `pwsh` | `cloud-services/m365/audit/` | Tenant-wide security check (onboarding, quarterly review): MFA registration, security defaults / Conditional Access, legacy authentication, admin roles, external forwarding (policy, mailboxes, inbox rules), guests, mailbox auditing, Secure Score | Read-Only | Global Reader; one-time **tenant-wide** admin consent (see below); MFA, CA, sign-in logs and guest activity need Entra ID P1 (else SKIPPED) | Microsoft.Graph (Authentication, Reports, Identity.SignIns, Identity.DirectoryManagement, Users, Security), ExchangeOnlineManagement 3.x |
 | C2 | `Get-UserLicenseReport.ps1` | same `.ps1` with `pwsh` | same `.ps1` with `pwsh` | `cloud-services/m365/diagnostics/` | Licenses, service plan problems, disabled accounts holding licenses, last sign-in, subscriptions | Read-Only | Global Reader; one-time **tenant-wide** admin consent (see below) | Microsoft.Graph (Authentication, Users, Identity.DirectoryManagement) |
 | C3 | `Get-SuspiciousActivityReport.ps1` | `get-suspicious-activity-report-macos.sh` | `get-suspicious-activity-report-linux.sh` | `security-operations/diagnostics/endpoint-posture/` | **First-look triage, not an antivirus or EDR**: startup items, programs and connections from unusual folders, platform-specific traces | Read-Only | None; admin/sudo adds the Security log, Defender exclusions, Background items, other users, the journal | - |
 | D1 | `Clear-WindowsUpdateCache.ps1` | | | `endpoint-systems/remediation/safe/clear-caches/` | Renames (never deletes) the Windows Update caches and restarts the update services | **Safe** (changes) | admin (not for `-WhatIf`) | - |
@@ -165,13 +166,18 @@ non-interactive session (RMM job, scheduled task) unless `-Force` / `--force` is
 the state afterwards; and say plainly what cannot be undone. Exit codes: `0` done, `1` nothing
 changed (not admin / not confirmed / non-interactive), `2` a step failed.
 
-**Microsoft 365 (C1, C2).** Run from the technician's computer: Windows PowerShell 5.1 or
+**Microsoft 365 (C1, C2, C4).** Run from the technician's computer: Windows PowerShell 5.1 or
 PowerShell 7 on Windows, PowerShell 7 (`pwsh`) on macOS or Linux. They only read: C1 loads
 only Exchange `Get-` cmdlets, C2 asks Microsoft Graph for `User.Read.All`,
-`Organization.Read.All` and `AuditLog.Read.All`. Each reuses an existing connection, otherwise
-signs in (browser, or `-DeviceCode`), and disconnects at the end unless `-KeepConnection`.
+`Organization.Read.All` and `AuditLog.Read.All`. C4 asks Graph for `User.Read.All`,
+`AuditLog.Read.All`, `Policy.Read.All`, `RoleManagement.Read.Directory` and
+`SecurityEvents.Read.All`, and loads only the Exchange read cmdlets it uses
+(`Get-AcceptedDomain`, `Get-HostedOutboundSpamFilterPolicy`, `Get-InboxRule`,
+`Get-OrganizationConfig`, `Get-EXO*`); `-SkipInboxRules` for very large tenants, `-SkipExchange`
+for Graph only. Each reuses an existing connection, otherwise signs in (browser, or
+`-DeviceCode`), and disconnects at the end unless `-KeepConnection`.
 
-**C2's first sign-in grants tenant-wide admin consent.** The first time C2's scopes are used in
+**C2's and C4's first sign-in grants tenant-wide admin consent.** The first time their scopes are used in
 a tenant, an administrator consents "on behalf of your organization" to Microsoft's own
 "Microsoft Graph Command Line Tools" app. That consent applies to the whole tenant and stays
 until an admin removes it (Entra admin center > Enterprise applications > Microsoft Graph
@@ -209,7 +215,7 @@ copy that folder to a client machine.
 | macOS only | FileVault, SIP, Gatekeeper, XProtect (A1); Background items (C3, sudo); Time Machine (E3). E4 has no macOS version (not a server platform here) |
 | Linux only | LUKS, SELinux/AppArmor (A1); `ld.so.preload`, programs running from memory only, failed SSH logins (C3); administrators with an empty password (E1, sudo); Deja Dup, Timeshift (E3); RAID, ZFS, inodes, OOM kills (E4) |
 | Manual checklist only | **Phones, tablets, TVs, streaming boxes, game consoles, smart-home devices, printers and NAS**: the "Other devices checklist" in the A9 report (devices found by A2 are listed to tick off). **Router settings behind its login**: A7's guided checklist (admin password changed, remote management off, WPS off, firmware current, UPnP off, guest isolation), answered with the client, who types their own router password |
-| Not checked (say so in the report) | Microsoft Store apps and portable programs (E2 Windows); Homebrew packages (E2 macOS); iCloud Drive (E3 macOS: hidden from Terminal by macOS privacy controls); hardware RAID controllers and SMART on servers (E4); Microsoft 365 MFA, transport rules and the audit log (C1/C2) |
+| Not checked (say so in the report) | Microsoft Store apps and portable programs (E2 Windows); Homebrew packages (E2 macOS); iCloud Drive (E3 macOS: hidden from Terminal by macOS privacy controls); hardware RAID controllers and SMART on servers (E4); Microsoft 365 transport rules and the unified audit log (C1/C2/C4); PIM-eligible admin assignments (C4 lists active ones) |
 
 ---
 
@@ -432,7 +438,7 @@ check plus a tamper test, the bash helper unit tests (under every bash it finds,
 3.2.57), a JSON escaping round-trip into PowerShell, finding-ID and MAC-vendor parity between bash
 and PowerShell, schema validation, the PowerShell helper unit tests, logic tests with mocked paths
 (D1 repeat runs; A9; the Windows bundle; B1-B3, C3, E1-E4, Set-InactivityTimeout and the RC4
-audit against mocked Windows cmdlets; C1 and C2 against mocked Exchange Online and Microsoft
+audit against mocked Windows cmdlets; C1, C2 and C4 against mocked Exchange Online and Microsoft
 Graph cmdlets, so no tenant is contacted), then
 runtime smoke tests of the scripts for the platform it runs on.
 
@@ -494,7 +500,7 @@ the development machine.
   Windows and macOS: a name lookup itself is not tied to the program that asked (Linux covers this
   for the bash scripts). Each guard first proves it works with a blocked attempt to 192.0.2.1 (a
   documentation-only address).
-- **No secrets.** No tenant connections, no M365 sign-ins: C1/C2 are covered by their mocked tests.
+- **No secrets.** No tenant connections, no M365 sign-ins: C1, C2 and C4 are covered by their mocked tests.
 - **Only the harness summary is uploaded** (step names and results). Script results and logs stay
   on the runner.
 - **CI does not replace the hand tests.** A runner is a fresh VM with no Wi-Fi, no BitLocker, no

@@ -68,6 +68,7 @@ sends nothing the network guard counts (within the guard's limits listed under o
 | B4 | Restart-CommonServices / restart-common-services | CI only (`-WhatIf` and refusal) | CI | run (`--what-if` and refusal only; changes stubbed) | Y (partly) | CI only (`--what-if` and refusal) | CI |
 | C1 | Get-UserMailboxStatus (5.1 / pwsh 7) | mocked (also in CI on 5.1 and 7), no tenant | N | mocked, no tenant | N | not run | N |
 | C2 | Get-UserLicenseReport (5.1 / pwsh 7) | mocked (also in CI on 5.1 and 7), no tenant | N | mocked, no tenant | N | not run | N |
+| C4 | Get-M365SecurityPosture (5.1 / pwsh 7; added 2026-11-02) | mocked (also in CI on 5.1 and 7), no tenant | N | mocked, no tenant | N | mocked (CI, pwsh 7), no tenant | N |
 | C3 | Get-SuspiciousActivityReport / get-suspicious-activity-report-{macos,linux} | CI only; mocked | CI | run (no sudo) | Y | CI only (no sudo) | CI |
 | D1 | Clear-WindowsUpdateCache | CI only (`-WhatIf` and refusal); repeat-run logic mocked | CI | - | - | - | - |
 | D2 | Reset-NetworkStack | CI only (`-WhatIf`, `-BackupOnly`, refusal; no connectivity test) | CI | - | - | - | - |
@@ -79,12 +80,40 @@ sends nothing the network guard counts (within the guard's limits listed under o
 | RC4 | Get-KerberosRC4Usage (needs a domain controller) | CI only (SKIPPED path: not a DC); mocked | CI | - | - | - | - |
 | IdleLock | Set-InactivityTimeout | CI only (`-WhatIf` and refusal); mocked (no registry access) | CI | - | - | - | - |
 
-Totals: on Windows, 24 of the 26 IDs now run in CI (all but A7, active network, and C1/C2, no
-tenant; C1/C2's mocked tests run there on 5.1 and 7). On Linux, 19 of the 21 IDs run in CI (all
-but A7 and C1/C2). On macOS, 17 of the 20 IDs ran for real on the Mac (not A7: active network;
-not C1/C2: no tenant), and the same cases also pass on the macOS runner. Nothing has run on a
+Totals: on Windows, 24 of the 27 IDs now run in CI (all but A7, active network, and C1/C2/C4, no
+tenant; their mocked tests run there on 5.1 and 7). On Linux, 19 of the 22 IDs run in CI (all
+but A7 and C1/C2/C4). On macOS, 17 of the 21 IDs ran for real on the Mac (not A7: active network;
+not C1/C2/C4: no tenant), and the same cases also pass on the macOS runner. Nothing has run on a
 Windows 10/11 PC, a Windows Server with roles, a domain controller, a Microsoft 365 tenant, a
 Linux desktop or any computer with root/sudo: that is the hand-test list below.
+
+## C4 Microsoft 365 security posture (added 2026-11-02)
+
+`cloud-services/m365/audit/Get-M365SecurityPosture.ps1`, read-only, tenant-wide: MFA
+registration (admins without MFA = FAIL High), security defaults vs Conditional Access (neither
+= FAIL High), legacy authentication blocked and recent legacy sign-ins, admin roles (more than 4
+or fewer than 2 Global Admins, admins with a licensed mailbox), external forwarding (outbound
+spam policy, mailbox forwarding, inbox rules), guests (count, inactive 90+ days), organization
+mailbox auditing, Secure Score with the top improvement actions. Each check is SKIPPED with a
+plain reason when the license or role does not allow it.
+
+- **Graph scopes (the minimum read-only set):** `User.Read.All` (guests, admins' licenses),
+  `AuditLog.Read.All` (MFA registration report, sign-in logs), `Policy.Read.All` (security
+  defaults, Conditional Access), `RoleManagement.Read.Directory` (admin role members),
+  `SecurityEvents.Read.All` (Secure Score). No `Organization.Read.All`: Entra ID P1 is detected
+  from Graph's "needs a premium license" answer instead of reading subscriptions.
+- **Exchange Online:** read cmdlets only (`Get-AcceptedDomain`, `Get-HostedOutboundSpamFilterPolicy`,
+  `Get-InboxRule`, `Get-OrganizationConfig`, `Get-EXO*`); Global Reader.
+- **Needs Entra ID P1/P2:** MFA registration, Conditional Access, legacy sign-ins, inactive guests.
+  Without P1 they are SKIPPED with the reason, and the run says which ones in an "Entra ID P1/P2"
+  line; security defaults, admin roles, forwarding, auditing and Secure Score still run.
+- **Consent:** same as C2: the first sign-in grants tenant-wide admin consent to Microsoft Graph
+  Command Line Tools for these five scopes; in a client tenant get the client's approval first and
+  note it in the ticket (who, when, which scopes).
+- **Tested:** `tests/Test-M365SecurityPostureLogic.ps1` (88 checks; in the harness on 5.1 and 7)
+  against mocked Graph and Exchange cmdlets: a risky tenant, a tenant without P1, neither defaults
+  nor CA, a too-narrow role, a missing scope, `-SkipExchange`, and no terminal. It also fails if a
+  real Graph or Exchange module gets loaded. No tenant has been contacted. Hand test: group 4.
 
 ## Release package (added 2026-11-02)
 
@@ -250,7 +279,7 @@ Check:
   "KDC encryption settings" matches `HKLM\SYSTEM\CurrentControlSet\Services\Kdc`.
 - E4 says "primary/backup domain controller" and checks NTDS, Netlogon, DFSR and DNS.
 
-### 4. Microsoft 365 tenant (C1, C2) - sends traffic to Microsoft 365
+### 4. Microsoft 365 tenant (C1, C2, C4) - sends traffic to Microsoft 365
 
 Use a test tenant or a client tenant you may review. **C2's first sign-in grants tenant-wide
 admin consent** to Microsoft's "Microsoft Graph Command Line Tools" app; in a client tenant get
@@ -268,6 +297,32 @@ pwsh -File ./cloud-services/m365/diagnostics/Get-UserMailboxStatus.ps1 -UserPrin
 pwsh -File ./cloud-services/m365/diagnostics/Get-UserMailboxStatus.ps1 -UserPrincipalName <shared-mailbox@tenant> -DeviceCode
 pwsh -File ./cloud-services/m365/diagnostics/Get-UserMailboxStatus.ps1 -UserPrincipalName nobody-here@<tenant domain>
 ```
+
+C4, in the client tenant the owner chose for its first run (with the client's written approval
+for the consent; record the approval in the ticket, not in this repository):
+
+```powershell
+Install-Module Microsoft.Graph -Scope CurrentUser    # C4 uses Reports, Identity.SignIns, Security as well
+pwsh -File ./cloud-services/m365/audit/Get-M365SecurityPosture.ps1 -OutputPath $o
+pwsh -File ./cloud-services/m365/audit/Get-M365SecurityPosture.ps1 -DeviceCode -SkipInboxRules
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\cloud-services\m365\audit\Get-M365SecurityPosture.ps1 -SkipExchange
+```
+
+Check for C4:
+- The consent page lists exactly `User.Read.All`, `AuditLog.Read.All`, `Policy.Read.All`,
+  `RoleManagement.Read.Directory`, `SecurityEvents.Read.All` plus the standard sign-in
+  permissions; record what it showed.
+- MFA gaps match Entra admin center > Protection > Authentication methods > User registration
+  details; Global Administrators match Roles and admins; security defaults / CA match the Entra
+  pages; outbound forwarding matches Defender > Anti-spam > Outbound; mailbox auditing matches
+  `Get-OrganizationConfig | Select AuditDisabled`; Secure Score matches the Defender portal
+  (it is a daily snapshot).
+- In a tenant without Entra ID P1, MFA, legacy sign-ins and inactive guests are SKIPPED with the
+  P1 reason and the "Entra ID P1/P2" line names them; nothing is ERROR.
+- With a Global Reader account nothing is SKIPPED for a role reason; run once with a narrower
+  account (for example Exchange Administrator only) and note which checks become SKIPPED.
+- Time the run with and without `-SkipInboxRules` and note the mailbox count.
+- Delete the result folder afterwards: it holds user, admin and guest names.
 
 Check:
 - The C2 consent page lists `User.Read.All`, `Organization.Read.All`, `AuditLog.Read.All` plus
