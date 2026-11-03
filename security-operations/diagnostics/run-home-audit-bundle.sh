@@ -66,10 +66,12 @@
 # Risk Level    : Read-Only -- runs read-only scripts and writes result files only.
 # Prerequisites : macOS 12+ or Linux | bash 3.2+ | root: No (recommended: sudo, for complete
 #                 results) | The eight audit scripts must be present (see Run order)
-# Version       : 1.0.0
+# Version       : 1.0.1
 # Limitations   : Runs on the local computer only; repeat on each computer to audit. Per-script
 #                 output appears on screen as each one runs; each script's own log is in
-#                 ${TMPDIR:-/tmp}/msp-toolkit. The HTML report needs PowerShell 7.
+#                 ${TMPDIR:-/tmp}/msp-toolkit. The HTML report needs PowerShell 7, which is
+#                 started with POWERSHELL_TELEMETRY_OPTOUT=1 (that process only) so it sends no
+#                 usage data to Microsoft.
 
 set -u
 MSP_SCRIPT_FILE=$0
@@ -945,7 +947,7 @@ msp_complete() {
 #endregion MSPHelper:Core
 #endregion MSPToolkit (generated)
 
-SCRIPT_VERSION='1.0.0'
+SCRIPT_VERSION='1.0.1'
 OUTPUT=''
 PASSIVE=0
 SCAN_LAN=0
@@ -1197,7 +1199,8 @@ if [ -n "$TECHNICIAN" ]; then
     if [ -n "$REPORT_SCRIPT" ] && msp_have pwsh; then
         set -- -NoProfile -File "$REPORT_SCRIPT" -InputPath "$RUN_FOLDER" -TechnicianName "$TECHNICIAN"
         [ -n "$CLIENT" ] && set -- "$@" -ClientName "$CLIENT"
-        pwsh "$@" || msp_say 31 ' The HTML report could not be created; see the messages above.'
+        # Opt-out for this pwsh only: PowerShell 7 otherwise sends usage telemetry at startup.
+        POWERSHELL_TELEMETRY_OPTOUT=1 pwsh "$@" || msp_say 31 ' The HTML report could not be created; see the messages above.'
     elif [ -z "$REPORT_SCRIPT" ]; then
         msp_say 33 ' Export-SecurityAuditReport.ps1 was not found, so no HTML report was created.'
     else

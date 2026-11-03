@@ -9,20 +9,22 @@
                     powershell.exe (64/32-bit), pwsh.exe and the network tools the scripts could
                     call (ping, tracert, pathping, nslookup, curl, netsh, arp, nbtstat, net, nltest,
                     w32tm, wsl, bash), plus a rule blocking ICMP echo requests from any program.
-                    Turns on auditing of blocked connections (Security event 5157).
+                    Turns on auditing of blocked connections (Security event 5157) and the DNS
+                    Client operational log, and clears the DNS cache, so every name looked up
+                    during the job is recorded with its addresses.
     -Action Canary  From powershell.exe and pwsh.exe, a TCP connection to 192.0.2.1 (TEST-NET-1,
                     never routed) and a ping; each must be blocked and appear as event 5157.
     -Action Check   Fails if any connection from those programs was blocked after the canary, if a
                     workflow file mentions the active-network switch, or if a harness summary in
                     -SummaryDirectory reports active cases run.
 
-    Listed but not counted: TCP port 80 to a public address. Windows downloads certificate
-    revocation lists, OCSP answers and issuer certificates (port 80, Microsoft/CDN servers) inside
-    whichever process touches a certificate; under PowerShell 7 that includes Get-WinEvent,
-    Get-AuthenticodeSignature and the Cert: drive (shown on the runner, 2026-10-29). No script can
-    avoid it. Every private/LAN address (A2/A4/A7 probes, any port), every ping and every other
-    port stay counted; on Windows only B2's plain-HTTP test (www.msftconnecttest.com) would be
-    missed on its own, and B2 never runs without -Passive in CI.
+    Listed but not counted: TCP port 80 to an address that, during this job, was the answer to a
+    lookup of one of Microsoft's certificate revocation hosts (list in $revocationHosts below).
+    Windows downloads CRLs and OCSP answers inside whichever process touches a certificate; under
+    PowerShell 7 that includes Get-WinEvent, Get-AuthenticodeSignature and the Cert: drive (shown on
+    the runner, 2026-10-29), so no script can avoid it. The address-to-name map comes from the DNS
+    Client log and cache. Port 80 to any other host, an address with no recorded name, every
+    private/LAN address on any port, every ping and every other port are counted and fail the job.
 
     Not covered: name lookups. Windows resolves names in the DNS Client service, so a lookup is not
     tied to the program that asked for it. The Linux job covers DNS for the shared bash code; the
@@ -44,7 +46,7 @@
 .NOTES
     Risk Level    : Changes firewall and audit settings: GitHub Actions runners only (refuses elsewhere)
     Exit code     : 0 when the step passed, 1 otherwise
-    Version       : 1.1.0
+    Version       : 1.2.0
 #>
 [CmdletBinding()]
 param(
@@ -60,6 +62,16 @@ $state = Join-Path -Path $env:ProgramData -ChildPath 'msp-ci-network-guard.json'
 $group = 'MSP CI guard'
 # "Filtering Platform Connection" audit subcategory (language-independent GUID).
 $auditGuid = '{0CCE9226-69AE-11D9-BED3-505054503030}'
+$dnsLog = 'Microsoft-Windows-DNS-Client/Operational'
+# Microsoft's certificate revocation hosts (HTTP, port 80). Source: "Azure Certificate Authority
+# details", section "Certificate downloads and revocation lists" (learn.microsoft.com, checked
+# 2026-11-02): CRL www.microsoft.com (/pkiops/crl), OCSP oneocsp.microsoft.com. The same page's
+# change log (2024-10-08) dropped crl.microsoft.com, mscrl.microsoft.com and ocsp.msocsp.com from
+# the Azure list, but Microsoft's older CAs, including the code-signing CAs that sign Windows and
+# PowerShell 7, still name them in their certificates, so Windows still contacts them.
+# Not here on purpose: caissuers.microsoft.com (issuer certificates, not revocation),
+# ctldl.windowsupdate.com (trust lists) and every non-Microsoft CA: port 80 to those is counted.
+$revocationHosts = @('www.microsoft.com', 'oneocsp.microsoft.com', 'crl.microsoft.com', 'mscrl.microsoft.com', 'ocsp.msocsp.com')
 
 function Get-GuardProgram {
     <# Full paths of the programs whose outbound connections are blocked. #>
@@ -77,9 +89,33 @@ function Get-GuardProgram {
     return @($list | Where-Object { Test-Path -LiteralPath $_ } | Sort-Object -Unique)
 }
 
+function Get-ResolvedName {
+    <# Address -> names it was the answer for since $Since: the DNS Client log, then the cache. #>
+    param([datetime]$Since)
+    $map = @{}
+    $add = {
+        param([string]$Name, [string]$Address)
+        $Address = $Address -replace '^::ffff:', ''
+        if (-not $Name -or -not $Address) { return }
+        if (-not $map.ContainsKey($Address)) { $map[$Address] = New-Object System.Collections.Generic.HashSet[string] }
+        [void]$map[$Address].Add($Name.TrimEnd('.').ToLowerInvariant())
+    }
+    foreach ($e in @(Get-WinEvent -FilterHashtable @{ LogName = $dnsLog; StartTime = $Since } -ErrorAction SilentlyContinue)) {
+        $data = @{}
+        foreach ($d in ([xml]$e.ToXml()).Event.EventData.Data) { $data[$d.Name] = [string]$d.'#text' }
+        if (-not $data['QueryName'] -or -not $data['QueryResults']) { continue }
+        foreach ($part in $data['QueryResults'].Split(';')) {
+            $v = $part.Trim()
+            if ($v -match '^(::ffff:)?\d{1,3}(\.\d{1,3}){3}$' -or ($v -match '^[0-9a-f:]+$' -and $v.Contains(':'))) { & $add $data['QueryName'] $v }
+        }
+    }
+    foreach ($c in @(Get-DnsClientCache -ErrorAction SilentlyContinue | Where-Object { $_.Type -in 1, 28 })) { & $add $c.Entry $c.Data }
+    return $map
+}
+
 function Get-BlockedConnection {
     <# Event 5157 records since the given time from guarded programs, or ICMP from any program. #>
-    param([datetime]$Since, [string[]]$Program)
+    param([datetime]$Since, [string[]]$Program, [hashtable]$Resolved = @{})
     $names = @($Program | ForEach-Object { (Split-Path $_ -Leaf).ToLowerInvariant() })
     $events = @(Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 5157; StartTime = $Since } -ErrorAction SilentlyContinue)
     foreach ($e in $events) {
@@ -89,9 +125,10 @@ function Get-BlockedConnection {
         $dest = $data['DestAddress']
         if ($dest -match '^(127\.|::1$)') { continue }
         if ($names -contains $app -or $data['Protocol'] -in @('1', '58')) {
-            $private = $dest -match '^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|169\.254\.|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.|192\.0\.2\.|f[cd]|fe[89ab])'
-            $pki = ($data['Protocol'] -eq '6') -and ($data['DestPort'] -eq '80') -and -not $private
-            [pscustomobject]@{ Time = $e.TimeCreated; Application = $data['Application']; Destination = $dest; Port = $data['DestPort']; Protocol = $data['Protocol']; Counted = -not $pki }
+            $hostNames = @()
+            if ($Resolved.ContainsKey($dest)) { $hostNames = @($Resolved[$dest]) }
+            $revocation = ($data['Protocol'] -eq '6') -and ($data['DestPort'] -eq '80') -and @($hostNames | Where-Object { $revocationHosts -contains $_ }).Count -gt 0
+            [pscustomobject]@{ Time = $e.TimeCreated; Application = $data['Application']; Destination = $dest; Port = $data['DestPort']; Protocol = $data['Protocol']; Names = ($hostNames -join ', '); Counted = -not $revocation }
         }
     }
 }
@@ -109,6 +146,9 @@ switch ($Action) {
         $null = New-NetFirewallRule -DisplayName ('{0}: ICMPv6 echo' -f $group) -Group $group -Direction Outbound -Action Block -Protocol ICMPv6 -IcmpType 128 -Profile Any
         $null = & auditpol.exe /set /subcategory:$auditGuid /failure:enable
         if ($LASTEXITCODE -ne 0) { Write-Host 'auditpol failed: blocked connections would not be logged.' -ForegroundColor Red; exit 1 }
+        $null = & wevtutil.exe sl $dnsLog /e:true
+        if ($LASTEXITCODE -ne 0) { Write-Host 'wevtutil failed: name lookups would not be recorded.' -ForegroundColor Red; exit 1 }
+        Clear-DnsClientCache
         @{ Started = (Get-Date).ToString('o'); Programs = $programs } | ConvertTo-Json | Set-Content -LiteralPath $state -Encoding UTF8
         Write-Host ('Network guard on: {0} program(s) blocked outbound, ICMP echo blocked, event 5157 audited.' -f $programs.Count)
         $programs | ForEach-Object { Write-Host ('  {0}' -f $_) }
@@ -141,16 +181,17 @@ switch ($Action) {
         $s = Get-Content -LiteralPath $state -Raw | ConvertFrom-Json
         if (-not $s.Baseline) { Write-Host 'No baseline: Start and Canary did not run.' -ForegroundColor Red; exit 1 }
         $rc = 0
-        $all = @(Get-BlockedConnection -Since ([datetime]$s.Baseline) -Program $s.Programs)
-        $pkiOnly = @($all | Where-Object { -not $_.Counted })
-        if ($pkiOnly.Count -gt 0) {
-            Write-Host ('Not counted: {0} TCP port 80 connection(s) to public addresses (Windows certificate revocation/issuer downloads):' -f $pkiOnly.Count)
-            $pkiOnly | Group-Object Application, Destination | ForEach-Object { Write-Host ('  {0} x {1}' -f $_.Count, $_.Name) }
+        $resolved = Get-ResolvedName -Since ([datetime]$s.Started)
+        $all = @(Get-BlockedConnection -Since ([datetime]$s.Baseline) -Program $s.Programs -Resolved $resolved)
+        $revocationOnly = @($all | Where-Object { -not $_.Counted })
+        if ($revocationOnly.Count -gt 0) {
+            Write-Host ('Not counted: {0} TCP port 80 connection(s) to Microsoft certificate revocation hosts (Windows CRL/OCSP checks):' -f $revocationOnly.Count)
+            $revocationOnly | Group-Object Application, Destination, Names | ForEach-Object { Write-Host ('  {0} x {1}' -f $_.Count, $_.Name) }
         }
         $seen = @($all | Where-Object { $_.Counted })
         if ($seen.Count -gt 0) {
             Write-Host ('FAIL: {0} connection(s) were blocked: a script tried to reach beyond the runner.' -f $seen.Count) -ForegroundColor Red
-            $seen | Select-Object -First 40 | ForEach-Object { Write-Host ('  {0:HH:mm:ss}  {1} -> {2}:{3} (protocol {4})' -f $_.Time, $_.Application, $_.Destination, $_.Port, $_.Protocol) }
+            $seen | Select-Object -First 40 | ForEach-Object { Write-Host ('  {0:HH:mm:ss}  {1} -> {2}:{3} (protocol {4}; name: {5})' -f $_.Time, $_.Application, $_.Destination, $_.Port, $_.Protocol, $(if ($_.Names) { $_.Names } else { 'none recorded' })) }
             $rc = 1
         }
         else { Write-Host 'PASS: no counted connection from the guarded programs was blocked after the canary.' }

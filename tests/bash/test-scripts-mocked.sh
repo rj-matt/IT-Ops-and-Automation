@@ -1462,6 +1462,17 @@ check 'Bundle flat: --skip by file name' "$OUT" '\[SKIPPED\] get-update-complian
 check 'Bundle flat: scripts after the failures still ran' "$OUT" '^  8 +A8 +get-home-device-inventory .*Completed$'
 check 'Bundle flat: A1 found next to the bundle' "$OUT" '^  1 +A1 +get-endpoint-security-status-linux .*Completed$'
 
+# --- The HTML report's pwsh gets the telemetry opt-out (that process only) ------------------
+# The variable is removed from this test's own environment first (CI sets it for every step).
+new_env bundle-report
+stub "$BIN" pwsh "printf 'optout=%s args=%s\\n' \"\${POWERSHELL_TELEMETRY_OPTOUT-unset}\" \"\$*\" >\"$WORK/bundle-report/pwsh-call\""
+OUT="$WORK/bundle-report.txt"
+env -u POWERSHELL_TELEMETRY_OPTOUT PATH="$WORK/bundle-report/bin:$SYS_PATH" MSP_TEST_ROOT="$WORK/bundle-report/root" TMPDIR="$WORK/bundle-report" NO_COLOR=1 HOME=/home/alice \
+    "$BASH" "$REPO/$BUNDLE" --passive --skip A1,A2,A3,A4,A5,A6,A8 --technician Test --output "$WORK/bundle-report/out" </dev/null >"$OUT" 2>&1
+check_exists 'Bundle report: pwsh started for the HTML report' "$WORK/bundle-report/pwsh-call"
+check 'Bundle report: pwsh started with POWERSHELL_TELEMETRY_OPTOUT=1' "$WORK/bundle-report/pwsh-call" '^optout=1 args=.*Export-SecurityAuditReport\.ps1'
+check 'Bundle report: the bundle itself does not set it for anything else' <(env -u POWERSHELL_TELEMETRY_OPTOUT "$BASH" -c 'grep -c "^[[:space:]]*export POWERSHELL_TELEMETRY_OPTOUT" "$1"' _ "$REPO/$BUNDLE") '^0$'
+
 # --- Options that would send traffic are refused with --passive ----------------------------
 OUT="$WORK/bundle-refuse.txt"
 run_script bundle-flat "$BUNDLE" "$OUT" --passive --scan-lan

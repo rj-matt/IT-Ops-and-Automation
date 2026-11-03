@@ -119,24 +119,23 @@ Found by the first CI runs (2026-10-28/29) and fixed:
 ## Open items
 
 - Everything in the hand-test list below. CI covers only the passive runs on clean runners.
-- **Decide: Windows guard exemption.** On Windows, PowerShell 7 downloads certificate
-  revocation data and issuer certificates (TCP port 80 to Microsoft/CDN servers) whenever a script
-  touches a certificate; `Get-WinEvent`, `Get-AuthenticodeSignature` and the `Cert:` drive all do,
-  and turning off Windows' root-list updates did not stop it. The Windows guard therefore lists
-  but does not count TCP port 80 to public addresses. LAN addresses on any port, pings and every
-  other port stay counted; the only active-mode traffic it would miss on its own is B2's
-  plain-HTTP test. Keep, or treat it as a failure?
-- **PowerShell 7 telemetry on client computers.** pwsh 7 sends usage telemetry to Microsoft at
-  startup unless `POWERSHELL_TELEMETRY_OPTOUT=1` is set. CI sets it. On a client, the bash
-  bundle's A9 step and any script run under pwsh would send it, so "`--passive`: nothing is sent"
-  is not strictly true there. Suggested fix (not done): set the variable in
-  `run-home-audit-bundle.sh` before it starts pwsh, and say so in the README.
-- **Guard gaps:** name lookups are not tied to a program on Windows or macOS (Linux covers them
-  for the bash scripts), so a script that only resolved names would not be caught there.
-- `software-watchlist.txt`: QuickTime for Windows and Java SE 6/7 dates are still `unverified`
-  (Apple gives no date; Oracle's pages refuse automated readers). Confirm them in a browser.
-- E4 "Stopped automatic services" ignore list and C3 "unusual folders" rules will need tuning
-  after the first real Windows/Linux runs (note any false positive with its path).
+- **Windows guard exemption (decided 2026-11-02: keep, narrowed).** Windows checks certificate
+  revocation (TCP port 80) inside any PowerShell 7 process that touches a certificate;
+  `Get-WinEvent`, `Get-AuthenticodeSignature` and the `Cert:` drive all do. The guard now exempts
+  port 80 only to Microsoft's CRL/OCSP hosts (`www.microsoft.com`, `oneocsp.microsoft.com`,
+  `crl.microsoft.com`, `mscrl.microsoft.com`, `ocsp.msocsp.com`), matched by the name each address
+  was looked up as. Port 80 to anything else fails the job.
+- **PowerShell 7 telemetry (fixed 2026-11-02).** `run-home-audit-bundle.sh` 1.0.1 starts pwsh for
+  the HTML report with `POWERSHELL_TELEMETRY_OPTOUT=1` for that process only; a stubbed test checks
+  it. No Windows script starts pwsh (the Windows bundle starts Windows PowerShell 5.1, which has
+  no telemetry).
+- **Guard gap: name lookups.** A DNS lookup is not tied to the program that made it on Windows
+  (the DNS Client service does the lookup) or on macOS (mDNSResponder does), so a script whose
+  only traffic was a name lookup would not fail the Windows or macOS job. On Linux the bash
+  scripts' lookups are counted (iptables, port 53, by account). The PowerShell scripts that look
+  up names (A2 reverse DNS, B2 DNS test) only do so in their active modes, which CI never runs;
+  the macOS bash scripts share that code with Linux. To close it fully, the Windows guard could
+  compare the DNS Client log against an allow-list of the runner's own hosts; not done.
 
 ## Outstanding hand tests
 

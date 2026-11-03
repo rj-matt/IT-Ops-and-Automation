@@ -221,6 +221,12 @@ us to audit; the network scans (A2, A4 with `-ScanLan`, A7) print their scope be
 anything and never leave the computer's own subnet. `-Passive` / `--passive` on the bundle sends
 nothing on the network (A2 reads the neighbor table only, A7 is not run).
 
+**What "passive" means:** the toolkit's scripts send no traffic. Windows and macOS may still do
+their own background checks while a script runs (for example certificate revocation checks when
+something reads a signed file or the event log); the toolkit does not control those. When the
+bundle starts PowerShell 7 for the HTML report, it sets `POWERSHELL_TELEMETRY_OPTOUT=1` for that
+process only, so PowerShell itself sends no usage data (nothing is changed machine-wide).
+
 ### Windows PCs
 
 1. **Copy the toolkit without `_archive`** (it holds superseded scripts and unsigned binaries):
@@ -468,12 +474,15 @@ the development machine.
   account, `msptest`, and its traffic beyond loopback and its DNS queries are blocked and counted
   (iptables / pf); on macOS name lookups go through mDNSResponder and are not tied to the account.
   Windows: outbound connections from PowerShell and the Windows network tools, and every ping,
-  are blocked and logged (Windows Firewall, Security event 5157). Two gaps on Windows: name
-  lookups go through the DNS Client service and are not tied to a program; and TCP port 80 to a
-  public address is listed but not counted, because Windows downloads certificate revocation
-  data on port 80 inside any PowerShell process that touches a certificate (Get-WinEvent is
-  enough). LAN addresses on any port stay counted. Each guard first proves it works with a blocked attempt to
-  192.0.2.1 (a documentation-only address).
+  are blocked and logged (Windows Firewall, Security event 5157). One exception: TCP port 80 to
+  Microsoft's certificate revocation hosts (CRL/OCSP: `www.microsoft.com`, `oneocsp.microsoft.com`,
+  `crl.microsoft.com`, `mscrl.microsoft.com`, `ocsp.msocsp.com`) is listed but not counted,
+  because Windows checks revocation inside any PowerShell process that touches a certificate
+  (Get-WinEvent is enough). The guard ties each address to the name looked up for it (DNS Client
+  log); port 80 to any other host, or to an address with no recorded name, fails the job. Gap on
+  Windows and macOS: a name lookup itself is not tied to the program that asked (Linux covers this
+  for the bash scripts). Each guard first proves it works with a blocked attempt to 192.0.2.1 (a
+  documentation-only address).
 - **No secrets.** No tenant connections, no M365 sign-ins: C1/C2 are covered by their mocked tests.
 - **Only the harness summary is uploaded** (step names and results). Script results and logs stay
   on the runner.
