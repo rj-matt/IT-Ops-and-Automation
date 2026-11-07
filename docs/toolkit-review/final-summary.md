@@ -113,7 +113,8 @@ plain reason when the license or role does not allow it.
 - **Tested:** `tests/Test-M365SecurityPostureLogic.ps1` (88 checks; in the harness on 5.1 and 7)
   against mocked Graph and Exchange cmdlets: a risky tenant, a tenant without P1, neither defaults
   nor CA, a too-narrow role, a missing scope, `-SkipExchange`, and no terminal. It also fails if a
-  real Graph or Exchange module gets loaded. No tenant has been contacted. Hand test: group 4.
+  real Graph or Exchange module gets loaded. No tenant has been contacted. Hand test: group 4,
+  first in the MSP's own internal tenant, then client tenants with approval.
 
 ## Release package (added 2026-11-02)
 
@@ -168,14 +169,16 @@ Found by the first CI runs (2026-10-28/29) and fixed:
   the HTML report with `POWERSHELL_TELEMETRY_OPTOUT=1` for that process only; a stubbed test checks
   it. No Windows script starts pwsh (the Windows bundle starts Windows PowerShell 5.1, which has
   no telemetry).
-- **Decide: intermittent Windows Update pings on the runner.** On PR #1's first run (2026-11-03,
-  run 41558479313) the Windows guard counted 3 ICMP echo requests from the System process to
-  `download.windowsupdate.com`, during the D2 `-BackupOnly -SkipConnectivityTest` case, and failed
-  the job. D2 has no ping on that path, no toolkit script refers to that host, and the re-run of
-  the same commit passed with no ping; it is most likely Windows Update activity on the fresh
-  runner. The guard counts every ping from any program on purpose, so this can fail a run again
-  at random. Options: leave it (re-run when it happens), or exempt pings only to Windows Update
-  hosts (matched by name like the revocation hosts). Not changed.
+- **Windows Update pings on the runner (decided 2026-11-06: exempt, narrowly).** On PR #1's first
+  run (2026-11-03, run 41558479313) the Windows guard counted 3 ICMP echo requests from the System
+  process to `download.windowsupdate.com`, during the D2 `-BackupOnly -SkipConnectivityTest` case,
+  and failed the job; D2 has no ping on that path, no toolkit script refers to that host, and the
+  re-run passed. Guard 1.3.0 lists but does not count only pings sent by the System process to an
+  address looked up as a Windows Update host (`*.windowsupdate.com`, `*.update.microsoft.com`,
+  `*.delivery.mp.microsoft.com`, `*.dl.delivery.mp.microsoft.com`, `*.prod.do.dsp.mp.microsoft.com`,
+  `emdl.ws.microsoft.com`, `tsfe.trafficshaping.dsp.mp.microsoft.com`; Microsoft's "Windows Update
+  issues troubleshooting" endpoint list). Pings from any other program, any other host or an
+  address with no recorded name, and every other protocol still fail the job.
 - **Guard gap: name lookups.** A DNS lookup is not tied to the program that made it on Windows
   (the DNS Client service does the lookup) or on macOS (mDNSResponder does), so a script whose
   only traffic was a name lookup would not fail the Windows or macOS job. On Linux the bash
@@ -298,8 +301,10 @@ pwsh -File ./cloud-services/m365/diagnostics/Get-UserMailboxStatus.ps1 -UserPrin
 pwsh -File ./cloud-services/m365/diagnostics/Get-UserMailboxStatus.ps1 -UserPrincipalName nobody-here@<tenant domain>
 ```
 
-C4, in the client tenant the owner chose for its first run (with the client's written approval
-for the consent; record the approval in the ticket, not in this repository):
+C4: run first in the MSP's own internal tenant, signed in as a Global Administrator for the
+first consent; record the consent screen's scopes. Client tenants come after that, with the
+client's approval and a ticket note (who approved, when, which scopes; in the ticket, not in this
+repository).
 
 ```powershell
 Install-Module Microsoft.Graph -Scope CurrentUser    # C4 uses Reports, Identity.SignIns, Security as well
@@ -309,9 +314,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\cloud-services\m365\au
 ```
 
 Check for C4:
-- The consent page lists exactly `User.Read.All`, `AuditLog.Read.All`, `Policy.Read.All`,
-  `RoleManagement.Read.Directory`, `SecurityEvents.Read.All` plus the standard sign-in
-  permissions; record what it showed.
+- First run (internal tenant, Global Administrator): the consent screen lists exactly
+  `User.Read.All`, `AuditLog.Read.All`, `Policy.Read.All`, `RoleManagement.Read.Directory`,
+  `SecurityEvents.Read.All` plus the standard sign-in permissions; record the scopes it showed.
+  Later runs can use a Global Reader account (the consent is already in place).
 - MFA gaps match Entra admin center > Protection > Authentication methods > User registration
   details; Global Administrators match Roles and admins; security defaults / CA match the Entra
   pages; outbound forwarding matches Defender > Anti-spam > Outbound; mailbox auditing matches

@@ -496,7 +496,9 @@ the development machine.
   `crl.microsoft.com`, `mscrl.microsoft.com`, `ocsp.msocsp.com`) is listed but not counted,
   because Windows checks revocation inside any PowerShell process that touches a certificate
   (Get-WinEvent is enough). The guard ties each address to the name looked up for it (DNS Client
-  log); port 80 to any other host, or to an address with no recorded name, fails the job. Gap on
+  log); port 80 to any other host, or to an address with no recorded name, fails the job.
+  Second exception: pings sent by the System process to Windows Update hosts (Windows Update's
+  own checks on the fresh runner), matched by name the same way; every other ping still fails. Gap on
   Windows and macOS: a name lookup itself is not tied to the program that asked (Linux covers this
   for the bash scripts). Each guard first proves it works with a blocked attempt to 192.0.2.1 (a
   documentation-only address).

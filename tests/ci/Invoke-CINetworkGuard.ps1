@@ -23,8 +23,17 @@
     Windows downloads CRLs and OCSP answers inside whichever process touches a certificate; under
     PowerShell 7 that includes Get-WinEvent, Get-AuthenticodeSignature and the Cert: drive (shown on
     the runner, 2026-10-29), so no script can avoid it. The address-to-name map comes from the DNS
-    Client log and cache. Port 80 to any other host, an address with no recorded name, every
-    private/LAN address on any port, every ping and every other port are counted and fail the job.
+    Client log and cache.
+
+    Also listed but not counted: ICMP echo (ping) sent by the System process to an address that,
+    during this job, was the answer to a lookup of a Windows Update host (list in
+    $windowsUpdateHosts below). Windows Update on the fresh runner pinged download.windowsupdate.com
+    on its own (seen 2026-11-03, PR #1's first run, during a case that sends nothing); a toolkit
+    script never pings those hosts.
+
+    Everything else is counted and fails the job: port 80 to any other host, an address with no
+    recorded name, every private/LAN address on any port, every other ping (including pings to
+    Windows Update hosts from any program but System) and every other port.
 
     Not covered: name lookups. Windows resolves names in the DNS Client service, so a lookup is not
     tied to the program that asked for it. The Linux job covers DNS for the shared bash code; the
@@ -46,7 +55,7 @@
 .NOTES
     Risk Level    : Changes firewall and audit settings: GitHub Actions runners only (refuses elsewhere)
     Exit code     : 0 when the step passed, 1 otherwise
-    Version       : 1.2.0
+    Version       : 1.3.0
 #>
 [CmdletBinding()]
 param(
@@ -72,6 +81,12 @@ $dnsLog = 'Microsoft-Windows-DNS-Client/Operational'
 # Not here on purpose: caissuers.microsoft.com (issuer certificates, not revocation),
 # ctldl.windowsupdate.com (trust lists) and every non-Microsoft CA: port 80 to those is counted.
 $revocationHosts = @('www.microsoft.com', 'oneocsp.microsoft.com', 'crl.microsoft.com', 'mscrl.microsoft.com', 'ocsp.msocsp.com')
+# Windows Update hosts, as name patterns. Source: "Windows Update issues troubleshooting", section
+# "Device can't access update files" (learn.microsoft.com, checked 2026-11-06): the endpoints a
+# firewall must allow for Windows Update and Delivery Optimization. Used only for pings sent by the
+# System process (Windows Update's own reachability checks), never for any other traffic.
+$windowsUpdateHosts = @('*.windowsupdate.com', '*.dl.delivery.mp.microsoft.com', '*.delivery.mp.microsoft.com', '*.update.microsoft.com',
+    '*.prod.do.dsp.mp.microsoft.com', 'emdl.ws.microsoft.com', 'tsfe.trafficshaping.dsp.mp.microsoft.com')
 
 function Get-GuardProgram {
     <# Full paths of the programs whose outbound connections are blocked. #>
@@ -128,7 +143,10 @@ function Get-BlockedConnection {
             $hostNames = @()
             if ($Resolved.ContainsKey($dest)) { $hostNames = @($Resolved[$dest]) }
             $revocation = ($data['Protocol'] -eq '6') -and ($data['DestPort'] -eq '80') -and @($hostNames | Where-Object { $revocationHosts -contains $_ }).Count -gt 0
-            [pscustomobject]@{ Time = $e.TimeCreated; Application = $data['Application']; Destination = $dest; Port = $data['DestPort']; Protocol = $data['Protocol']; Names = ($hostNames -join ', '); Counted = -not $revocation }
+            $updatePing = ($data['Protocol'] -in @('1', '58')) -and ($app -eq 'system') -and @($hostNames | Where-Object { $n = $_; @($windowsUpdateHosts | Where-Object { $n -like $_ }).Count -gt 0 }).Count -gt 0
+            $exempt = ''
+            if ($revocation) { $exempt = 'Revocation' } elseif ($updatePing) { $exempt = 'WindowsUpdate' }
+            [pscustomobject]@{ Time = $e.TimeCreated; Application = $data['Application']; Destination = $dest; Port = $data['DestPort']; Protocol = $data['Protocol']; Names = ($hostNames -join ', '); Exempt = $exempt; Counted = -not $exempt }
         }
     }
 }
@@ -183,10 +201,15 @@ switch ($Action) {
         $rc = 0
         $resolved = Get-ResolvedName -Since ([datetime]$s.Started)
         $all = @(Get-BlockedConnection -Since ([datetime]$s.Baseline) -Program $s.Programs -Resolved $resolved)
-        $revocationOnly = @($all | Where-Object { -not $_.Counted })
+        $revocationOnly = @($all | Where-Object { $_.Exempt -eq 'Revocation' })
         if ($revocationOnly.Count -gt 0) {
             Write-Host ('Not counted: {0} TCP port 80 connection(s) to Microsoft certificate revocation hosts (Windows CRL/OCSP checks):' -f $revocationOnly.Count)
             $revocationOnly | Group-Object Application, Destination, Names | ForEach-Object { Write-Host ('  {0} x {1}' -f $_.Count, $_.Name) }
+        }
+        $updateOnly = @($all | Where-Object { $_.Exempt -eq 'WindowsUpdate' })
+        if ($updateOnly.Count -gt 0) {
+            Write-Host ('Not counted: {0} ping(s) from the System process to Windows Update hosts (Windows Update''s own checks):' -f $updateOnly.Count)
+            $updateOnly | Group-Object Application, Destination, Names | ForEach-Object { Write-Host ('  {0} x {1}' -f $_.Count, $_.Name) }
         }
         $seen = @($all | Where-Object { $_.Counted })
         if ($seen.Count -gt 0) {
