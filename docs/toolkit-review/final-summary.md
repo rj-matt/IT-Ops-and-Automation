@@ -69,6 +69,7 @@ sends nothing the network guard counts (within the guard's limits listed under o
 | C1 | Get-UserMailboxStatus (5.1 / pwsh 7) | mocked (also in CI on 5.1 and 7), no tenant | N | mocked, no tenant | N | not run | N |
 | C2 | Get-UserLicenseReport (5.1 / pwsh 7) | mocked (also in CI on 5.1 and 7), no tenant | N | mocked, no tenant | N | not run | N |
 | C4 | Get-M365SecurityPosture (5.1 / pwsh 7; added 2026-11-02) | mocked (also in CI on 5.1 and 7), no tenant | N | mocked, no tenant | N | mocked (CI, pwsh 7), no tenant | N |
+| C5 | Get-AccountCompromiseTriage (5.1 / pwsh 7; added 2026-11-09) | mocked (also in CI on 5.1 and 7), no tenant | N | mocked, no tenant | N | mocked (CI, pwsh 7), no tenant | N |
 | C3 | Get-SuspiciousActivityReport / get-suspicious-activity-report-{macos,linux} | CI only; mocked | CI | run (no sudo) | Y | CI only (no sudo) | CI |
 | D1 | Clear-WindowsUpdateCache | CI only (`-WhatIf` and refusal); repeat-run logic mocked | CI | - | - | - | - |
 | D2 | Reset-NetworkStack | CI only (`-WhatIf`, `-BackupOnly`, refusal; no connectivity test) | CI | - | - | - | - |
@@ -80,10 +81,10 @@ sends nothing the network guard counts (within the guard's limits listed under o
 | RC4 | Get-KerberosRC4Usage (needs a domain controller) | CI only (SKIPPED path: not a DC); mocked | CI | - | - | - | - |
 | IdleLock | Set-InactivityTimeout | CI only (`-WhatIf` and refusal); mocked (no registry access) | CI | - | - | - | - |
 
-Totals: on Windows, 24 of the 27 IDs now run in CI (all but A7, active network, and C1/C2/C4, no
-tenant; their mocked tests run there on 5.1 and 7). On Linux, 19 of the 22 IDs run in CI (all
-but A7 and C1/C2/C4). On macOS, 17 of the 21 IDs ran for real on the Mac (not A7: active network;
-not C1/C2/C4: no tenant), and the same cases also pass on the macOS runner. Nothing has run on a
+Totals: on Windows, 24 of the 28 IDs now run in CI (all but A7, active network, and C1/C2/C4/C5,
+no tenant; their mocked tests run there on 5.1 and 7). On Linux, 19 of the 23 IDs run in CI (all
+but A7 and C1/C2/C4/C5). On macOS, 17 of the 22 IDs ran for real on the Mac (not A7: active
+network; not C1/C2/C4/C5: no tenant), and the same cases also pass on the macOS runner. Nothing has run on a
 Windows 10/11 PC, a Windows Server with roles, a domain controller, a Microsoft 365 tenant, a
 Linux desktop or any computer with root/sudo: that is the hand-test list below.
 
@@ -115,6 +116,39 @@ plain reason when the license or role does not allow it.
   nor CA, a too-narrow role, a missing scope, `-SkipExchange`, and no terminal. It also fails if a
   real Graph or Exchange module gets loaded. No tenant has been contacted. Hand test: group 4,
   first in the MSP's own internal tenant, then client tenants with approval.
+
+## C5 Account compromise triage (added 2026-11-09)
+
+`security-operations/diagnostics/Get-AccountCompromiseTriage.ps1 -UserPrincipalName <user> [-Days 1-30]`,
+read-only first look at one user suspected of business email compromise. It gathers evidence and
+changes nothing; its closing "What to do now" list (reset password, revoke sessions, remove the
+rules and forwarding it found, review MFA methods and app consents, check sent items, tell the
+client) names what it found and is for the technician to do by hand.
+
+- **Checks:** sign-ins (new country in the last 3 days, failed MFA then success within an hour,
+  successful legacy-protocol sign-ins, two countries within 4 hours), Entra ID risk level and
+  detections, every inbox rule (forward/redirect, delete, RSS Feeds / Conversation History /
+  Archive / Junk, mark as read, payment words), mailbox forwarding, delegates, MFA methods added in
+  the window, app consents (recent grants, third-party mail/file scopes), sent mail per day
+  (spikes), the unified audit log (rule, forwarding and permission changes; mass deletion).
+- **Graph scopes (the minimum read-only set):** `User.Read.All` (account, last password change),
+  `AuditLog.Read.All` (sign-in logs, directory audit for MFA registrations and consents),
+  `UserAuthenticationMethod.Read.All` (the user's MFA methods), `DelegatedPermissionGrant.Read.All`
+  (the user's OAuth grants), `Application.Read.All` (the granted apps' names and publishers),
+  `IdentityRiskyUser.Read.All` and `IdentityRiskEvent.Read.All` (Entra ID Protection).
+- **Exchange Online:** read cmdlets only (`Get-AcceptedDomain`, `Get-InboxRule`, `Get-MessageTraceV2`,
+  `Get-AdminAuditLogConfig`, `Search-UnifiedAuditLog`, `Get-EXO*`); Global Reader, plus View-Only
+  Audit Logs for the audit log search.
+- **Licenses:** sign-ins need Entra ID P1, risk needs P2, the audit log needs auditing on; without
+  them those checks are SKIPPED with the reason and the rest still runs.
+- **Consent:** same as C2/C4: the first sign-in grants tenant-wide admin consent to Microsoft Graph
+  Command Line Tools for these seven scopes.
+- **Tested:** `tests/Test-AccountCompromiseTriageLogic.ps1` (104 checks; in the harness on 5.1 and
+  7) against mocked Graph and Exchange cmdlets: a compromised user, a clean user without P1/P2 and
+  with auditing off, an unknown user, a too-narrow role, `-Days 31`, a missing scope, no terminal.
+  Every change cmdlet (Set-Mailbox, Remove-InboxRule, Revoke-MgUserSignInSession, ...) is a
+  stand-in that records the call; the test fails if one is ever called, or if a real Graph or
+  Exchange module loads. No tenant has been contacted. Hand test: group 4.
 
 ## Release package (added 2026-11-02)
 
@@ -282,7 +316,7 @@ Check:
   "KDC encryption settings" matches `HKLM\SYSTEM\CurrentControlSet\Services\Kdc`.
 - E4 says "primary/backup domain controller" and checks NTDS, Netlogon, DFSR and DNS.
 
-### 4. Microsoft 365 tenant (C1, C2, C4) - sends traffic to Microsoft 365
+### 4. Microsoft 365 tenant (C1, C2, C4, C5) - sends traffic to Microsoft 365
 
 Use a test tenant or a client tenant you may review. **C2's first sign-in grants tenant-wide
 admin consent** to Microsoft's "Microsoft Graph Command Line Tools" app; in a client tenant get
@@ -329,6 +363,35 @@ Check for C4:
   account (for example Exchange Administrator only) and note which checks become SKIPPED.
 - Time the run with and without `-SkipInboxRules` and note the mailbox count.
 - Delete the result folder afterwards: it holds user, admin and guest names.
+
+C5: run first in the MSP's own internal tenant against a test user you control (Global
+Administrator for the first consent; record the consent screen's scopes). Set the test user up
+beforehand so there is something to find: an inbox rule that moves mail with "invoice" in the
+subject to RSS Feeds and marks it read, a forwarding rule to an outside test address, and a
+second Authenticator registration. Client tenants come after that, with the client's approval and
+a ticket note.
+
+```powershell
+pwsh -File ./security-operations/diagnostics/Get-AccountCompromiseTriage.ps1 -UserPrincipalName <test-user@internal tenant> -OutputPath $o
+pwsh -File ./security-operations/diagnostics/Get-AccountCompromiseTriage.ps1 -UserPrincipalName <test-user@internal tenant> -Days 30 -DeviceCode
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\security-operations\diagnostics\Get-AccountCompromiseTriage.ps1 -UserPrincipalName <test-user@internal tenant> -SkipExchange
+pwsh -File ./security-operations/diagnostics/Get-AccountCompromiseTriage.ps1 -UserPrincipalName nobody-here@<internal tenant domain>
+```
+
+Check for C5:
+- The consent screen lists exactly `User.Read.All`, `AuditLog.Read.All`,
+  `UserAuthenticationMethod.Read.All`, `DelegatedPermissionGrant.Read.All`, `Application.Read.All`,
+  `IdentityRiskyUser.Read.All`, `IdentityRiskEvent.Read.All` plus the standard sign-in permissions.
+- The planted rules, forwarding and the new Authenticator are flagged, and "What to do now" names
+  each of them. Afterwards the test user's rules, forwarding, sessions and methods are exactly as
+  before the run (the script changed nothing); remove the planted items by hand.
+- Sign-ins match Entra admin center > Users > the user > Sign-in logs; without P1 they are SKIPPED
+  with the P1 reason; without P2 risk is SKIPPED with the P2 reason; nothing is ERROR.
+- Sent mail per day matches the message trace in the Exchange admin center; audit events match a
+  Purview audit search for the user (allow up to a day of delay).
+- Run once with Global Reader only (no View-Only Audit Logs): the audit log is SKIPPED naming that
+  role. The unknown address gives FAIL for the account and the mailbox.
+- Delete the result folder afterwards: it holds the user's sign-in IPs and correspondents.
 
 Check:
 - The C2 consent page lists `User.Read.All`, `Organization.Read.All`, `AuditLog.Read.All` plus
