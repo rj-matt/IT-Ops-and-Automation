@@ -67,6 +67,7 @@ sends nothing the network guard counts (within the guard's limits listed under o
 | B3 | Get-RecentCriticalErrors / get-recent-critical-errors | CI only; mocked | CI | run (also `--include-system-log`) | Y | CI only | CI |
 | B4 | Restart-CommonServices / restart-common-services | CI only (`-WhatIf` and refusal) | CI | run (`--what-if` and refusal only; changes stubbed) | Y (partly) | CI only (`--what-if` and refusal) | CI |
 | B5 | Get-DiskSpaceReport / get-disk-space-report (added 2026-11-09) | CI only (runtime, 20 s folder limit); mocked on a fake drive | CI | run (no sudo) | Y | CI only (runtime); stubbed | CI |
+| B6 | Get-PerformanceSnapshot / get-performance-snapshot (added 2026-11-09) | CI only (runtime, 10 s); mocked | CI | run (no sudo) | Y | CI only (runtime); stubbed | CI |
 | C1 | Get-UserMailboxStatus (5.1 / pwsh 7) | mocked (also in CI on 5.1 and 7), no tenant | N | mocked, no tenant | N | not run | N |
 | C2 | Get-UserLicenseReport (5.1 / pwsh 7) | mocked (also in CI on 5.1 and 7), no tenant | N | mocked, no tenant | N | not run | N |
 | C4 | Get-M365SecurityPosture (5.1 / pwsh 7; added 2026-11-02) | mocked (also in CI on 5.1 and 7), no tenant | N | mocked, no tenant | N | mocked (CI, pwsh 7), no tenant | N |
@@ -82,9 +83,9 @@ sends nothing the network guard counts (within the guard's limits listed under o
 | RC4 | Get-KerberosRC4Usage (needs a domain controller) | CI only (SKIPPED path: not a DC); mocked | CI | - | - | - | - |
 | IdleLock | Set-InactivityTimeout | CI only (`-WhatIf` and refusal); mocked (no registry access) | CI | - | - | - | - |
 
-Totals: on Windows, 25 of the 29 IDs now run in CI (all but A7, active network, and C1/C2/C4/C5,
-no tenant; their mocked tests run there on 5.1 and 7). On Linux, 20 of the 24 IDs run in CI (all
-but A7 and C1/C2/C4/C5). On macOS, 18 of the 23 IDs ran for real on the Mac (not A7: active
+Totals: on Windows, 26 of the 30 IDs now run in CI (all but A7, active network, and C1/C2/C4/C5,
+no tenant; their mocked tests run there on 5.1 and 7). On Linux, 21 of the 25 IDs run in CI (all
+but A7 and C1/C2/C4/C5). On macOS, 19 of the 24 IDs ran for real on the Mac (not A7: active
 network; not C1/C2/C4/C5: no tenant), and the same cases also pass on the macOS runner. Nothing has run on a
 Windows 10/11 PC, a Windows Server with roles, a domain controller, a Microsoft 365 tenant, a
 Linux desktop or any computer with root/sudo: that is the hand-test list below.
@@ -139,6 +140,50 @@ Check: volumes match Settings > System > Storage / About This Mac > Storage / `d
 folders match Explorer / Finder (Get Info) / `du -sh`; reclaimable sizes match Disk Cleanup /
 Storage Sense; nothing was deleted (sizes are the same on a second run); Linux with sudo and
 smartmontools shows SMART; a nearly full volume gives the "needs about N GB" first step.
+
+## B6 Performance snapshot (added 2026-11-09)
+
+`endpoint-systems/diagnostics/performance/Get-PerformanceSnapshot.ps1` (Windows) and
+`get-performance-snapshot.sh` (macOS, Linux), read-only; changes nothing.
+
+- **Checks:** CPU, memory and disk sampled every 2 seconds over `-SampleSeconds` / `--seconds`
+  (default 30, max 120), average and peak (CPU average 85 % or more, memory 90 % or more or under
+  500 MB available, disk busy 95 % or more = WARN); top processes by CPU over the window and by
+  memory; memory pressure (Windows paging 1000 pages/s or more and commit 90 % or more; Linux swap
+  100 pages/s or more and PSI; macOS pressure level and swap-outs); startup programs (more than 15 =
+  WARN) and the heaviest running; uptime (more than 30 days = WARN) and pending restart; throttling
+  (Windows CPU speed against its maximum while busy; macOS pmset speed limit; Linux temperature 90 C
+  or more and speed) and power (Windows power plan / power mode, macOS Low Power Mode, Linux power
+  profile, battery); known causes by the CPU they used (antivirus scan, updates installing,
+  indexing), the disk at 100 %, and a nearly full system disk using B5's thresholds. "What to do"
+  names the next step for each problem, or says nothing stood out.
+- **Tested:** macOS run for real on this Mac (no sudo; disk busy time is SKIPPED: macOS does not
+  report it). Windows: `tests/Test-PerformanceSnapshotWindowsLogic.ps1` (38 checks; in the harness on
+  5.1 and 7) samples for 5 real seconds against mocked counters, processes, startup items, power and
+  registry, a slow and a healthy PC; plus a CI runtime case. Linux: stubbed cases in
+  `tests/bash/test-scripts-mocked.sh` where the `sleep` stub advances fake `/proc` counters, so the
+  real rate and per-process CPU code runs on known numbers; plus a CI runtime case.
+- **Found while testing:** the macOS boot time was read from the wrong field (`usec`), giving an
+  uptime of 20758 days; Windows startup-program names were taken with a path function that only
+  works with Windows separators (startup items never matched running programs when tested on
+  macOS); memory in use was truncated instead of rounded on Linux.
+
+Hand tests (run while the computer is slow, then again when it is idle):
+
+```powershell
+.\endpoint-systems\diagnostics\performance\Get-PerformanceSnapshot.ps1 -OutputPath $o
+.\endpoint-systems\diagnostics\performance\Get-PerformanceSnapshot.ps1 -SampleSeconds 120
+```
+
+```bash
+bash endpoint-systems/diagnostics/performance/get-performance-snapshot.sh --output "$o"
+sudo bash endpoint-systems/diagnostics/performance/get-performance-snapshot.sh --seconds 60
+```
+
+Check: CPU, memory and disk match Task Manager / Activity Monitor / `top` and `iostat -x` over the
+same minute; the top processes match; start a full antivirus scan or a big file copy and confirm it
+is named under Known causes; on a laptop on battery with power saving on, the power finding warns;
+startup items match Task Manager > Startup apps / Login Items / Startup Applications.
 
 ## C4 Microsoft 365 security posture (added 2026-11-02)
 

@@ -40,6 +40,7 @@
          registry access),
          tests/Test-BatchBWindowsLogic.ps1 (B1-B3 Windows scripts against mocked cmdlets),
          tests/Test-DiskSpaceReportWindowsLogic.ps1 (B5 Windows on a fake drive; nothing deleted),
+         tests/Test-PerformanceSnapshotWindowsLogic.ps1 (B6 Windows against mocked counters),
          tests/Test-BuildRelease.ps1 (tools/Build-Release.ps1 package contents and refusals,
          PowerShell 7 only) and
          tests/bash/test-scripts-mocked.sh under every bash (Linux scripts, Linux branches and
@@ -90,7 +91,7 @@
                     macOS/Linux: PowerShell 7 and bash
                     All: PSScriptAnalyzer (module path or %LOCALAPPDATA%\PSModules), ShellCheck
     Exit code     : 0 when every step that ran passed, 1 otherwise
-    Version       : 2.9.0
+    Version       : 2.10.0
 #>
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPositionalParameters', '', Justification = 'Add-Result (Step, Result, Detail) is called ~50 times; positional calls keep each step on one readable line.')]
 [CmdletBinding()]
@@ -514,6 +515,7 @@ $logic = @(
     @{ Name = 'A9 coverage, router and device checklists from Windows, macOS and Linux results'; File = 'Test-ExportSecurityAuditReportMixed.ps1' }
     @{ Name = 'B1-B3 Windows scripts against mocked cmdlets'; File = 'Test-BatchBWindowsLogic.ps1' }
     @{ Name = 'B5 Windows disk space on a fake drive with mocked volume and health cmdlets'; File = 'Test-DiskSpaceReportWindowsLogic.ps1' }
+    @{ Name = 'B6 Windows performance snapshot against mocked counters, processes and power'; File = 'Test-PerformanceSnapshotWindowsLogic.ps1' }
     @{ Name = 'Windows bundle -Passive (mocked Start-Process; A2 -Passive, A7 not run)'; File = 'Test-HomeAuditBundleWindowsLogic.ps1' }
     @{ Name = 'C1/C2 against mocked Exchange Online and Graph'; File = 'Test-BatchCCloudLogic.ps1' }
     @{ Name = 'C4 tenant security posture against mocked Graph and Exchange Online'; File = 'Test-M365SecurityPostureLogic.ps1' }
@@ -585,6 +587,8 @@ else {
     $b4sh = 'endpoint-systems/remediation/safe/restart-services/restart-common-services.sh'
     $b5ps = 'endpoint-systems/diagnostics/storage/Get-DiskSpaceReport.ps1'
     $b5sh = 'endpoint-systems/diagnostics/storage/get-disk-space-report.sh'
+    $b6ps = 'endpoint-systems/diagnostics/performance/Get-PerformanceSnapshot.ps1'
+    $b6sh = 'endpoint-systems/diagnostics/performance/get-performance-snapshot.sh'
     # Platform: where the case can run. Expect: allowed exit codes. Active: sends traffic beyond
     # this computer (gated by -AllowActiveNetwork). Bash cases get --output, PowerShell -OutputPath.
     $cases = @(
@@ -651,6 +655,9 @@ else {
         @{ Platform = 'Windows'; Name = 'B5 disk space (20 s folder limit)'; Script = $b5ps; Args = @('-TimeLimitSeconds', '20'); Expect = @(0) }
         @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'B5 disk space (macOS, 20 s folder limit)'; Script = $b5sh; Args = @('--time-limit', '20'); Expect = @(0); MustContain = 'deleted nothing' }
         @{ Platform = 'Linux'; Name = 'B5 disk space (Linux, 20 s folder limit)'; Script = $b5sh; Args = @('--time-limit', '20'); Expect = @(0); MustContain = 'deleted nothing' }
+        @{ Platform = 'Windows'; Name = 'B6 performance snapshot (10 s)'; Script = $b6ps; Args = @('-SampleSeconds', '10'); Expect = @(0) }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'B6 performance snapshot (macOS, 10 s)'; Script = $b6sh; Args = @('--seconds', '10'); Expect = @(0); MustContain = 'changed nothing' }
+        @{ Platform = 'Linux'; Name = 'B6 performance snapshot (Linux, 10 s)'; Script = $b6sh; Args = @('--seconds', '10'); Expect = @(0); MustContain = 'changed nothing' }
         @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'C3 suspicious activity triage (macOS)'; Script = "$ep/get-suspicious-activity-report-macos.sh"; Args = @(); Expect = @(0) }
         @{ Platform = 'Linux'; Name = 'C3 suspicious activity triage (Linux)'; Script = "$ep/get-suspicious-activity-report-linux.sh"; Args = @(); Expect = @(0) }
         # Batch E. E4 is for servers; on a workstation it still runs and reports what it sees.

@@ -1463,6 +1463,84 @@ check 'B5: --time-limit 5 = exit 1' "$OUT.rc" '^1$'
 check 'B5: plain range message' "$OUT" '--time-limit must be between 10 and 600 \(you gave 5\)'
 
 # =========================================================================================
+# B6 get-performance-snapshot.sh (Linux): the sleep stub advances the fake /proc counters
+# =========================================================================================
+B6=endpoint-systems/diagnostics/performance/get-performance-snapshot.sh
+new_env b6
+B6HOME="$FAKE/home/alice"
+mkdir -p "$FAKE/proc/pressure" "$FAKE/sys/class/thermal/thermal_zone0" "$FAKE/sys/devices/system/cpu/cpu0/cpufreq" "$FAKE/sys/class/power_supply/BAT0" \
+    "$FAKE/var/run" "$FAKE/etc/xdg/autostart" "$B6HOME/.config/autostart"
+printf 'MemTotal:        8388608 kB\nMemAvailable:     307200 kB\n' >"$FAKE/proc/meminfo"
+printf 'some avg10=25.00 avg60=20.00 avg300=10.00 total=1\nfull avg10=5.00 avg60=1.00 avg300=0.50 total=1\n' >"$FAKE/proc/pressure/memory"
+printf '3888000.00 100.00\n' >"$FAKE/proc/uptime"
+printf '95000\n' >"$FAKE/sys/class/thermal/thermal_zone0/temp"
+printf '1200000\n' >"$FAKE/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq"
+printf '3000000\n' >"$FAKE/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq"
+printf 'powersave\n' >"$FAKE/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor"
+printf 'Discharging\n' >"$FAKE/sys/class/power_supply/BAT0/status"
+printf '40\n' >"$FAKE/sys/class/power_supply/BAT0/capacity"
+: >"$FAKE/var/run/reboot-required"
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do printf '[Desktop Entry]\nExec=/usr/bin/helper%s --tray\n' "$i" >"$FAKE/etc/xdg/autostart/helper$i.desktop"; done
+printf '[Desktop Entry]\nExec=/usr/bin/hidden\nHidden=true\n' >"$FAKE/etc/xdg/autostart/hidden.desktop"
+printf '[Desktop Entry]\nExec=/opt/google/chrome/chrome --no-startup-window\n' >"$B6HOME/.config/autostart/chrome.desktop"
+# Per 2-second interval on 4 CPUs at 100 ticks/s: 800 ticks, 760 busy (95 %); swap 600 pages
+# (300/s); sda busy 1990 ms (99.5 %). Process shares: chrome 50 %, clamd 30 %, unattended-upgr
+# 12 %, tracker-miner-f 15 % of the whole computer.
+cat >"$FAKE/tick.sh" <<EOF
+F='$FAKE'
+n=\$(cat "\$F/tick" 2>/dev/null || echo 0)
+[ "\${1-}" = init ] || n=\$((n + 1))
+printf '%s\n' "\$n" >"\$F/tick"
+printf 'cpu  %d 0 %d %d 0 0 0 0 0 0\n' \$((100000 + 700 * n)) \$((50000 + 60 * n)) \$((200000 + 40 * n)) >"\$F/proc/stat"
+printf 'pswpin %d\npswpout %d\n' \$((1000 + 300 * n)) \$((1000 + 300 * n)) >"\$F/proc/vmstat"
+printf '   8       0 sda 1 0 0 0 0 0 0 0 0 %d 0\n' \$((5000 + 1990 * n)) >"\$F/proc/diskstats"
+p() { mkdir -p "\$F/proc/\$1"; printf '%s (%s) S 1 1 1 0 -1 0 0 0 0 0 %d 0 0 0 20 0 1 0 0 0 %d\n' "\$1" "\$2" \$((1000 + \$3 * n)) "\$4" >"\$F/proc/\$1/stat"; }
+p 101 chrome 400 640000
+p 102 clamd 240 76800
+p 103 unattended-upgr 96 51200
+p 104 tracker-miner-f 120 25600
+p 105 'Web Content' 8 230400
+p 106 bash 0 1024
+EOF
+sh "$FAKE/tick.sh" init
+stub "$BIN" sleep "sh '$FAKE/tick.sh'"
+stub "$BIN" nproc 'echo 4'
+stub "$BIN" getconf 'case "$1" in CLK_TCK) echo 100 ;; PAGESIZE) echo 4096 ;; esac'
+stub "$BIN" df 'printf "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/nvme0n1p2 268435456 265289728 3145728 99%% /\n"'
+stub "$BIN" systemctl 'for i in 1 2 3 4 5 6 7 8 9 10 11 12; do echo "svc$i.service enabled enabled"; done'
+stub "$BIN" powerprofilesctl 'echo power-saver'
+OUT="$WORK/b6.txt"
+PATH="$WORK/b6/bin:$SYS_PATH" MSP_TEST_ROOT="$FAKE" TMPDIR="$WORK/b6" NO_COLOR=1 HOME="$B6HOME" \
+    "$BASH" "$REPO/$B6" --seconds 10 --top 3 --output "$WORK/b6/out" </dev/null >"$OUT" 2>&1
+printf '%s\n' "$?" >"$OUT.rc"
+check 'B6: exit 0' "$OUT.rc" '^0$'
+check 'B6: 5 samples over 10 s' "$OUT" 'Sampling - 5 sample\(s\) over 10 seconds, 4 logical processor'
+check 'B6: CPU 95 % = WARN' "$OUT" '\[WARN\] +CPU - Average 95 %, peak 95 % over 10 seconds'
+check 'B6: memory 96 % = WARN' "$OUT" '\[WARN\] +Memory - 96 % of 8 GB in use on average; lowest available 300 MB'
+check 'B6: swapping and PSI = WARN' "$OUT" '\[WARN\] +Memory pressure - Swapping 300 pages/s during the window; memory stall \(PSI some avg10\) 25 %'
+check 'B6: disk 99 % = WARN' "$OUT" '\[WARN\] +Disk activity - sda busy 99 % of the time'
+check 'B6: top CPU over the window' "$OUT" 'Top processes by CPU - chrome 50\.0 %; clamd 30\.0 %; tracker-miner-f 15\.0 %'
+check 'B6: top memory, name with a space' "$OUT" 'Top processes by memory - chrome 2500 MB; Web Content 900 MB; clamd 300 MB'
+check 'B6: 16 autostart entries = WARN, chrome heaviest' "$OUT" '\[WARN\] +Startup programs - 16 desktop autostart entr\(ies\), 12 enabled service\(s\)\. Heaviest running now: chrome\.desktop 2500 MB'
+check 'B6: up 45 days = WARN' "$OUT" '\[WARN\] +Uptime - Up 45 days'
+check 'B6: reboot-required = WARN' "$OUT" '\[WARN\] +Restart pending - Waiting for a restart'
+check 'B6: 95 C = WARN' "$OUT" '\[WARN\] +CPU speed - CPU temperature 95 C; speed 1200 MHz of 3000 MHz \(governor powersave\); power profile power-saver; Discharging, battery 40 %'
+check 'B6: power-saver profile = WARN' "$OUT" '\[WARN\] +Power plan - Power profile: power-saver'
+check 'B6: known causes' "$OUT" '\[WARN\] +Known causes - Found: antivirus scan \(30\.0 % CPU\); updates installing \(12\.0 % CPU\); indexing \(15\.0 % CPU\); disk at 100 % \(sda\); system disk nearly full \(3 GB free, 1 %\)'
+for p in '^   1\. CPU is busy \(95 % on average\): look at chrome first \(it used 50\.0 % of the CPU\)' 'Memory is nearly full \(96 % in use\)' 'Memory pressure \(swapping to disk, programs waiting for memory\)' \
+    'Too many startup items \(16\)' 'Restart the computer \(up 45 days\)' 'Restart to finish the installed updates' 'The CPU is at 95 C' 'Power saving is on' 'The antivirus is scanning' \
+    'Updates are installing' 'File indexing \(Tracker / Baloo\) is busy' 'The disk is at 100 %' 'run B5 get-disk-space-report\.sh'; do
+    check "B6: what to do: $p" "$OUT" "$p"
+done
+b6json=$(find "$WORK/b6/out" -name 'get-performance-snapshot_*.json' 2>/dev/null | head -n 1)
+check_exists 'B6: JSON written' "$b6json"
+[ -n "$b6json" ] && check 'B6: TopMemory table keeps the space' "$b6json" '"Name":"Web Content"'
+OUT="$WORK/b6-range.txt"
+run_script b6 "$B6" "$OUT" --seconds 200
+check 'B6: --seconds 200 = exit 1' "$OUT.rc" '^1$'
+check 'B6: plain range message' "$OUT" '--seconds must be between 5 and 120 \(you gave 200\)'
+
+# =========================================================================================
 # Bundle run-home-audit-bundle.sh
 # =========================================================================================
 BUNDLE=security-operations/diagnostics/run-home-audit-bundle.sh
