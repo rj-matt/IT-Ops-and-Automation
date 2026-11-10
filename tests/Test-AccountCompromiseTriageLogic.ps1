@@ -119,6 +119,32 @@ function Assert-Clean {
     Assert-True ('{0}: nothing in the tenant was changed' -f $Label) ($changes.Count -eq 0) ($changes -join '; ')
 }
 
+function Get-Step {
+    <# The "What to do now" steps of a run, in order. #>
+    param($Run)
+    if (-not $Run.Result) { return @() }
+    return @($Run.Result.Data.NextSteps | Sort-Object { [int]$_.Step } | ForEach-Object { [string]$_.Action })
+}
+function Assert-NoRepeatedStep {
+    <# No two steps say the same thing: no identical steps, and no generic step next to a specific one on its topic. #>
+    param($Run, [string]$Label)
+    $steps = @(Get-Step $Run)
+    $norm = @($steps | ForEach-Object { ($_ -replace '\s+', ' ').Trim().ToLowerInvariant() })
+    $dupes = @($norm | Group-Object | Where-Object { $_.Count -gt 1 } | ForEach-Object { $_.Name })
+    Assert-True ('{0}: no step repeated word for word' -f $Label) ($dupes.Count -eq 0) ($dupes -join ' | ')
+    # Topics that one step covers: at most one step each.
+    $single = [ordered]@{ 'MFA methods' = '^(Review the MFA methods|Register MFA)'; 'Sent/Deleted Items' = '^Check Sent Items'; 'password reset' = '^Reset the password'
+        'sessions' = '^Revoke all sessions'; 'block sign-in' = '^Block sign-in for'; 'allow sign-in again' = '^Allow sign-in again'; 'tell the client' = '^Tell the client' }
+    foreach ($k in $single.Keys) {
+        $hits = @($steps | Where-Object { $_ -match $single[$k] })
+        Assert-True ('{0}: one step at most about {1}' -f $Label, $k) ($hits.Count -le 1) ($hits -join ' | ')
+    }
+    # App consents: one step per app, and the generic one only when there is no specific one.
+    $generic = @($steps | Where-Object { $_ -match '^Review the app consents with the user' })
+    $specific = @($steps | Where-Object { $_ -match '^Review the app consent "' })
+    Assert-True ('{0}: generic app-consent step only without a specific one' -f $Label) (-not ($generic.Count -gt 0 -and $specific.Count -gt 0)) (($generic + $specific) -join ' | ')
+}
+
 # --- Static check: no syntax newer than Windows PowerShell 5.1 ------------------------------
 if (Get-Command -Name Invoke-ScriptAnalyzer -ErrorAction SilentlyContinue) {
     $compat = @{ Rules = @{ PSUseCompatibleSyntax = @{ Enable = $true; TargetVersions = @('5.1', '7.0') } } }
@@ -316,11 +342,17 @@ try {
     Assert-Finding $r 'Compromise indicators counted' 'Compromise indicators' 'WARN' 'sign\(s\) of compromise' 'High'
     $todo = [string](Get-Finding $r 'What to do now').Detail
     foreach ($p in 'Reset the password of alice@contoso\.com', 'Revoke all sessions', 'Remove the inbox rule "\."', 'Remove the inbox rule "Payments"', 'Remove the inbox rule "Sync"',
-        'Remove the mailbox forwarding to alice\.backup@gmail\.com', 'iPhone 15', 'Mail Sync Pro', 'Check Sent Items and message trace', 'mallory@contoso\.com', 'Tell the client') {
+        'Remove the mailbox forwarding to alice\.backup@gmail\.com', 'iPhone 15', 'Mail Sync Pro', 'Check Sent Items, Deleted Items and the message trace', 'mallory@contoso\.com', 'Tell the client') {
         Assert-True ('What to do now names: {0}' -f $p) ($todo -match $p) $todo
     }
     Assert-True 'What to do now printed as a section' ($r.Console -match 'What to do now \(by hand; this script changed nothing\)')
     Assert-True 'Findings about the user carry the UPN' ([string](Get-Finding $r 'Inbox rules').Target -eq 'alice@contoso.com')
+    Assert-NoRepeatedStep $r 'compromised'
+    $steps = @(Get-Step $r)
+    Assert-True 'urgent (IMAP sign-in 12 h ago): step 1 blocks sign-in, saying why' ($steps[0] -match '^Block sign-in for alice@contoso\.com now \(admin center > Users > Active users > Block sign-in\), because of .*a sign-in over IMAP4 at ' -and $steps[0] -match 'Order matters') $steps[0]
+    Assert-True 'urgent: then revoke sessions, then reset the password' ($steps[1] -match '^Revoke all sessions' -and $steps[2] -match '^Reset the password') (($steps | Select-Object -First 3) -join ' | ')
+    Assert-True 'urgent: sign-in is allowed again only at the end' (@($steps | Where-Object { $_ -match '^Allow sign-in again only after' }).Count -eq 1)
+    Assert-True 'specific steps replace the generic ones' (@($steps | Where-Object { $_ -match '^Review the MFA methods with the user; delete any|^Review the app consents with the user|^Check Sent Items and Deleted Items for mail' }).Count -eq 0) ($steps -join ' | ')
     foreach ($t in 'SignIns', 'RiskDetections', 'InboxRules', 'Delegates', 'MfaMethods', 'AppConsents', 'SentPerDay', 'AuditEvents', 'NextSteps') { Assert-True ('table {0}' -f $t) (@($r.Result.Data.$t).Count -gt 0) }
 
     # --- No P1 / P2, clean user, existing connections, auditing off ----------------------------
@@ -333,6 +365,33 @@ try {
     foreach ($check in 'Inbox rules', 'Mailbox forwarding', 'Delegates', 'MFA methods', 'App consents', 'Sent mail') { Assert-Finding $r ('clean: {0} PASS' -f $check) $check 'PASS' }
     Assert-Finding $r 'clean: no compromise indicator, with the caveat' 'Compromise indicators' 'INFO' 'does not prove the account is safe'
     Assert-Finding $r 'clean: What to do now still lists the basics' 'What to do now' 'INFO' '^1\. Reset the password'
+    Assert-NoRepeatedStep $r 'clean'
+    $steps = @(Get-Step $r)
+    Assert-True 'clean: password reset first, then revoke, no block step' ($steps[0] -match '^Reset the password' -and $steps[1] -match '^Revoke all sessions' -and @($steps | Where-Object { $_ -match '^Block sign-in|^Allow sign-in again' }).Count -eq 0) ($steps -join ' | ')
+    foreach ($g in '^Review the MFA methods with the user; delete any they did not add\.$', '^Review the app consents with the user', '^Check Sent Items and Deleted Items for mail the user did not write') {
+        Assert-True ('clean: generic step present once: {0}' -f $g) (@($steps | Where-Object { $_ -match $g }).Count -eq 1) ($steps -join ' | ')
+    }
+
+    # --- Sent-mail spike today, nothing else: block first -----------------------------------------
+    $spikeToday = @'
+$span = [math]::Max(1, ($now - $now.Date).TotalSeconds - 1)
+$global:Sent += @(for ($k = 0; $k -lt 250; $k++) { [pscustomobject]@{ Received = $now.Date.AddSeconds($span * $k / 250); RecipientAddress = 'contact@fabrikam.com' } })
+'@
+    $r = Invoke-Mocked 'spike-today' ("{0}`n{1}`n{2}" -f $mocks, $connected, $spikeToday) @('-UserPrincipalName', 'alice@contoso.com')
+    Assert-Clean $r 'spike today'
+    Assert-NoRepeatedStep $r 'spike today'
+    $steps = @(Get-Step $r)
+    Assert-True 'spike today: step 1 blocks sign-in because of the mail sent today' ($steps[0] -match '^Block sign-in for alice@contoso\.com now .*because of \d+ messages sent today') $steps[0]
+    Assert-True 'spike today: then revoke, then reset' ($steps[1] -match '^Revoke all sessions' -and $steps[2] -match '^Reset the password') (($steps | Select-Object -First 3) -join ' | ')
+
+    # --- Suspicious sign-ins, but none in the last 24 hours and the spike was yesterday ------------
+    $older = $compromised -replace "\(New-SignIn \`$now\.AddHours\(-12\) 'NG'", "(New-SignIn `$now.AddHours(-30) 'NG'"
+    $r = Invoke-Mocked 'not-urgent' ("{0}`n{1}" -f $mocks, $older) @('-UserPrincipalName', 'alice@contoso.com', '-DeviceCode')
+    Assert-Clean $r 'not urgent'
+    Assert-Finding $r 'not urgent: still flagged as a legacy sign-in' 'Legacy-protocol sign-ins' 'WARN'
+    Assert-NoRepeatedStep $r 'not urgent'
+    $steps = @(Get-Step $r)
+    Assert-True 'not urgent: usual order, no block step' ($steps[0] -match '^Reset the password' -and $steps[1] -match '^Revoke all sessions' -and @($steps | Where-Object { $_ -match '^Block sign-in|^Allow sign-in again' }).Count -eq 0) (($steps | Select-Object -First 3) -join ' | ')
 
     # --- Unknown user ------------------------------------------------------------------------------
     $r = Invoke-Mocked 'unknown' ("{0}`n{1}" -f $mocks, $connected) @('-UserPrincipalName', 'ghost@contoso.com')

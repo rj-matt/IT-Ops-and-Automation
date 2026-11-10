@@ -123,7 +123,11 @@ plain reason when the license or role does not allow it.
 read-only first look at one user suspected of business email compromise. It gathers evidence and
 changes nothing; its closing "What to do now" list (reset password, revoke sessions, remove the
 rules and forwarding it found, review MFA methods and app consents, check sent items, tell the
-client) names what it found and is for the technician to do by hand.
+client) names what it found and is for the technician to do by hand. Each step appears once: the
+generic MFA, app-consent and Sent/Deleted Items steps only when no specific step covers them. If a
+flagged sign-in succeeded in the last 24 hours, or there is a sent-mail spike today, step 1 is
+"Block sign-in" (then revoke sessions, then reset the password, with the reason for that order);
+otherwise the list starts with the password reset (1.1.0, 2026-11-09).
 
 - **Checks:** sign-ins (new country in the last 3 days, failed MFA then success within an hour,
   successful legacy-protocol sign-ins, two countries within 4 hours), Entra ID risk level and
@@ -143,7 +147,7 @@ client) names what it found and is for the technician to do by hand.
   them those checks are SKIPPED with the reason and the rest still runs.
 - **Consent:** same as C2/C4: the first sign-in grants tenant-wide admin consent to Microsoft Graph
   Command Line Tools for these seven scopes.
-- **Tested:** `tests/Test-AccountCompromiseTriageLogic.ps1` (104 checks; in the harness on 5.1 and
+- **Tested:** `tests/Test-AccountCompromiseTriageLogic.ps1` (162 checks, including no repeated step and the block-first order; in the harness on 5.1 and
   7) against mocked Graph and Exchange cmdlets: a compromised user, a clean user without P1/P2 and
   with auditing off, an unknown user, a too-narrow role, `-Days 31`, a missing scope, no terminal.
   Every change cmdlet (Set-Mailbox, Remove-InboxRule, Revoke-MgUserSignInSession, ...) is a

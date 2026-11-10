@@ -101,7 +101,7 @@
                     (Install-Module Microsoft.Graph, ExchangeOnlineManagement -Scope CurrentUser)
                     | Account: Global Reader, plus View-Only Audit Logs for the audit log. An admin
                     must consent to the seven Graph scopes once per tenant (see above).
-    Version       : 1.0.0
+    Version       : 1.1.0
     Limitations   : A clean result does not prove the account is safe. Sign-ins need Entra ID P1,
                     risk needs P2. Rules created through MAPI as hidden rules are not listed by
                     Get-InboxRule. Logs can lag by up to a few hours; the audit log by up to a day.
@@ -813,7 +813,7 @@ function Confirm-MSPChange {
 #endregion MSPHelper:Change
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '1.0.0'
+$ScriptVersion = '1.1.0'
 Initialize-MSPRun -ScriptName 'Get-AccountCompromiseTriage' -ScriptVersion $ScriptVersion -CheckId 'C5' -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'Microsoft 365 account compromise triage for one user (read-only; changes nothing)'
 
@@ -848,7 +848,22 @@ $mfaFailCodes = @(500121, 50074, 50076, 50158)
 $mailFileScopes = 'Mail\.|MailboxSettings\.|EWS\.|full_access_as_user|IMAP\.|POP\.|SMTP\.Send|Files\.|Sites\.|Notes\.'
 $moneyWords = 'invoice|payment|wire|bank|transfer|remittance|iban|swift|routing|ach\b|payroll|w-2|w2'
 $hideFolders = 'RSS Feeds|RSS Subscriptions|Conversation History|Archive|Junk'
-$next = New-Object System.Collections.Generic.List[string]
+$next = New-Object System.Collections.Generic.List[object]
+# Reasons to block sign-in before anything else (a recent successful suspicious sign-in, a sent-mail spike today).
+$urgent = New-Object System.Collections.Generic.List[string]
+$urgentSince = $now.AddHours(-24)
+
+function Add-Step {
+    <# One "What to do now" step about TOPIC; a generic step is left out when a specific one covers its topic. #>
+    param([string]$Topic, [string]$Text)
+    $script:next.Add([pscustomobject]@{ Topic = $Topic; Text = $Text })
+}
+
+function Add-Urgent {
+    <# Records a successful suspicious sign-in from the last 24 hours as a reason to block sign-in first. #>
+    param($SignIn, [string]$What)
+    if ($SignIn.Time -ge $script:urgentSince) { $script:urgent.Add(('{0} at {1:yyyy-MM-dd HH:mm} from {2} ({3})' -f $What, $SignIn.Time, $SignIn.Country, $SignIn.IP)) }
+}
 
 function Test-AccessDenied {
     <# True for "not allowed" answers (missing role, scope or consent). #>
@@ -1052,7 +1067,8 @@ Invoke-UserCheck -Name 'Sign-ins' -Category 'Sign-ins' -ScriptBlock {
         Add-Finding -Check 'New sign-in countries' -Category 'Sign-ins' -Status WARN -Severity High `
             -Detail ('Successful sign-ins from a country not seen earlier in the window: {0}. Usual: {1}.' -f ($text -join '; '), ($before -join ', ')) `
             -Recommendation 'Ask the user whether they travelled or use a VPN there. If not, treat the account as compromised.'
-        $script:next.Add(('Ask the user about sign-ins from {0}; if not theirs, treat as compromised.' -f ((@($newOnes | ForEach-Object { $_.Name })) -join ', ')))
+        Add-Step -Topic 'country' -Text ('Ask the user about sign-ins from {0}; if not theirs, treat as compromised.' -f ((@($newOnes | ForEach-Object { $_.Name })) -join ', '))
+        foreach ($g in $newOnes) { foreach ($x in $g.Group) { Add-Urgent $x 'a sign-in from a new country' } }
     }
     elseif ($before.Count -eq 0) {
         Add-Finding -Check 'New sign-in countries' -Category 'Sign-ins' -Status INFO -Detail 'Not enough sign-ins before the last 3 days to tell which countries are usual.'
@@ -1065,13 +1081,16 @@ Invoke-UserCheck -Name 'Sign-ins' -Category 'Sign-ins' -ScriptBlock {
     $pairs = New-Object System.Collections.Generic.List[string]
     foreach ($f in @($rows | Where-Object { $mfaFailCodes -contains $_.ErrorCode })) {
         $after = @($ok | Where-Object { $_.Time -gt $f.Time -and $_.Time -le $f.Time.AddHours(1) }) | Select-Object -First 1
-        if ($after) { $pairs.Add(('{0:yyyy-MM-dd HH:mm} MFA failed ({1}, {2}) -> {3:HH:mm} success ({4}, {5})' -f $f.Time, $f.Country, $f.IP, $after.Time, $after.Country, $after.IP)) }
+        if ($after) {
+            $pairs.Add(('{0:yyyy-MM-dd HH:mm} MFA failed ({1}, {2}) -> {3:HH:mm} success ({4}, {5})' -f $f.Time, $f.Country, $f.IP, $after.Time, $after.Country, $after.IP))
+            Add-Urgent $after 'a sign-in right after a failed MFA'
+        }
     }
     if ($pairs.Count -gt 0) {
         Add-Finding -Check 'Failed MFA then success' -Category 'Sign-ins' -Status WARN -Severity High `
             -Detail ('{0} time(s): {1}.' -f $pairs.Count, ((@($pairs | Select-Object -Unique)) -join '; ')) `
             -Recommendation 'Ask the user whether they approved an MFA prompt they did not start. Repeated prompts followed by an approval is the usual pattern of MFA fatigue.'
-        $script:next.Add('Ask the user about MFA prompts they approved without signing in themselves.')
+        Add-Step -Topic 'mfaprompt' -Text 'Ask the user about MFA prompts they approved without signing in themselves.'
     }
     else { Add-Finding -Check 'Failed MFA then success' -Category 'Sign-ins' -Status PASS -Detail 'No failed MFA followed by a successful sign-in within an hour.' }
 
@@ -1080,7 +1099,8 @@ Invoke-UserCheck -Name 'Sign-ins' -Category 'Sign-ins' -ScriptBlock {
         Add-Finding -Check 'Legacy-protocol sign-ins' -Category 'Sign-ins' -Status WARN -Severity High `
             -Detail ('{0} successful sign-in(s) over legacy protocols, which skip MFA: {1}.' -f $legacy.Count, ((@($legacy | Group-Object Client | ForEach-Object { '{0} x{1} (last from {2}, {3})' -f $_.Name, $_.Count, $_.Group[-1].IP, $_.Group[-1].Country })) -join '; ')) `
             -Recommendation 'Unless the user has an old mail app on purpose, this is a password being used without MFA: block legacy authentication for the tenant (run C4) and reset the password.'
-        $script:next.Add('Block legacy authentication (security defaults or a Conditional Access policy); legacy sign-ins succeeded.')
+        Add-Step -Topic 'legacy' -Text 'Block legacy authentication (security defaults or a Conditional Access policy); legacy sign-ins succeeded.'
+        foreach ($x in $legacy) { Add-Urgent $x ('a sign-in over {0}' -f $x.Client) }
     }
     else { Add-Finding -Check 'Legacy-protocol sign-ins' -Category 'Sign-ins' -Status PASS -Detail 'No successful legacy-protocol sign-in.' }
 
@@ -1092,6 +1112,7 @@ Invoke-UserCheck -Name 'Sign-ins' -Category 'Sign-ins' -ScriptBlock {
         $b = $located[$i]
         if ($a.Country -ne $b.Country -and ($b.Time - $a.Time).TotalHours -le 4) {
             $travel.Add(('{0} {1:yyyy-MM-dd HH:mm} -> {2} {3:HH:mm} ({4:N1} h)' -f $a.Country, $a.Time, $b.Country, $b.Time, ($b.Time - $a.Time).TotalHours))
+            Add-Urgent $b ('a sign-in {0:N1} h after one from {1}' -f ($b.Time - $a.Time).TotalHours, $a.Country)
         }
     }
     if ($travel.Count -gt 0) {
@@ -1173,7 +1194,7 @@ Invoke-UserCheck -Name 'Inbox rules' -Category 'Mailbox' -ScriptBlock {
         $rows.Add([pscustomobject]@{ Name = [string]$r.Name; Enabled = [bool]$r.Enabled; ForwardTo = $to; DeleteMessage = [bool]$r.DeleteMessage; MoveToFolder = $folder; MarkAsRead = [bool]$r.MarkAsRead; Words = $words; Flags = ($why -join ', ') })
         if ($r.Enabled -and $why.Count -gt 0) {
             $bad.Add(('"{0}" ({1})' -f $r.Name, ($why -join ', ')))
-            $script:next.Add(('Remove the inbox rule "{0}" ({1}) after taking a screenshot for the ticket.' -f $r.Name, ($why -join ', ')))
+            Add-Step -Topic 'rule' -Text ('Remove the inbox rule "{0}" ({1}) after taking a screenshot for the ticket.' -f $r.Name, ($why -join ', '))
         }
     }
     Add-MSPData -Name 'InboxRules' -Rows $rows.ToArray()
@@ -1199,7 +1220,7 @@ Invoke-UserCheck -Name 'Mailbox forwarding' -Category 'Mailbox' -ScriptBlock {
     if ($external.Count -gt 0) {
         Add-Finding -Check 'Mailbox forwarding' -Category 'Mailbox' -Status WARN -Severity High -Detail ('All mail is forwarded outside the organization to {0} ({1}).' -f $to, $keep) `
             -Recommendation 'Unless the user set this up, it is the attacker''s copy of the mailbox. Record it, then remove it (see What to do now).'
-        $script:next.Add(('Remove the mailbox forwarding to {0}.' -f $to))
+        Add-Step -Topic 'forwarding' -Text ('Remove the mailbox forwarding to {0}.' -f $to)
     }
     else { Add-Finding -Check 'Mailbox forwarding' -Category 'Mailbox' -Status INFO -Detail ('Mail is forwarded inside the organization to {0} ({1}).' -f $to, $keep) }
 }
@@ -1220,7 +1241,7 @@ Invoke-UserCheck -Name 'Delegates' -Category 'Mailbox' -ScriptBlock {
     if ($rows.Count -eq 0) { Add-Finding -Check 'Delegates' -Category 'Mailbox' -Status PASS -Detail 'Nobody else has access to this mailbox.'; return }
     Add-Finding -Check 'Delegates' -Category 'Mailbox' -Status INFO `
         -Detail ('{0}. Confirm each with the client; an unknown delegate means someone else can read or send as this user. Recent changes are under "Mailbox changes".' -f ((@($rows | ForEach-Object { '{0} ({1})' -f $_.Delegate, $_.Access })) -join '; '))
-    $script:next.Add(('Confirm the mailbox delegates with the client: {0}.' -f ((@($rows | ForEach-Object { '{0} ({1})' -f $_.Delegate, $_.Access })) -join '; ')))
+    Add-Step -Topic 'delegates' -Text ('Confirm the mailbox delegates with the client: {0}.' -f ((@($rows | ForEach-Object { '{0} ({1})' -f $_.Delegate, $_.Access })) -join '; '))
 }
 
 # =========================================================================================
@@ -1261,13 +1282,13 @@ Invoke-UserCheck -Name 'MFA methods' -Category 'MFA' -ScriptBlock {
     if ($rows.Count -eq 0) {
         Add-Finding -Check 'MFA methods' -Category 'MFA' -Status WARN -Severity High -Detail 'No MFA method registered: the password alone signs in.' `
             -Recommendation 'Have the user register Microsoft Authenticator after the password reset, in person or on a call you started.'
-        $script:next.Add('Register MFA for the user after the password reset (none is registered).')
+        Add-Step -Topic 'mfa' -Text 'Register MFA for the user after the password reset (none is registered).'
     }
     elseif ($added.Count -gt 0) {
         Add-Finding -Check 'MFA methods' -Category 'MFA' -Status WARN -Severity High `
             -Detail ('Changed in the last {0} days: {1}. Registered now: {2}.' -f $Days, ((@($added | Select-Object -Unique)) -join '; '), $list) `
             -Recommendation 'Ask the user whether they added these. Attackers register their own authenticator to keep access after a password reset.'
-        $script:next.Add(('Review the MFA methods with the user and delete any they did not add ({0}).' -f ((@($added | Select-Object -Unique)) -join '; ')))
+        Add-Step -Topic 'mfa' -Text ('Review the MFA methods with the user and delete any they did not add ({0}).' -f ((@($added | Select-Object -Unique)) -join '; '))
     }
     else {
         Add-Finding -Check 'MFA methods' -Category 'MFA' -Status PASS -Detail ('No method added in the last {0} days. Registered: {1}.' -f $Days, $list)
@@ -1309,7 +1330,7 @@ Invoke-UserCheck -Name 'App consents' -Category 'Apps' -ScriptBlock {
             if ($mailFile) { $why += 'mail/file access' }
             if (-not $verified) { $why += 'publisher not verified' }
             $flag.Add(('"{0}" ({1}; scopes: {2})' -f $name, ($why -join ', '), $scopeText))
-            $script:next.Add(('Review the app consent "{0}" and remove it if the user did not mean to grant it (Entra admin center > Enterprise applications > the app > Permissions / Users).' -f $name))
+            Add-Step -Topic 'consent' -Text ('Review the app consent "{0}" and remove it if the user did not mean to grant it (Entra admin center > Enterprise applications > the app > Permissions / Users).' -f $name)
         }
     }
     Add-MSPData -Name 'AppConsents' -Rows $rows.ToArray()
@@ -1358,7 +1379,9 @@ Invoke-UserCheck -Name 'Sent mail' -Category 'Mail flow' -ScriptBlock {
         Add-Finding -Check 'Sent mail' -Category 'Mail flow' -Status WARN -Severity High -Evidence $evidence `
             -Detail ('{0} message(s) sent in {1} days (usually {2} a day); unusual days: {3}.{4}' -f $all.Count, $Days, $median, ((@($spikes | ForEach-Object { '{0}: {1}' -f $_.Day, $_.Sent })) -join ', '), $note) `
             -Recommendation 'A burst of sent mail is typical of a compromised account sending phishing to contacts. Check the Sent Items and the message trace for those days; warn the recipients.'
-        $script:next.Add(('Check Sent Items and message trace for {0}; warn the people who received phishing.' -f ((@($spikes | ForEach-Object { $_.Day })) -join ', ')))
+        Add-Step -Topic 'sent' -Text ('Check Sent Items, Deleted Items and the message trace for {0}; warn the people who received phishing.' -f ((@($spikes | ForEach-Object { $_.Day })) -join ', '))
+        $today = @($spikes | Where-Object { $_.Day -eq $now.ToString('yyyy-MM-dd') })
+        if ($today.Count -gt 0) { $script:urgent.Add(('{0} messages sent today' -f $today[0].Sent)) }
     }
     else {
         Add-Finding -Check 'Sent mail' -Category 'Mail flow' -Status PASS -Evidence $evidence -Detail ('{0} message(s) sent in {1} days (usually {2} a day); no unusual day.{3}' -f $all.Count, $Days, $median, $note)
@@ -1413,11 +1436,26 @@ else {
         -Detail 'No strong sign of compromise in what could be read. That does not prove the account is safe: check the SKIPPED items by hand.'
 }
 $steps = New-Object System.Collections.Generic.List[string]
-$steps.Add(('Reset the password of {0} (admin center > Users > Active users > Reset password); give the new one to the user by phone, not email.' -f $target))
-$steps.Add(('Revoke all sessions so stolen tokens stop working: Entra admin center > Users > the user > Revoke sessions (or Revoke-MgUserSignInSession -UserId {0}).' -f $target))
-foreach ($n in $next) { $steps.Add($n) }
-$steps.Add('Review the MFA methods and app consents with the user; delete anything they did not add.')
-$steps.Add('Check Sent Items and Deleted Items for mail the user did not write; warn the recipients of any phishing.')
+$reset = 'Reset the password of {0} (admin center > Users > Active users > Reset password); give the new one to the user by phone, not email.' -f $target
+$revoke = 'Revoke all sessions so stolen tokens stop working: Entra admin center > Users > the user > Revoke sessions (or Revoke-MgUserSignInSession -UserId {0}).' -f $target
+if ($urgent.Count -gt 0) {
+    # The attacker may be active right now: lock them out first, then end their sessions, then
+    # change the password while sign-in is still blocked.
+    $steps.Add(('Block sign-in for {0} now (admin center > Users > Active users > Block sign-in), because of {1}. Order matters: blocking stops the attacker signing in again while you work; revoking then ends the sessions they already hold (a password reset alone does not); resetting the password last keeps them out once sign-in is allowed again.' -f $target, ((@($urgent | Select-Object -Unique)) -join '; ')))
+    $steps.Add($revoke)
+    $steps.Add($reset)
+}
+else {
+    $steps.Add($reset)
+    $steps.Add($revoke)
+}
+foreach ($n in $next) { $steps.Add($n.Text) }
+# Generic steps only where no specific step already covers the topic.
+$topics = @($next | ForEach-Object { $_.Topic })
+if ($topics -notcontains 'mfa') { $steps.Add('Review the MFA methods with the user; delete any they did not add.') }
+if ($topics -notcontains 'consent') { $steps.Add('Review the app consents with the user; remove any they did not mean to grant.') }
+if ($topics -notcontains 'sent') { $steps.Add('Check Sent Items and Deleted Items for mail the user did not write; warn the recipients of any phishing.') }
+if ($urgent.Count -gt 0) { $steps.Add('Allow sign-in again only after the password is reset, the sessions are revoked and the items above are dealt with.') }
 $steps.Add('Tell the client what happened and what was changed, and record it in the ticket (keep this report with it).')
 $steps = @($steps | Select-Object -Unique)
 $i = 0
