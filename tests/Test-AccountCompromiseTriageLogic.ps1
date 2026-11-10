@@ -38,7 +38,7 @@
     Risk Level    : Safe -- writes and removes files in a temporary folder only; no network
     Prerequisites : Windows PowerShell 5.1 or PowerShell 7 | Admin: No
     Exit code     : 0 all passed, 1 any failure
-    Version       : 1.0.0
+    Version       : 1.0.1
 #>
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPositionalParameters', '', Justification = 'Assert-Equal / Assert-True (Name, Expected, Actual) are one-line test assertions used throughout.')]
 [CmdletBinding()]
@@ -79,7 +79,9 @@ function Invoke-Mocked {
     $text = "`$env:MSP_TEST_CALLS = '{0}'`n{1}`n& '{2}' -OutputPath '{3}' {4}`n`$code = `$LASTEXITCODE`nGet-Module | ForEach-Object {{ `$_.Name }} | Set-Content -LiteralPath '{5}'`nexit `$code`n" -f `
     ($calls -replace "'", "''"), $Mocks, ((Join-Path $repo $c5) -replace "'", "''"), ($out -replace "'", "''"), $argText, ($modules -replace "'", "''")
     [System.IO.File]::WriteAllText($wrapper, $text, (New-Object System.Text.UTF8Encoding($true)))
-    $console = & $exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $wrapper 2>&1 | Out-String
+    # 'Continue' here: Windows PowerShell 5.1 turns a child's stderr line (the -Days 31 parameter
+    # error) into a terminating error under 'Stop'.
+    $console = & { $ErrorActionPreference = 'Continue'; & $exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $wrapper 2>&1 } | Out-String
     $code = $LASTEXITCODE
     $json = @(Get-ChildItem -LiteralPath $out -Filter '*.json' -File)
     $result = $null
