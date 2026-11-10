@@ -52,6 +52,11 @@ Each script includes a header describing:
 These headers exist to support safe reuse, faster decision-making, and easier handoff
 between technicians.
 
+Number parameters (`-Days`, `-Hours`, `-TimeoutMs`, ...) are range-checked inside the script, not
+with `[ValidateRange]`: a value outside the range gives a plain message such as "-Days must be
+between 1 and 30 (you gave 31)", a Setup finding in the log and results, and exit 1, on Windows
+PowerShell 5.1 and PowerShell 7 alike (no red parameter-binding error).
+
 ---
 
 ## Client-Specific Logic

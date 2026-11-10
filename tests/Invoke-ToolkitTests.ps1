@@ -32,6 +32,8 @@
          tests/Test-M365SecurityPostureLogic.ps1 (C4 against mocked Graph / Exchange Online cmdlets),
          tests/Test-AccountCompromiseTriageLogic.ps1 (C5 against mocked Graph / Exchange Online
          cmdlets; fails if any change cmdlet is called),
+         tests/Test-ParameterRangeMessages.ps1 (every script's number parameters out of range:
+         plain-English message, exit 1, no binding error; the scripts stop before any check),
          tests/Test-SuspiciousActivityWindowsLogic.ps1 (C3 Windows against mocked cmdlets),
          tests/Test-BatchEWindowsLogic.ps1 (E1-E4 Windows against mocked cmdlets),
          tests/Test-WindowsHardeningAuditLogic.ps1 (Set-InactivityTimeout and the RC4 audit; no
@@ -87,7 +89,7 @@
                     macOS/Linux: PowerShell 7 and bash
                     All: PSScriptAnalyzer (module path or %LOCALAPPDATA%\PSModules), ShellCheck
     Exit code     : 0 when every step that ran passed, 1 otherwise
-    Version       : 2.7.0
+    Version       : 2.8.0
 #>
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPositionalParameters', '', Justification = 'Add-Result (Step, Result, Detail) is called ~50 times; positional calls keep each step on one readable line.')]
 [CmdletBinding()]
@@ -514,6 +516,7 @@ $logic = @(
     @{ Name = 'C1/C2 against mocked Exchange Online and Graph'; File = 'Test-BatchCCloudLogic.ps1' }
     @{ Name = 'C4 tenant security posture against mocked Graph and Exchange Online'; File = 'Test-M365SecurityPostureLogic.ps1' }
     @{ Name = 'C5 account compromise triage against mocked Graph and Exchange Online'; File = 'Test-AccountCompromiseTriageLogic.ps1' }
+    @{ Name = 'Number parameters out of range: plain message and exit 1 in every script'; File = 'Test-ParameterRangeMessages.ps1' }
     @{ Name = 'C3 Windows against mocked cmdlets'; File = 'Test-SuspiciousActivityWindowsLogic.ps1' }
     @{ Name = 'E1-E4 Windows against mocked cmdlets'; File = 'Test-BatchEWindowsLogic.ps1' }
     @{ Name = 'Set-InactivityTimeout and RC4 audit against mocked cmdlets'; File = 'Test-WindowsHardeningAuditLogic.ps1' }

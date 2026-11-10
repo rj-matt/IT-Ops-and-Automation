@@ -66,12 +66,12 @@ param(
     [string]$OutputPath,
     [switch]$IncludeOtherUsers,
     [string[]]$ApprovedRemoteTool = @(),
-    [ValidateRange(14, 3650)][int]$StaleAccountDays = 90
+    [int]$StaleAccountDays = 90
 )
 
 #region MSPToolkit (generated) Sections=Core,LocalAdmin,Software
 # DO NOT EDIT — regenerate with Sync-MSPEmbeddedHelper.ps1
-# Source: endpoint-systems/utilities/MSPToolkit.Common.psm1 | Sections: Core,LocalAdmin,Software | SHA256: df5f12912e5ea226edd910435c8b10a57cd1c675b6c57e692bdbc76f4e221e3e
+# Source: endpoint-systems/utilities/MSPToolkit.Common.psm1 | Sections: Core,LocalAdmin,Software | SHA256: ee536c3b76a0a304586ec0d3feadb8ac44c4d950a66c4e255ed3b00c66019bf9
 #region MSPHelper:Core
 # --- Run state ---------------------------------------------------------------------------
 # One toolkit script = one "run": one log file, one findings list, one optional export.
@@ -381,6 +381,37 @@ function ConvertTo-MSPFriendlyError {
         return ('A Windows component did not respond (error 0x{0:X8}). {1}' -f $exception.HResult, $message.Trim())
     }
     return ('The check could not complete: {0}' -f $message.Trim())
+}
+
+function Test-MSPParameterRange {
+    <#
+        Checks number parameters against their allowed ranges. Scripts do this in the body instead
+        of with [ValidateRange], so a wrong value gets a plain-English Setup finding, the usual
+        summary, log and export, and a clean exit (the caller exits 1), on Windows PowerShell 5.1
+        and PowerShell 7 alike. Only values given on the command line are checked (defaults are
+        always in range). Returns $true when every value is in range.
+        Example: Test-MSPParameterRange -Bound $PSBoundParameters -Range ([ordered]@{ Days = 1, 30 })
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Bound,
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Range
+    )
+    $ok = $true
+    # Keys, not .Contains(): on $PSBoundParameters .Contains() is the key/value-pair overload.
+    $given = @($Bound.Keys)
+    foreach ($name in @($Range.Keys)) {
+        if ($given -notcontains $name) { continue }
+        $min = $Range[$name][0]
+        $max = $Range[$name][1]
+        $value = $Bound[$name]
+        if ($value -ge $min -and $value -le $max) { continue }
+        $ok = $false
+        Add-MSPFinding -Check 'Parameters' -Category 'Setup' -Status ERROR `
+            -Detail ('-{0} must be between {1} and {2} (you gave {3}). Nothing was checked or changed.' -f $name, $min, $max, $value) `
+            -Recommendation ('Run it again with -{0} set to a number from {1} to {2}, or leave it out to use the default.' -f $name, $min, $max)
+    }
+    return $ok
 }
 
 function Skip-MSPCheck {
@@ -801,6 +832,12 @@ function Get-MSPInstalledSoftware {
 $ScriptVersion = '1.2.1'
 Initialize-MSPRun -ScriptName 'Get-HomeDeviceInventory' -ScriptVersion $ScriptVersion -CheckId 'A8' -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'Device, user and software inventory (read-only)'
+# Number ranges are checked here, not with [ValidateRange], so a wrong value gets a plain message
+# and a clean exit 1 instead of a parameter-binding error.
+if (-not (Test-MSPParameterRange -Bound $PSBoundParameters -Range ([ordered]@{ StaleAccountDays = 14, 3650 }))) {
+    Complete-MSPRun -OutputPath $OutputPath
+    exit 1
+}
 
 # "powershell.exe -File" (used by Invoke-HomeAuditBundle.ps1) passes a list as one "a,b" string.
 $ApprovedRemoteTool = @($ApprovedRemoteTool | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })

@@ -410,10 +410,12 @@ $global:Sent += @(for ($k = 0; $k -lt 250; $k++) { [pscustomobject]@{ Received =
     Assert-True 'denied: View-Only Audit Logs named for the audit log' ([string](Get-Finding $r 'Audit log').Recommendation -match 'View-Only Audit Logs')
     Assert-Finding $r 'denied: the rest still runs' 'Inbox rules' 'PASS'
 
-    # --- -Days 31 is refused -----------------------------------------------------------------------
+    # --- -Days 31 is refused in plain English -------------------------------------------------------
     $r = Invoke-Mocked 'days31' $mocks @('-UserPrincipalName', 'alice@contoso.com', '-Days', '31')
-    Assert-True '-Days 31: refused by parameter validation' ($r.Console -match 'Days' -and $r.Console -match 'greater than the maximum allowed range|ValidateRange|maximum allowed') $r.Console
-    Assert-True '-Days 31: no result, nothing connects' ($null -eq $r.Result -and $r.Calls.Count -eq 0)
+    Assert-Equal '-Days 31: exit 1' 1 $r.Code
+    Assert-True '-Days 31: plain message, no binding error' ($r.Console.Contains('-Days must be between 1 and 30 (you gave 31)') -and $r.Console -notmatch 'Cannot validate argument|CategoryInfo|FullyQualifiedErrorId') $r.Console
+    Assert-True '-Days 31: nothing connects' ($r.Calls.Count -eq 0) ($r.Calls -join "`n")
+    Assert-Finding $r '-Days 31: Setup finding' 'Parameters' 'ERROR' 'must be between 1 and 30'
 
     # --- No Identity Protection scopes -------------------------------------------------------------
     $r = Invoke-Mocked 'scope' ("{0}`n{1}`n`$global:GraphScopes = @('User.Read.All', 'AuditLog.Read.All', 'UserAuthenticationMethod.Read.All', 'DelegatedPermissionGrant.Read.All', 'Application.Read.All')" -f $mocks, $connected) @('-UserPrincipalName', 'alice@contoso.com', '-Days', '30')

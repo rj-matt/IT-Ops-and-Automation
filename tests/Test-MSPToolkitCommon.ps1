@@ -95,6 +95,20 @@ Assert-True 'thrown error -> ERROR' ($throws.Status -eq 'ERROR') $throws.Status
 Assert-True 'Skip-MSPCheck -> SKIPPED' ($skips.Status -eq 'SKIPPED' -and $skips.Detail -eq 'Not here' -and $skips.Recommendation -eq 'Do X') ('{0} {1}' -f $skips.Status, $skips.Detail)
 Assert-True 'non-terminating cmdlet error -> ERROR' ($cmdlet.Status -eq 'ERROR') $cmdlet.Status
 
+# --- Test-MSPParameterRange: plain message instead of a binding error ----------------------
+$before = (Get-Run).Findings.Count
+$inRange = Test-MSPParameterRange -Bound @{ Days = 30; Other = 'x' } -Range ([ordered]@{ Days = 1, 30; Hours = 1, 48 }) 6>$null
+Assert-True 'range: in range and unbound names pass, no finding' ($inRange -and (Get-Run).Findings.Count -eq $before)
+$outRange = Test-MSPParameterRange -Bound @{ Days = 31; Hours = 0 } -Range ([ordered]@{ Days = 1, 30; Hours = 1, 48 }) 6>$null
+$pf = @((Get-Run).Findings.ToArray() | Where-Object { $_.Check -eq 'Parameters' })
+Assert-True 'range: out of range returns false' (-not $outRange)
+function Test-RangeCaller { [CmdletBinding()] param([int]$Days = 14, [int]$Hours = 24) Test-MSPParameterRange -Bound $PSBoundParameters -Range ([ordered]@{ Days = 1, 30; Hours = 1, 48 }) }
+$before2 = (Get-Run).Findings.Count
+$viaBound = Test-RangeCaller -Days 31 6>$null
+$new = @((Get-Run).Findings.ToArray() | Select-Object -Skip $before2)
+Assert-True 'range: through $PSBoundParameters only the given parameter is checked' ((-not $viaBound) -and $new.Count -eq 1 -and $new[0].Detail -like '-Days must be between 1 and 30 (you gave 31).*') (($new | ForEach-Object { $_.Detail }) -join ' | ')
+Assert-True 'range: one Setup ERROR per bad value, in plain English' ($pf.Count -eq 2 -and $pf[0].Status -eq 'ERROR' -and $pf[0].Category -eq 'Setup' -and $pf[0].Detail -eq '-Days must be between 1 and 30 (you gave 31). Nothing was checked or changed.' -and $pf[1].Detail -like '-Hours must be between 1 and 48 (you gave 0).*') (($pf | ForEach-Object { $_.Detail }) -join ' | ')
+
 # --- Result object and export ------------------------------------------------------------
 $result = Get-MSPResultObject
 $keys = @($result.Keys)

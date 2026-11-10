@@ -166,6 +166,16 @@ that run and check it with `shasum -a 256 -c` / `sha256sum -c` against the `.sha
 
 ## Found and fixed by testing (for the record)
 
+- Out-of-range number parameters (2026-11-09): `-Days 31` on C5 (and every other `[ValidateRange]`
+  parameter in 21 PowerShell scripts) stopped with PowerShell's red parameter-binding error ("Cannot
+  validate argument on parameter 'Days'...", plus CategoryInfo / FullyQualifiedErrorId lines on 5.1),
+  before the script started, so there was no log or result. Ranges are now checked in the script body
+  by the Core helper `Test-MSPParameterRange`: "-Days must be between 1 and 30 (you gave 31). Nothing
+  was checked or changed.", a Setup finding, and exit 1. `tests/Test-ParameterRangeMessages.ps1`
+  (in the harness on 5.1 and 7) runs every such script above its maximum and below its minimum.
+  The first version of the helper misread `$PSBoundParameters` (`.Contains` is the key/value
+  overload there) and reported parameters that were not given; caught by that test, fixed.
+
 - A8 macOS/Linux read the last login from fixed columns of `last`; local macOS logins have no
   host column, so LastLogon was blank (found by E1, fixed in both).
 - A9 listed the same device twice when Windows and macOS/Linux wrote its MAC address differently.

@@ -104,14 +104,14 @@ param(
     [string[]]$ApprovedRemoteTool = @(),
     [switch]$AllUsers,
     [string[]]$Skip = @(),
-    [ValidateRange(2, 60)][int]$TimeoutMinutes = 15,
+    [int]$TimeoutMinutes = 15,
     [string]$TechnicianName,
     [string]$ClientName
 )
 
 #region MSPToolkit (generated) Sections=Core
 # DO NOT EDIT — regenerate with Sync-MSPEmbeddedHelper.ps1
-# Source: endpoint-systems/utilities/MSPToolkit.Common.psm1 | Sections: Core | SHA256: 75e41e4c97747c4b54696e39056282bac01ba630bee10d9b0bed446fb2728602
+# Source: endpoint-systems/utilities/MSPToolkit.Common.psm1 | Sections: Core | SHA256: 9b60f112946d534cdf62d54c2ba379f6d0c23e528bab272bf78bbe2ee79d5296
 #region MSPHelper:Core
 # --- Run state ---------------------------------------------------------------------------
 # One toolkit script = one "run": one log file, one findings list, one optional export.
@@ -423,6 +423,37 @@ function ConvertTo-MSPFriendlyError {
     return ('The check could not complete: {0}' -f $message.Trim())
 }
 
+function Test-MSPParameterRange {
+    <#
+        Checks number parameters against their allowed ranges. Scripts do this in the body instead
+        of with [ValidateRange], so a wrong value gets a plain-English Setup finding, the usual
+        summary, log and export, and a clean exit (the caller exits 1), on Windows PowerShell 5.1
+        and PowerShell 7 alike. Only values given on the command line are checked (defaults are
+        always in range). Returns $true when every value is in range.
+        Example: Test-MSPParameterRange -Bound $PSBoundParameters -Range ([ordered]@{ Days = 1, 30 })
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Bound,
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Range
+    )
+    $ok = $true
+    # Keys, not .Contains(): on $PSBoundParameters .Contains() is the key/value-pair overload.
+    $given = @($Bound.Keys)
+    foreach ($name in @($Range.Keys)) {
+        if ($given -notcontains $name) { continue }
+        $min = $Range[$name][0]
+        $max = $Range[$name][1]
+        $value = $Bound[$name]
+        if ($value -ge $min -and $value -le $max) { continue }
+        $ok = $false
+        Add-MSPFinding -Check 'Parameters' -Category 'Setup' -Status ERROR `
+            -Detail ('-{0} must be between {1} and {2} (you gave {3}). Nothing was checked or changed.' -f $name, $min, $max, $value) `
+            -Recommendation ('Run it again with -{0} set to a number from {1} to {2}, or leave it out to use the default.' -f $name, $min, $max)
+    }
+    return $ok
+}
+
 function Skip-MSPCheck {
     <#
         Ends the current Invoke-MSPCheck with SKIPPED instead of ERROR, for "could not be checked
@@ -727,6 +758,12 @@ function Complete-MSPRun {
 $ScriptVersion = '1.2.0'
 Initialize-MSPRun -ScriptName 'Invoke-HomeAuditBundle' -ScriptVersion $ScriptVersion -CheckId 'Bundle' -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'Home network audit: runs A1-A8 and collects the results'
+# Number ranges are checked here, not with [ValidateRange], so a wrong value gets a plain message
+# and a clean exit 1 instead of a parameter-binding error.
+if (-not (Test-MSPParameterRange -Bound $PSBoundParameters -Range ([ordered]@{ TimeoutMinutes = 2, 60 }))) {
+    Complete-MSPRun -OutputPath $OutputPath
+    exit 1
+}
 
 # "powershell.exe -File" passes a list as one "a,b" string; split so both forms work.
 $Skip = @($Skip | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() -replace '\.ps1$', '' } | Where-Object { $_ })

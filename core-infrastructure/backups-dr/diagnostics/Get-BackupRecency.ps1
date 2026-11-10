@@ -49,13 +49,13 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateRange(1, 30)][int]$MaxAgeDays = 7,
+    [int]$MaxAgeDays = 7,
     [string]$OutputPath
 )
 
 #region MSPToolkit (generated) Sections=Core,Software
 # DO NOT EDIT — regenerate with Sync-MSPEmbeddedHelper.ps1
-# Source: endpoint-systems/utilities/MSPToolkit.Common.psm1 | Sections: Core,Software | SHA256: 685140a31f20e7cfab6238ac6f7e4054567c5b5a90a25e1850da145a5bbe6587
+# Source: endpoint-systems/utilities/MSPToolkit.Common.psm1 | Sections: Core,Software | SHA256: 6044ae5449a8b6315729125aad65571a61f344079a6012ee05979cf23a43f961
 #region MSPHelper:Core
 # --- Run state ---------------------------------------------------------------------------
 # One toolkit script = one "run": one log file, one findings list, one optional export.
@@ -365,6 +365,37 @@ function ConvertTo-MSPFriendlyError {
         return ('A Windows component did not respond (error 0x{0:X8}). {1}' -f $exception.HResult, $message.Trim())
     }
     return ('The check could not complete: {0}' -f $message.Trim())
+}
+
+function Test-MSPParameterRange {
+    <#
+        Checks number parameters against their allowed ranges. Scripts do this in the body instead
+        of with [ValidateRange], so a wrong value gets a plain-English Setup finding, the usual
+        summary, log and export, and a clean exit (the caller exits 1), on Windows PowerShell 5.1
+        and PowerShell 7 alike. Only values given on the command line are checked (defaults are
+        always in range). Returns $true when every value is in range.
+        Example: Test-MSPParameterRange -Bound $PSBoundParameters -Range ([ordered]@{ Days = 1, 30 })
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Bound,
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Range
+    )
+    $ok = $true
+    # Keys, not .Contains(): on $PSBoundParameters .Contains() is the key/value-pair overload.
+    $given = @($Bound.Keys)
+    foreach ($name in @($Range.Keys)) {
+        if ($given -notcontains $name) { continue }
+        $min = $Range[$name][0]
+        $max = $Range[$name][1]
+        $value = $Bound[$name]
+        if ($value -ge $min -and $value -le $max) { continue }
+        $ok = $false
+        Add-MSPFinding -Check 'Parameters' -Category 'Setup' -Status ERROR `
+            -Detail ('-{0} must be between {1} and {2} (you gave {3}). Nothing was checked or changed.' -f $name, $min, $max, $value) `
+            -Recommendation ('Run it again with -{0} set to a number from {1} to {2}, or leave it out to use the default.' -f $name, $min, $max)
+    }
+    return $ok
 }
 
 function Skip-MSPCheck {
@@ -727,6 +758,12 @@ $ScriptVersion = '1.0.1'
 Initialize-MSPRun -ScriptName 'Get-BackupRecency' -ScriptVersion $ScriptVersion -CheckId 'E3' -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'When this PC was last backed up, and by what (read-only)' `
     -AdminSections @('Windows Server Backup', 'System Restore')
+# Number ranges are checked here, not with [ValidateRange], so a wrong value gets a plain message
+# and a clean exit 1 instead of a parameter-binding error.
+if (-not (Test-MSPParameterRange -Bound $PSBoundParameters -Range ([ordered]@{ MaxAgeDays = 1, 30 }))) {
+    Complete-MSPRun -OutputPath $OutputPath
+    exit 1
+}
 
 $now = Get-Date
 $backups = New-Object System.Collections.Generic.List[object]
