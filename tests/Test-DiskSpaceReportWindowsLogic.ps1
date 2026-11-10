@@ -79,7 +79,10 @@ Write-FakeFile (Join-PathPart $data 'Microsoft', 'Windows', 'WER', 'ReportArchiv
 # A symbolic link back to Downloads must not be counted twice (skipped where links need rights).
 $linked = $false
 try { $null = New-Item -ItemType SymbolicLink -Path (Join-PathPart $profileDir 'Desktop', 'DownloadsLink') -Target (Join-Path $profileDir 'Downloads') -ErrorAction Stop; $linked = $true } catch { $linked = $false }
-$filesBefore = @(Get-ChildItem -LiteralPath $c -Recurse -Force -File | ForEach-Object { $_.FullName } | Sort-Object)
+# Every file and its size before the run ("nothing deleted" = all still there, same size; the
+# script's own log may be added under TEMP, which points into the fake drive on Windows).
+$filesBefore = @{}
+foreach ($f in @(Get-ChildItem -LiteralPath $c -Recurse -Force -File)) { $filesBefore[$f.FullName] = $f.Length }
 
 $envText = @"
 `$env:SystemDrive = '$($c -replace "'", "''")'
@@ -171,8 +174,8 @@ try {
     Assert-True 'what to do: cleanup biggest first' ($steps[2] -match '^Previous Windows installation \(700 MB\)' -and $steps[3] -match '^Windows Update cache \(400 MB\).*D1: Clear-WindowsUpdateCache\.ps1' -and $steps[4] -match '^Recycle Bin \(250 MB\)' -and $steps[5] -match '^Temporary files \(yours\) \(150 MB\)') ($steps -join ' | ')
     Assert-True 'what to do: items under 100 MB are not listed as steps' (@($steps | Where-Object { $_ -match '^Delivery Optimization|^Crash dumps' }).Count -eq 0) ($steps -join ' | ')
     Assert-True 'what to do: profile folders to review' (@($steps | Where-Object { $_ -match '^Go through the largest folders in the profile.*Downloads 500 MB' }).Count -eq 1) ($steps -join ' | ')
-    $filesAfter = @(Get-ChildItem -LiteralPath $c -Recurse -Force -File | ForEach-Object { $_.FullName } | Sort-Object)
-    Assert-True 'nothing deleted: the fake drive is unchanged' (($filesBefore -join '|') -eq ($filesAfter -join '|'))
+    $changed = @($filesBefore.Keys | Where-Object { -not (Test-Path -LiteralPath $_) -or (Get-Item -LiteralPath $_ -Force).Length -ne $filesBefore[$_] })
+    Assert-True 'nothing deleted: every file is still there at the same size' ($filesBefore.Count -gt 10 -and $changed.Count -eq 0) ($changed -join '; ')
     foreach ($t in 'Volumes', 'LargestFolders', 'Reclaimable', 'NextSteps') { Assert-True ('table {0}' -f $t) (@($r.Result.Data.$t).Count -gt 0) }
 
     $r = Invoke-Mocked 'good' $good
