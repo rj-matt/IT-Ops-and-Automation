@@ -139,6 +139,7 @@ if [ "\$1" = -c ]; then
     shift 2
     [ \$gnu = 1 ] && exec \$R -c "\$f" "\$@"
     [ "\$f" = %U ] && exec \$R -f %Su "\$@"
+    [ "\$f" = %d ] && exec \$R -f %d "\$@"
     exec \$R -f %m "\$@"
 fi
 if [ "\$1" = -f ] && [ \$gnu = 1 ]; then
@@ -1405,6 +1406,61 @@ done
 check 'E4 good: no swap' "$OUT" '\[INFO\] +Swap usage - No swap configured'
 check 'E4 good: no RAID' "$OUT" '\[INFO\] +RAID arrays - No Linux software RAID'
 check_not 'E4 good: no ERROR findings' "$OUT" '\[ERROR\]'
+
+# =========================================================================================
+# B5 get-disk-space-report.sh (Linux, with real du on a fake root)
+# =========================================================================================
+B5=endpoint-systems/diagnostics/storage/get-disk-space-report.sh
+mb_file() {
+    # mb_file PATH MB - a file with MB megabytes of real data (du counts allocated blocks).
+    mkdir -p "$(dirname "$1")"
+    dd if=/dev/zero of="$1" bs=1048576 count="$2" 2>/dev/null
+}
+new_env b5
+B5HOME="$FAKE/home/alice"
+mb_file "$FAKE/var/cache/apt/archives/firefox.deb" 120
+mb_file "$B5HOME/Downloads/setup.iso" 3
+mb_file "$B5HOME/Videos/holiday.mp4" 6
+mb_file "$B5HOME/.local/share/Trash/files/old.zip" 2
+mb_file "$B5HOME/.cache/thumbnails/t.png" 1
+mb_file "$FAKE/var/lib/snapd/snaps/firefox_4100.snap" 3
+mb_file "$FAKE/var/lib/snapd/snaps/firefox_4200.snap" 1
+ln -s "$B5HOME/Videos" "$B5HOME/VideosLink"
+stub "$BIN" df 'printf "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/nvme0n1p2 524288000 471859200 52428800 90%% /\n/dev/nvme0n1p1 1048576 734003 314573 70%% /boot\n/dev/sdb1 104857600 102760448 2097152 98%% /data\n"'
+stub "$BIN" journalctl 'case "$*" in
+    *--disk-usage*) echo "Archived and active journals take up 3.2G in the file system." ;;
+    *-k*) printf "Nov 08 10:00:00 mockhost kernel: blk_update_request: I/O error, dev sdb, sector 1234\nNov 08 10:00:01 mockhost kernel: usb 1-1: new device\n" ;;
+esac'
+stub "$BIN" snap 'printf "Name Version Rev Tracking Publisher Notes\nfirefox 131.0 4200 latest/stable mozilla* -\nfirefox 130.0 4100 latest/stable mozilla* disabled\n"'
+files_before=$(find "$FAKE" -type f | sort | cksum)
+OUT="$WORK/b5.txt"
+PATH="$WORK/b5/bin:$SYS_PATH" MSP_TEST_ROOT="$FAKE" TMPDIR="$WORK/b5" NO_COLOR=1 HOME="$B5HOME" \
+    "$BASH" "$REPO/$B5" --time-limit 30 --top 5 --output "$WORK/b5/out" </dev/null >"$OUT" 2>&1
+printf '%s\n' "$?" >"$OUT.rc"
+check 'B5: exit 0' "$OUT.rc" '^0$'
+check 'B5: / at 10 % free = WARN' "$OUT" '\[WARN\] +Disk space / - /: 50\.0 GB free of 500\.0 GB \(10 % free\)'
+check 'B5: /boot small, 30 % free = PASS (percentage only)' "$OUT" '\[PASS\] +Disk space /boot'
+check 'B5: /data 2 % free = FAIL' "$OUT" '\[FAIL\] +Disk space /data - /data: 2\.0 GB free'
+check 'B5: home folders biggest first' "$OUT" 'Largest folders: Home folder - .*/home/alice: Videos 6 MB; Downloads 3 MB'
+check_not 'B5: symbolic link not followed' "$OUT" 'VideosLink'
+check 'B5: system volume measured' "$OUT" 'Largest folders: System volume - .*: var 12[0-9] MB'
+check 'B5: reclaimable, biggest first' "$OUT" 'Reclaimable space - 3\.3 GB in known cleanup locations: System journal 3\.2 GB; Package cache 120 MB; Old snap revisions 3 MB; Trash 2 MB; User cache \(~/\.cache\) 1 MB\. Nothing was deleted\.'
+check 'B5: SMART needs root = SKIPPED' "$OUT" '\[SKIPPED\] Disk health - Skipped: requires root'
+check 'B5: kernel I/O errors = WARN' "$OUT" '\[WARN\] +Disk errors - 1 disk or file system error line.*blk_update_request: I/O error, dev sdb'
+check 'B5: what to do starts with the space needed' "$OUT" '^   1\. / needs about 25 GB more free space'
+check 'B5: then the journal (biggest)' "$OUT" '^   2\. System journal \(3\.2 GB\): Shrink the journal: sudo journalctl --vacuum-time=4weeks'
+check 'B5: then the package cache' "$OUT" '^   3\. Package cache \(120 MB\): Clear the package cache: sudo apt clean'
+check_not 'B5: items under 100 MB are not steps' "$OUT" '^ +[0-9]+\. (Trash|User cache|Old snap)'
+check 'B5: home folders to review' "$OUT" '^   4\. Go through the largest folders in the home folder with the user .*: Videos 6 MB, Downloads 3 MB'
+files_after=$(find "$FAKE" -type f | sort | cksum)
+check 'B5: nothing deleted' <(printf '%s\n' "$([ "$files_before" = "$files_after" ] && echo same || echo changed)") '^same$'
+b5json=$(find "$WORK/b5/out" -name 'get-disk-space-report_*.json' 2>/dev/null | head -n 1)
+check_exists 'B5: JSON written' "$b5json"
+[ -n "$b5json" ] && check 'B5: Reclaimable table' "$b5json" '"Item":"System journal","SizeGB":"3\.20"'
+OUT="$WORK/b5-range.txt"
+run_script b5 "$B5" "$OUT" --time-limit 5
+check 'B5: --time-limit 5 = exit 1' "$OUT.rc" '^1$'
+check 'B5: plain range message' "$OUT" '--time-limit must be between 10 and 600 \(you gave 5\)'
 
 # =========================================================================================
 # Bundle run-home-audit-bundle.sh

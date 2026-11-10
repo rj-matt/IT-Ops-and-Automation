@@ -66,6 +66,7 @@ sends nothing the network guard counts (within the guard's limits listed under o
 | B2 | Get-NetworkConnectivityReport / get-network-connectivity-report | CI only (`-Passive`); mocked | CI | run (`--passive` only) | Y | CI only (`--passive`) | CI |
 | B3 | Get-RecentCriticalErrors / get-recent-critical-errors | CI only; mocked | CI | run (also `--include-system-log`) | Y | CI only | CI |
 | B4 | Restart-CommonServices / restart-common-services | CI only (`-WhatIf` and refusal) | CI | run (`--what-if` and refusal only; changes stubbed) | Y (partly) | CI only (`--what-if` and refusal) | CI |
+| B5 | Get-DiskSpaceReport / get-disk-space-report (added 2026-11-09) | CI only (runtime, 20 s folder limit); mocked on a fake drive | CI | run (no sudo) | Y | CI only (runtime); stubbed | CI |
 | C1 | Get-UserMailboxStatus (5.1 / pwsh 7) | mocked (also in CI on 5.1 and 7), no tenant | N | mocked, no tenant | N | not run | N |
 | C2 | Get-UserLicenseReport (5.1 / pwsh 7) | mocked (also in CI on 5.1 and 7), no tenant | N | mocked, no tenant | N | not run | N |
 | C4 | Get-M365SecurityPosture (5.1 / pwsh 7; added 2026-11-02) | mocked (also in CI on 5.1 and 7), no tenant | N | mocked, no tenant | N | mocked (CI, pwsh 7), no tenant | N |
@@ -81,12 +82,63 @@ sends nothing the network guard counts (within the guard's limits listed under o
 | RC4 | Get-KerberosRC4Usage (needs a domain controller) | CI only (SKIPPED path: not a DC); mocked | CI | - | - | - | - |
 | IdleLock | Set-InactivityTimeout | CI only (`-WhatIf` and refusal); mocked (no registry access) | CI | - | - | - | - |
 
-Totals: on Windows, 24 of the 28 IDs now run in CI (all but A7, active network, and C1/C2/C4/C5,
-no tenant; their mocked tests run there on 5.1 and 7). On Linux, 19 of the 23 IDs run in CI (all
-but A7 and C1/C2/C4/C5). On macOS, 17 of the 22 IDs ran for real on the Mac (not A7: active
+Totals: on Windows, 25 of the 29 IDs now run in CI (all but A7, active network, and C1/C2/C4/C5,
+no tenant; their mocked tests run there on 5.1 and 7). On Linux, 20 of the 24 IDs run in CI (all
+but A7 and C1/C2/C4/C5). On macOS, 18 of the 23 IDs ran for real on the Mac (not A7: active
 network; not C1/C2/C4/C5: no tenant), and the same cases also pass on the macOS runner. Nothing has run on a
 Windows 10/11 PC, a Windows Server with roles, a domain controller, a Microsoft 365 tenant, a
 Linux desktop or any computer with root/sudo: that is the hand-test list below.
+
+## B5 Disk space report (added 2026-11-09)
+
+`endpoint-systems/diagnostics/storage/Get-DiskSpaceReport.ps1` (Windows) and `get-disk-space-report.sh`
+(macOS, Linux), read-only; deletes nothing.
+
+- **Checks:** every fixed / local volume (WARN under 15 % or 20 GB free, FAIL under 5 % or 5 GB;
+  volumes under 50 GB such as EFI and /boot are judged on the percentage only, otherwise a 1 GB
+  boot partition would always warn); the largest folders one and two levels under the user
+  profile / home folder and the system drive, time-limited (`-TimeLimitSeconds` / `--time-limit`,
+  default 60: the folder walk stops on time and says what it could not finish); reclaimable space
+  measured but never deleted (Windows: temp folders, Windows Update cache, Recycle Bin,
+  Windows.old, Delivery Optimization, crash dumps and error reports; macOS: user caches, Trash,
+  iPhone/iPad backups, Xcode data; Linux: package caches, systemd journal, Trash, ~/.cache, disabled
+  snap revisions); disk health without extra tools (Windows: Get-PhysicalDisk, reliability index,
+  disk errors in the System log; macOS: SMART via diskutil; Linux: SMART only if smartctl is
+  installed and run with sudo, plus kernel I/O errors); "What to do": the space needed, then the
+  cleanup steps biggest first (items of 100 MB or more), the Windows Update cache step pointing to
+  D1, a backup step first when a disk is failing.
+- **Tested:** macOS run for real on this Mac (no sudo: the Trash is reported as not readable
+  without Full Disk Access; `~/Library` did not finish in 10-30 s, which the output names).
+  Windows: `tests/Test-DiskSpaceReportWindowsLogic.ps1` (30 checks; in the harness on 5.1 and 7)
+  runs the real folder walk on a fake drive with sparse files, mocked volumes and health, and checks
+  nothing was deleted; plus a CI runtime case. Linux: stubbed cases in
+  `tests/bash/test-scripts-mocked.sh` with real `du` on a fake root (volumes, folders, a symbolic
+  link not followed, package cache, journal, Trash, snaps, kernel I/O errors, step order, nothing
+  deleted, the range message); plus a CI runtime case.
+- **Found while testing:** a stopped `du` loses its buffered output, so the first version reported
+  no folders when the time limit hit; the bash version now measures one top-level folder at a time
+  and names the unfinished ones. Empty fields collapsed in a tab-separated `read`, which shifted the
+  cleanup text; the field that can be empty is now last.
+
+Hand tests (record the run time and whether the folder sizes match the system's own storage view):
+
+```powershell
+# Windows PC, once normal and once as administrator
+.\endpoint-systems\diagnostics\storage\Get-DiskSpaceReport.ps1 -OutputPath $o
+.\endpoint-systems\diagnostics\storage\Get-DiskSpaceReport.ps1 -TimeLimitSeconds 300
+.\endpoint-systems\diagnostics\storage\Get-DiskSpaceReport.ps1 -TimeLimitSeconds 5    # plain message, exit 1
+```
+
+```bash
+# macOS (once without sudo, once with sudo and Full Disk Access for Terminal) and real Linux
+bash endpoint-systems/diagnostics/storage/get-disk-space-report.sh --output "$o"
+sudo bash endpoint-systems/diagnostics/storage/get-disk-space-report.sh --time-limit 300
+```
+
+Check: volumes match Settings > System > Storage / About This Mac > Storage / `df -h`; the largest
+folders match Explorer / Finder (Get Info) / `du -sh`; reclaimable sizes match Disk Cleanup /
+Storage Sense; nothing was deleted (sizes are the same on a second run); Linux with sudo and
+smartmontools shows SMART; a nearly full volume gives the "needs about N GB" first step.
 
 ## C4 Microsoft 365 security posture (added 2026-11-02)
 
