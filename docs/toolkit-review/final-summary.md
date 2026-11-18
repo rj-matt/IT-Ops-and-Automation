@@ -98,8 +98,9 @@ Linux desktop or any computer with root/sudo: that is the hand-test list below.
 - **Checks:** every fixed / local volume (WARN under 15 % or 20 GB free, FAIL under 5 % or 5 GB;
   volumes under 50 GB such as EFI and /boot are judged on the percentage only, otherwise a 1 GB
   boot partition would always warn); the largest folders one and two levels under the user
-  profile / home folder and the system drive, time-limited (`-TimeLimitSeconds` / `--time-limit`,
-  default 60: the folder walk stops on time and says what it could not finish); reclaimable space
+  profile / home folder and the system drive, time-limited (`-ScanSeconds` / `--scan-seconds`,
+  10-600, default 60; the earlier names `-TimeLimitSeconds` / `--time-limit` still work: the folder
+  walk stops on time, says what it could not finish and names the setting to raise); reclaimable space
   measured but never deleted (Windows: temp folders, Windows Update cache, Recycle Bin,
   Windows.old, Delivery Optimization, crash dumps and error reports; macOS: user caches, Trash,
   iPhone/iPad backups, Xcode data; Linux: package caches, systemd journal, Trash, ~/.cache, disabled
@@ -126,14 +127,14 @@ Hand tests (record the run time and whether the folder sizes match the system's 
 ```powershell
 # Windows PC, once normal and once as administrator
 .\endpoint-systems\diagnostics\storage\Get-DiskSpaceReport.ps1 -OutputPath $o
-.\endpoint-systems\diagnostics\storage\Get-DiskSpaceReport.ps1 -TimeLimitSeconds 300
-.\endpoint-systems\diagnostics\storage\Get-DiskSpaceReport.ps1 -TimeLimitSeconds 5    # plain message, exit 1
+.\endpoint-systems\diagnostics\storage\Get-DiskSpaceReport.ps1 -ScanSeconds 300
+.\endpoint-systems\diagnostics\storage\Get-DiskSpaceReport.ps1 -ScanSeconds 601    # plain message, exit 1
 ```
 
 ```bash
 # macOS (once without sudo, once with sudo and Full Disk Access for Terminal) and real Linux
 bash endpoint-systems/diagnostics/storage/get-disk-space-report.sh --output "$o"
-sudo bash endpoint-systems/diagnostics/storage/get-disk-space-report.sh --time-limit 300
+sudo bash endpoint-systems/diagnostics/storage/get-disk-space-report.sh --scan-seconds 300
 ```
 
 Check: volumes match Settings > System > Storage / About This Mac > Storage / `df -h`; the largest

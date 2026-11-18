@@ -1435,7 +1435,7 @@ stub "$BIN" snap 'printf "Name Version Rev Tracking Publisher Notes\nfirefox 131
 files_before=$(find "$FAKE" -type f | sort | cksum)
 OUT="$WORK/b5.txt"
 PATH="$WORK/b5/bin:$SYS_PATH" MSP_TEST_ROOT="$FAKE" TMPDIR="$WORK/b5" NO_COLOR=1 HOME="$B5HOME" \
-    "$BASH" "$REPO/$B5" --time-limit 30 --top 5 --output "$WORK/b5/out" </dev/null >"$OUT" 2>&1
+    "$BASH" "$REPO/$B5" --scan-seconds 30 --top 5 --output "$WORK/b5/out" </dev/null >"$OUT" 2>&1
 printf '%s\n' "$?" >"$OUT.rc"
 check 'B5: exit 0' "$OUT.rc" '^0$'
 check 'B5: / at 10 % free = WARN' "$OUT" '\[WARN\] +Disk space / - /: 50\.0 GB free of 500\.0 GB \(10 % free\)'
@@ -1458,9 +1458,20 @@ b5json=$(find "$WORK/b5/out" -name 'get-disk-space-report_*.json' 2>/dev/null | 
 check_exists 'B5: JSON written' "$b5json"
 [ -n "$b5json" ] && check 'B5: Reclaimable table' "$b5json" '"Item":"System journal","SizeGB":"3\.20"'
 OUT="$WORK/b5-range.txt"
+run_script b5 "$B5" "$OUT" --scan-seconds 601
+check 'B5: --scan-seconds 601 = exit 1' "$OUT.rc" '^1$'
+check 'B5: plain range message' "$OUT" '--scan-seconds must be between 10 and 600 \(you gave 601\)'
+OUT="$WORK/b5-alias.txt"
 run_script b5 "$B5" "$OUT" --time-limit 5
-check 'B5: --time-limit 5 = exit 1' "$OUT.rc" '^1$'
-check 'B5: plain range message' "$OUT" '--time-limit must be between 10 and 600 \(you gave 5\)'
+check 'B5: --time-limit (earlier name) still works' "$OUT" '--scan-seconds must be between 10 and 600 \(you gave 5\)'
+# A folder du cannot finish in time: named, with the setting to raise.
+mkdir -p "$B5HOME/Huge"
+stub "$BIN" du 'case "$*" in *Huge*) /bin/sleep 8 ;; esac; exec '"$(command -v du)"' "$@"'
+OUT="$WORK/b5-slow.txt"
+PATH="$WORK/b5/bin:$SYS_PATH" MSP_TEST_ROOT="$FAKE" TMPDIR="$WORK/b5" NO_COLOR=1 HOME="$B5HOME" \
+    "$BASH" "$REPO/$B5" --scan-seconds 10 </dev/null >"$OUT" 2>&1
+check 'B5: unfinished folder named with --scan-seconds' "$OUT" 'Largest folders: Home folder - .*Not finished within --scan-seconds 10 \(5 s for this place\): Huge, .*\. Run it again with a higher --scan-seconds \(up to 600\)'
+rm -f "$BIN/du"
 
 # =========================================================================================
 # B6 get-performance-snapshot.sh (Linux): the sleep stub advances the fake /proc counters

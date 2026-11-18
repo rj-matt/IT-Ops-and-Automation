@@ -151,7 +151,7 @@ function Assert-Finding {
 }
 
 try {
-    $r = Invoke-Mocked 'bad' $bad @('-TimeLimitSeconds', '30', '-TopFolders', '5')
+    $r = Invoke-Mocked 'bad' $bad @('-ScanSeconds', '30', '-TopFolders', '5')
     Assert-True 'bad: exit 0' ($r.Code -eq 0) $r.Console
     Assert-True 'bad: JSON written' ($null -ne $r.Result) $r.Console
     Assert-True 'bad: no ERROR findings' (@($r.Result.Findings | Where-Object { $_.Status -eq 'ERROR' }).Count -eq 0) ((@($r.Result.Findings | Where-Object { $_.Status -eq 'ERROR' } | ForEach-Object { '{0}: {1}' -f $_.Check, $_.Detail })) -join '; ')
@@ -187,8 +187,28 @@ try {
     $steps = @($r.Result.Data.NextSteps | Sort-Object { [int]$_.Step } | ForEach-Object { [string]$_.Action })
     Assert-True 'good: no "needs more space" step' (@($steps | Where-Object { $_ -match 'needs about' -or $_ -match '^Back up' }).Count -eq 0) ($steps -join ' | ')
 
-    $r = Invoke-Mocked 'range' $good @('-TimeLimitSeconds', '5')
-    Assert-True '-TimeLimitSeconds 5: plain message, exit 1' ($r.Code -eq 1 -and $r.Console.Contains('-TimeLimitSeconds must be between 10 and 600 (you gave 5)')) $r.Console
+    $r = Invoke-Mocked 'range' $good @('-ScanSeconds', '601')
+    Assert-True '-ScanSeconds 601: plain message, exit 1' ($r.Code -eq 1 -and $r.Console.Contains('-ScanSeconds must be between 10 and 600 (you gave 601)')) $r.Console
+
+    # The earlier name still works and binds as -ScanSeconds.
+    $r = Invoke-Mocked 'alias' $good @('-TimeLimitSeconds', '30')
+    Assert-True '-TimeLimitSeconds (earlier name) still works' ($r.Code -eq 0 -and [string]$r.Result.Parameters.ScanSeconds -eq '30') ('exit {0}, ScanSeconds={1}' -f $r.Code, $r.Result.Parameters.ScanSeconds)
+
+    # A scan that does not finish: the clock moves a second on every Get-Date call, so the
+    # profile's half of -ScanSeconds 10 runs out partway; the note names the setting.
+    $slowClock = @'
+$global:FakeNow = Microsoft.PowerShell.Utility\Get-Date
+function Get-Date {
+    [CmdletBinding()] param([Parameter(Position = 0)]$Date, [string]$Format)
+    if ($PSBoundParameters.Count -gt 0) { return Microsoft.PowerShell.Utility\Get-Date @PSBoundParameters }
+    $global:FakeNow = $global:FakeNow.AddSeconds(1)
+    return $global:FakeNow
+}
+'@
+    $r = Invoke-Mocked 'unfinished' ("{0}`n{1}" -f $good, $slowClock) @('-ScanSeconds', '10')
+    $f = @($r.Result.Findings | Where-Object { $_.Check -eq 'Largest folders: User profile' }) | Select-Object -First 1
+    Assert-True 'unfinished scan: note names -ScanSeconds and its maximum' ($r.Code -eq 0 -and [string]$f.Detail -match 'did not finish within -ScanSeconds 10; sizes marked "at least" are minimums\. Run it again with a higher -ScanSeconds \(up to 600\)') ([string]$f.Detail)
+    Assert-True 'unfinished scan: unfinished folders are marked "at least"' (@($r.Result.Data.LargestFolders | Where-Object { $_.Place -eq 'User profile' -and $_.AtLeast }).Count -gt 0)
 }
 finally {
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue

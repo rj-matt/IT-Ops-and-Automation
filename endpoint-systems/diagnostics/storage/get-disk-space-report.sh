@@ -5,12 +5,14 @@
 # and the cleanup steps to take by hand. Deletes nothing. The Windows version is
 # Get-DiskSpaceReport.ps1 (same checks and finding IDs).
 #
-# Usage:  bash get-disk-space-report.sh [--time-limit SECONDS] [--top N] [--output DIR] [--help]
+# Usage:  bash get-disk-space-report.sh [--scan-seconds SECONDS] [--top N] [--output DIR] [--help]
 #
 # Options:
-#   --time-limit SECONDS  Total time for measuring folders (10-600, default 60): half for the home
-#                         folder, the rest for the system volume; each reclaimable item gets up
-#                         to 20 seconds of its own.
+#   --scan-seconds SECONDS  How long the folder scan may take in total (10-600, default 60):
+#                         half for the home folder, the rest for the system volume. Give it
+#                         more on a big disk; folders it could not finish are named, with this
+#                         setting. Each reclaimable item gets up to 20 seconds of its own.
+#                         --time-limit (the earlier name) still works.
 #   --top N               How many of the largest folders to list for each place (5-50, default 10).
 #   --output DIR          Also save results as JSON and CSV (toolkit schema 2.0) with Volumes,
 #                         LargestFolders, Reclaimable and NextSteps tables.
@@ -34,7 +36,7 @@
 #
 # Examples:
 #   bash get-disk-space-report.sh
-#   bash get-disk-space-report.sh --time-limit 180 --output ~/Desktop/Ticket123
+#   bash get-disk-space-report.sh --scan-seconds 300 --output ~/Desktop/Ticket123
 #
 # Purpose       : "Where did the disk space go, and what can safely be cleaned?"
 # Use Case      : Low disk space warnings, updates failing for lack of space, slow computers.
@@ -43,7 +45,7 @@
 # Prerequisites : macOS 12+ or Linux | bash 3.2+ | root: No (sudo measures other users' and
 #                 system folders completely; Linux SMART needs sudo and smartctl). macOS: the
 #                 Trash and iPhone backups need Full Disk Access for Terminal to be measured.
-# Version       : 1.0.0
+# Version       : 1.1.0
 # Limitations   : Sizes are du's disk usage of what this account can read. A walk stopped by the
 #                 time limit is a minimum. MSP_TEST_ROOT (development tests only) prefixes the
 #                 system paths read.
@@ -922,9 +924,9 @@ msp_complete() {
 #endregion MSPHelper:Core
 #endregion MSPToolkit (generated)
 
-SCRIPT_VERSION='1.0.0'
+SCRIPT_VERSION='1.1.0'
 OUTPUT=''
-TIME_LIMIT=60
+SCAN_SECONDS=60
 TOP=10
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -933,8 +935,8 @@ while [ $# -gt 0 ]; do
             [ -n "$OUTPUT" ] || { printf 'Missing folder after --output\n' >&2; exit 2; }
             shift 2
             ;;
-        --time-limit)
-            TIME_LIMIT=${2-}
+        --scan-seconds | --time-limit)
+            SCAN_SECONDS=${2-}
             shift 2
             ;;
         --top)
@@ -953,7 +955,7 @@ while [ $# -gt 0 ]; do
 done
 
 [ -n "$OUTPUT" ] && msp_param Output "$OUTPUT"
-msp_param TimeLimit "$TIME_LIMIT"
+msp_param ScanSeconds "$SCAN_SECONDS"
 msp_param Top "$TOP"
 msp_init 'get-disk-space-report' "$SCRIPT_VERSION" 'B5' 'Read-Only' 'Disk space: volumes, largest folders, reclaimable space, disk health (read-only; deletes nothing)' \
     'other users'"'"' and system folders (complete sizes), SMART on Linux'
@@ -968,7 +970,7 @@ check_range() {
         --rec "Run it again with --$1 set to a number from $3 to $4, or leave it out to use the default."
     range_ok=0
 }
-check_range 'time-limit' "$TIME_LIMIT" 10 600
+check_range 'scan-seconds' "$SCAN_SECONDS" 10 600
 check_range 'top' "$TOP" 5 50
 if [ "$range_ok" -eq 0 ]; then
     msp_complete "$OUTPUT"
@@ -1100,7 +1102,7 @@ largest_folders() {
     if [ -n "$unfinished" ]; then
         local shown more
         shown=$(printf '%s\n' "$unfinished" | awk -F ', ' '{ n = (NF < 8 ? NF : 8); for (i = 1; i <= n; i++) printf "%s%s", (i > 1 ? ", " : ""), $i; if (NF > 8) printf " and %d more", NF - 8 }')
-        note=" Not finished within the $secs-second time limit (more time: --time-limit): $shown."
+        note=" Not finished within --scan-seconds $SCAN_SECONDS ($secs s for this place): $shown. Run it again with a higher --scan-seconds (up to 600)."
     fi
     [ "$MSP_IS_ADMIN" = 'true' ] || note="$note Without sudo, folders this account cannot read are not counted."
     if [ -z "$top" ]; then
@@ -1120,9 +1122,9 @@ $top
 EOF
     msp_finding --status INFO --category 'Folders' --check "Largest folders: $place" --detail "$dir: $text.$note"
 }
-HALF=$((TIME_LIMIT / 2))
+HALF=$((SCAN_SECONDS / 2))
 msp_check 'Folders' 'Largest folders: Home folder' largest_folders 'Home folder' "$HOME" "$HALF"
-msp_check 'Folders' 'Largest folders: System volume' largest_folders 'System volume' "$ROOT$SYSTEM_MOUNT" "$((TIME_LIMIT - HALF))"
+msp_check 'Folders' 'Largest folders: System volume' largest_folders 'System volume' "$ROOT$SYSTEM_MOUNT" "$((SCAN_SECONDS - HALF))"
 
 # =========================================================================================
 msp_section 'Reclaimable space (measured, not deleted)'

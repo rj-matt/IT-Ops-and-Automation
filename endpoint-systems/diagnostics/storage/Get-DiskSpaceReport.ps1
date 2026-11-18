@@ -12,7 +12,7 @@
                           = FAIL, less than 15 % or 20 GB = WARN. Volumes under 50 GB (EFI,
                           recovery) are judged on the percentage only.
       Largest folders     The biggest folders one and two levels under the user profile and the
-                          system drive. The walk stops at -TimeLimitSeconds (default 60), so it
+                          system drive. The walk stops at -ScanSeconds (default 60), so it
                           never hangs on a huge disk; folders it could not finish are marked
                           "at least". Junctions and symbolic links are not followed.
       Reclaimable space   Measured, never deleted: your and Windows' temporary files, the Windows
@@ -25,9 +25,11 @@
                           the System log (last 7 days).
       What to do          Cleanup steps by hand, biggest first.
 
-.PARAMETER TimeLimitSeconds
-    Total time for measuring folders (10-600, default 60): half for the user profile, the rest
-    for the system drive; each reclaimable item has its own share of up to 20 seconds.
+.PARAMETER ScanSeconds
+    How long the folder scan may take in total (10-600 seconds, default 60): half for the user
+    profile, the rest for the system drive. Give it more on a big disk; folders it could not
+    finish are marked "at least" and the result names this setting. Each reclaimable item has its
+    own share of up to 20 seconds. -TimeLimitSeconds (the earlier name) still works.
 
 .PARAMETER TopFolders
     How many of the largest folders to list for each place (5-50, default 10).
@@ -40,7 +42,7 @@
     powershell.exe -ExecutionPolicy Bypass -File .\Get-DiskSpaceReport.ps1
 
 .EXAMPLE
-    .\Get-DiskSpaceReport.ps1 -TimeLimitSeconds 180 -OutputPath C:\Temp\Ticket123
+    .\Get-DiskSpaceReport.ps1 -ScanSeconds 300 -OutputPath C:\Temp\Ticket123
 
 .NOTES
     Purpose       : "Where did the disk space go, and what can safely be cleaned?"
@@ -50,7 +52,7 @@
     Prerequisites : Windows 10/11 or Server 2016+ | Windows PowerShell 5.1 or PowerShell 7 |
                     Admin: No (administrator measures Windows' own temp, Delivery Optimization and
                     error-report folders completely, and other users' Recycle Bins)
-    Version       : 1.0.0
+    Version       : 1.1.0
     Limitations   : Folder sizes count file sizes (not space on disk: compressed and sparse files
                     and hard links are counted at their full size). OneDrive files that are online
                     only count as their full size too. A folder walk stopped by the time limit is
@@ -59,7 +61,7 @@
 #Requires -Version 5.1
 [CmdletBinding()]
 param(
-    [int]$TimeLimitSeconds = 60,
+    [Alias('TimeLimitSeconds')][int]$ScanSeconds = 60,
     [int]$TopFolders = 10,
     [string]$OutputPath
 )
@@ -710,12 +712,12 @@ function Complete-MSPRun {
 #endregion MSPHelper:Core
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '1.0.0'
+$ScriptVersion = '1.1.0'
 Initialize-MSPRun -ScriptName 'Get-DiskSpaceReport' -ScriptVersion $ScriptVersion -CheckId 'B5' -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'Disk space: volumes, largest folders, reclaimable space, disk health (read-only; deletes nothing)'
 # Number ranges are checked here, not with [ValidateRange], so a wrong value gets a plain message
 # and a clean exit 1 instead of a parameter-binding error.
-if (-not (Test-MSPParameterRange -Bound $PSBoundParameters -Range ([ordered]@{ TimeLimitSeconds = 10, 600; TopFolders = 5, 50 }))) {
+if (-not (Test-MSPParameterRange -Bound $PSBoundParameters -Range ([ordered]@{ ScanSeconds = 10, 600; TopFolders = 5, 50 }))) {
     Complete-MSPRun -OutputPath $OutputPath
     exit 1
 }
@@ -853,8 +855,8 @@ $folderRows = New-Object System.Collections.Generic.List[object]
 $profileDir = [string]$env:USERPROFILE
 $start = Get-Date
 foreach ($place in @(
-        @{ Name = 'User profile'; Path = $profileDir; Deadline = $start.AddSeconds($TimeLimitSeconds / 2) },
-        @{ Name = 'System drive'; Path = $systemRoot; Deadline = $start.AddSeconds($TimeLimitSeconds) })) {
+        @{ Name = 'User profile'; Path = $profileDir; Deadline = $start.AddSeconds($ScanSeconds / 2) },
+        @{ Name = 'System drive'; Path = $systemRoot; Deadline = $start.AddSeconds($ScanSeconds) })) {
     Invoke-MSPCheck -Name ('Largest folders: {0}' -f $place.Name) -Category 'Folders' -ScriptBlock {
         if (-not $place.Path -or -not (Test-Path -LiteralPath $place.Path)) { Skip-MSPCheck -Reason ('{0} not found ({1}).' -f $place.Name, $place.Path) }
         $rows = @(Get-LargestFolder -Root $place.Path -Place $place.Name -Deadline $place.Deadline)
@@ -870,7 +872,7 @@ foreach ($place in @(
                     '{0} {1}{2}{3}' -f (Split-Path $f.Folder -Leaf), $(if ($f.Partial) { 'at least ' } else { '' }), (Format-Size $f.Bytes), $inside
                 })) -join '; '
         $note = ''
-        if ($partial) { $note = (' The {0}-second time limit stopped the walk; sizes marked "at least" are minimums (more time: -TimeLimitSeconds).' -f [int]($TimeLimitSeconds / 2)) }
+        if ($partial) { $note = (' The folder scan did not finish within -ScanSeconds {0}; sizes marked "at least" are minimums. Run it again with a higher -ScanSeconds (up to 600).' -f $ScanSeconds) }
         Add-MSPFinding -Check ('Largest folders: {0}' -f $place.Name) -Category 'Folders' -Status INFO -Detail ('{0}: {1}.{2}' -f $place.Path, $text, $note)
     }
 }

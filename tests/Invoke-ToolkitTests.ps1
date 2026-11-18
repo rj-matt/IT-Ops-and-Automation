@@ -652,9 +652,9 @@ else {
         @{ Platform = 'Windows'; Name = 'B2 -Passive (configuration only, nothing sent)'; Script = $b2ps; Args = @('-Passive'); Expect = @(0) }
         @{ Platform = 'Windows'; Name = 'B3 recent critical errors (48 h)'; Script = $b3ps; Args = @(); Expect = @(0) }
         @{ Platform = 'Windows'; Name = 'C3 suspicious activity triage'; Script = "$ep/Get-SuspiciousActivityReport.ps1"; Args = @(); Expect = @(0) }
-        @{ Platform = 'Windows'; Name = 'B5 disk space (20 s folder limit)'; Script = $b5ps; Args = @('-TimeLimitSeconds', '20'); Expect = @(0) }
-        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'B5 disk space (macOS, 20 s folder limit)'; Script = $b5sh; Args = @('--time-limit', '20'); Expect = @(0); MustContain = 'deleted nothing' }
-        @{ Platform = 'Linux'; Name = 'B5 disk space (Linux, 20 s folder limit)'; Script = $b5sh; Args = @('--time-limit', '20'); Expect = @(0); MustContain = 'deleted nothing' }
+        @{ Platform = 'Windows'; Name = 'B5 disk space (20 s folder limit)'; Script = $b5ps; Args = @('-ScanSeconds', '20'); Expect = @(0) }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'B5 disk space (macOS, 20 s folder limit)'; Script = $b5sh; Args = @('--scan-seconds', '20'); Expect = @(0); MustContain = 'deleted nothing' }
+        @{ Platform = 'Linux'; Name = 'B5 disk space (Linux, 20 s folder limit)'; Script = $b5sh; Args = @('--scan-seconds', '20'); Expect = @(0); MustContain = 'deleted nothing' }
         @{ Platform = 'Windows'; Name = 'B6 performance snapshot (10 s)'; Script = $b6ps; Args = @('-SampleSeconds', '10'); Expect = @(0) }
         @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'B6 performance snapshot (macOS, 10 s)'; Script = $b6sh; Args = @('--seconds', '10'); Expect = @(0); MustContain = 'changed nothing' }
         @{ Platform = 'Linux'; Name = 'B6 performance snapshot (Linux, 10 s)'; Script = $b6sh; Args = @('--seconds', '10'); Expect = @(0); MustContain = 'changed nothing' }
