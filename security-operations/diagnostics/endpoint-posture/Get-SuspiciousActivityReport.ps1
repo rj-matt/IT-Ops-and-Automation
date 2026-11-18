@@ -43,6 +43,12 @@
 .PARAMETER Days
     How far back "new" reaches for startup items, detections and accounts (1-90, default 14).
 
+.PARAMETER Rmm
+    RMM mode, for RMM agents such as Kaseya: no colours or prompts, the JSON result always saved
+    to %ProgramData%\MSP-Toolkit\results (macOS/Linux: /var/tmp/msp-toolkit/results; the newest
+    10 per script are kept), a one-line summary on stdout and an exit code to alert on: 0 OK,
+    1 WARN, 2 FAIL, 3 ERROR or not run. See the README, "Running from an RMM".
+
 .PARAMETER OutputPath
     Optional folder for JSON/CSV results (toolkit schema 2.0) with StartupItems,
     FlaggedProcesses and FlaggedConnections tables.
@@ -62,7 +68,7 @@
                     connections, Defender status and the Security log; changes nothing.
     Prerequisites : Windows PowerShell 5.1 | Admin: No (recommended: Yes, for the Security log,
                     Defender exclusions and other users' programs) | Modules: built-in only
-    Version       : 1.0.0
+    Version       : 1.1.0
     Limitations   : NOT an antivirus or EDR: no file scanning, no memory analysis, no behaviour
                     history. Signed malware and programs in Program Files are not flagged by
                     folder. Defender checks need Microsoft Defender (third-party antivirus:
@@ -73,12 +79,13 @@
 [CmdletBinding()]
 param(
     [int]$Days = 14,
+    [switch]$Rmm,
     [string]$OutputPath
 )
 
 #region MSPToolkit (generated) Sections=Core
 # DO NOT EDIT — regenerate with Sync-MSPEmbeddedHelper.ps1
-# Source: endpoint-systems/utilities/MSPToolkit.Common.psm1 | Sections: Core | SHA256: 9b60f112946d534cdf62d54c2ba379f6d0c23e528bab272bf78bbe2ee79d5296
+# Source: endpoint-systems/utilities/MSPToolkit.Common.psm1 | Sections: Core | SHA256: 922e6dc2d49a7c3ad222bc987d97a20ce96ecb38be30b1fe076eef6712a724c3
 #region MSPHelper:Core
 # --- Run state ---------------------------------------------------------------------------
 # One toolkit script = one "run": one log file, one findings list, one optional export.
@@ -131,6 +138,7 @@ function Get-MSPLogFolder {
 
 function Test-MSPIsAdmin {
     <# True when elevated: "Run as administrator" on Windows, root (sudo) on macOS/Linux. #>
+    if ($env:MSP_TEST_SERVICE_ACCOUNT -eq '1') { return $true }
     try {
         if ((Get-MSPPlatform) -ne 'Windows') { return ([string](& id -u) -eq '0') }
         $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -141,6 +149,115 @@ function Test-MSPIsAdmin {
         # If the OS cannot tell us, assume not elevated: admin-only checks are SKIPPED, nothing breaks.
         return $false
     }
+}
+
+function Test-MSPServiceAccount {
+    <#
+        True when running the way RMM agents run scripts: as SYSTEM (or LocalService /
+        NetworkService) on Windows, or as root with no signed-in technician (no SUDO_USER) on
+        macOS/Linux. Such an account has no user profile of its own, so per-user checks must cover
+        every user profile or say SKIPPED. MSP_TEST_SERVICE_ACCOUNT=1 (development tests only)
+        simulates it.
+    #>
+    if ($env:MSP_TEST_SERVICE_ACCOUNT -eq '1') { return $true }
+    try {
+        if ((Get-MSPPlatform) -ne 'Windows') { return ([string](& id -u) -eq '0' -and -not $env:SUDO_USER) }
+        return ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -in @('S-1-5-18', 'S-1-5-19', 'S-1-5-20'))
+    }
+    catch { return $false }
+}
+
+function Test-MSPRmmMode {
+    <# True in RMM mode (-Rmm, or MSP_TOOLKIT_RMM=1 in the environment). #>
+    return [bool]($script:MSPRun -and $script:MSPRun.Rmm)
+}
+
+function Get-MSPResultFolder {
+    <#
+        Where RMM mode saves results: %ProgramData%\MSP-Toolkit\results on Windows,
+        /var/tmp/msp-toolkit/results on macOS/Linux. MSP_TEST_RESULTS_ROOT (development tests
+        only) moves it.
+    #>
+    if ($env:MSP_TEST_RESULTS_ROOT) { return (Join-Path -Path $env:MSP_TEST_RESULTS_ROOT -ChildPath 'results') }
+    if ((Get-MSPPlatform) -eq 'Windows') { return (Join-Path -Path (Join-Path -Path $env:ProgramData -ChildPath 'MSP-Toolkit') -ChildPath 'results') }
+    return '/var/tmp/msp-toolkit/results'
+}
+
+function Protect-MSPResultFolder {
+    <#
+        Results hold device and user details: Windows - owner Administrators, access for only
+        Administrators and SYSTEM (plus the running account when it is neither, so it can keep
+        writing its own results), inheritance off; macOS/Linux - mode 700 (the running account,
+        normally root). Throws if the folder is a link or (macOS/Linux) belongs to another account,
+        so a folder planted by someone else in advance is never used.
+    #>
+    param([Parameter(Mandatory)][string]$Path)
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    if (-not $item.PSIsContainer -or ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+        throw ('{0} is a link or not a folder; it was not used.' -f $Path)
+    }
+    if ((Get-MSPPlatform) -ne 'Windows') {
+        & /bin/sh -c 'test -d "$1" && test ! -L "$1" && test -O "$1"' sh $Path
+        if ($LASTEXITCODE -ne 0) { throw ('{0} belongs to another account; it was not used.' -f $Path) }
+        & chmod 700 $Path
+        if ($LASTEXITCODE -ne 0) { throw ('Could not restrict {0}.' -f $Path) }
+        return
+    }
+    $acl = New-Object System.Security.AccessControl.DirectorySecurity
+    $acl.SetAccessRuleProtection($true, $false)
+    $sids = @('S-1-5-32-544', 'S-1-5-18')
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    if ($sids -notcontains $me) { $sids += $me }
+    foreach ($sid in $sids) {
+        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule((New-Object System.Security.Principal.SecurityIdentifier($sid)), 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow')
+        $acl.AddAccessRule($rule)
+    }
+    # Owner Administrators, so an account that created the folder in advance cannot change it back.
+    if ($sids.Count -eq 2) { $acl.SetOwner((New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544'))) }
+    Set-Acl -LiteralPath $Path -AclObject $acl -WhatIf:$false
+}
+
+function Initialize-MSPResultFolder {
+    <#
+        Creates the RMM results folder and its parent (MSP-Toolkit / msp-toolkit) as needed and
+        restricts both (Protect-MSPResultFolder). Returns the results folder; throws if either
+        folder cannot be used safely.
+    #>
+    $folder = Get-MSPResultFolder
+    $parent = Split-Path -Path $folder -Parent
+    foreach ($f in @($parent, $folder)) {
+        if (-not (Test-Path -LiteralPath $f)) {
+            if ((Get-MSPPlatform) -eq 'Windows') { $null = New-Item -ItemType Directory -Path $f -ErrorAction Stop -WhatIf:$false }
+            else { & /bin/sh -c 'umask 077 && mkdir "$1"' sh $f; if ($LASTEXITCODE -ne 0) { throw ('Could not create {0}.' -f $f) } }
+        }
+        Protect-MSPResultFolder -Path $f
+    }
+    return $folder
+}
+
+function Limit-MSPResultHistory {
+    <# Keeps the newest KEEP results of SCRIPT in FOLDER (RMM mode) and deletes the older ones. #>
+    param([Parameter(Mandatory)][string]$Folder, [Parameter(Mandatory)][string]$ScriptName, [int]$Keep = 10)
+    $files = @(Get-ChildItem -LiteralPath $Folder -Filter ('{0}_*.json' -f $ScriptName) -File -ErrorAction SilentlyContinue | Sort-Object LastWriteTime, Name -Descending)
+    foreach ($f in @($files | Select-Object -Skip $Keep)) {
+        Remove-Item -LiteralPath $f.FullName -Force -WhatIf:$false
+        Write-MSPLog -Message ('Removed old result {0} (keeping the newest {1})' -f $f.Name, $Keep)
+    }
+}
+
+function Get-MSPUserProfile {
+    <#
+        Windows: the real user profiles on this PC (no system or service profiles), with the folder
+        and whether the user's registry is loaded (signed in). Used by per-user checks when running
+        as SYSTEM, which has no profile of its own.
+    #>
+    $out = foreach ($p in @(Get-CimInstance -ClassName Win32_UserProfile -Filter 'Special = FALSE' -ErrorAction Stop)) {
+        if (-not $p.LocalPath) { continue }
+        $name = Split-Path -Path $p.LocalPath -Leaf
+        try { $name = (New-Object System.Security.Principal.SecurityIdentifier($p.SID)).Translate([System.Security.Principal.NTAccount]).Value } catch { $name = Split-Path -Path $p.LocalPath -Leaf }
+        [pscustomobject]@{ User = $name; Path = [string]$p.LocalPath; Sid = [string]$p.SID; Loaded = [bool]$p.Loaded }
+    }
+    return @($out)
 }
 
 function Get-MSPAdminTerm {
@@ -220,6 +337,9 @@ function Initialize-MSPRun {
 
     $user = [Environment]::UserName
     if ($platform -eq 'Windows') { $user = '{0}\{1}' -f $env:USERDOMAIN, $env:USERNAME }
+    # RMM mode: -Rmm on the script, or MSP_TOOLKIT_RMM=1 set by the RMM procedure.
+    $rmm = (@($Parameters.Keys) -contains 'Rmm' -and [bool]$Parameters['Rmm']) -or $env:MSP_TOOLKIT_RMM -eq '1'
+    if ($rmm -and (Get-Variable -Name PSStyle -ErrorAction SilentlyContinue)) { $PSStyle.OutputRendering = 'PlainText' }
     $shell = 'PowerShell {0}' -f $PSVersionTable.PSVersion
     if ($PSVersionTable.PSEdition -ne 'Core') { $shell = 'Windows PowerShell {0}' -f $PSVersionTable.PSVersion }
 
@@ -234,6 +354,8 @@ function Initialize-MSPRun {
         Host          = $hostName
         User          = $user
         IsAdmin       = (Test-MSPIsAdmin)
+        IsServiceAccount = (Test-MSPServiceAccount)
+        Rmm           = [bool]$rmm
         StartTime     = $start
         EndTime       = $null
         Parameters    = $paramCopy
@@ -248,6 +370,7 @@ function Initialize-MSPRun {
     Write-MSPLog -Message ('Host={0}; User={1}; Elevated={2}; Platform={3}; OS={4}; Shell={5}; Risk={6}' -f `
             $run.Host, $run.User, $run.IsAdmin, $run.Platform, $run.OSVersion, $run.Shell, $RiskLevel)
     Write-MSPLog -Message ('Parameters: {0}' -f (Format-MSPParameter -Parameters $paramCopy))
+    if ($run.Rmm) { Write-MSPLog -Message ('RMM mode; service account (no user profile): {0}' -f $run.IsServiceAccount) }
 
     $adminTerm = Get-MSPAdminTerm
     $adminText = 'No'
@@ -261,6 +384,8 @@ function Initialize-MSPRun {
     Write-Host (' User    : {0}   Elevated ({1}): {2}' -f $run.User, $adminTerm, $adminText) -ForegroundColor Gray
     Write-Host (' Started : {0}' -f $start.ToString('yyyy-MM-dd HH:mm:ss')) -ForegroundColor Gray
     if ($logPath) { Write-Host (' Log     : {0}' -f $logPath) -ForegroundColor Gray }
+    if ($run.Rmm) { Write-Host (' Mode    : RMM (no prompts; result saved to {0}; exit 0 OK, 1 WARN, 2 FAIL, 3 ERROR or not run)' -f (Get-MSPResultFolder)) -ForegroundColor Gray }
+    if ($run.IsServiceAccount) { Write-Host ' Account : SYSTEM / root with no signed-in user: per-user checks cover every user profile or say SKIPPED.' -ForegroundColor Gray }
     Write-Host $bar -ForegroundColor Cyan
     if (-not $run.IsAdmin) {
         Write-Host (' Not running as {0}. Checks that need it will show SKIPPED;' -f $adminTerm) -ForegroundColor DarkGray
@@ -647,7 +772,7 @@ function Export-MSPResult {
         (one row per finding) and ..._<Table>.csv for each attached data table.
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$OutputPath)
+    param([Parameter(Mandatory)][string]$OutputPath, [switch]$JsonOnly)
     $run = $script:MSPRun
     if (-not (Test-Path -LiteralPath $OutputPath)) {
         $null = New-Item -ItemType Directory -Path $OutputPath -Force -ErrorAction Stop -WhatIf:$false
@@ -658,6 +783,11 @@ function Export-MSPResult {
     $jsonPath = Join-Path -Path $folder -ChildPath ('{0}.json' -f $base)
     $json = Get-MSPResultObject | ConvertTo-Json -Depth 8
     [System.IO.File]::WriteAllText($jsonPath, $json, (New-Object System.Text.UTF8Encoding($false)))
+    if ($JsonOnly) {
+        Write-Host (' Result saved: {0}' -f $jsonPath) -ForegroundColor Gray
+        Write-MSPLog -Message ('Exported: {0}' -f $jsonPath)
+        return [pscustomobject]@{ Json = $jsonPath; FindingsCsv = $null; DataCsv = @() }
+    }
 
     # Same columns, in the same order, as the bash helper's findings CSV.
     $csvPath = Join-Path -Path $folder -ChildPath ('{0}_findings.csv' -f $base)
@@ -685,16 +815,36 @@ function Export-MSPResult {
     return [pscustomobject]@{ Json = $jsonPath; FindingsCsv = $csvPath; DataCsv = $dataPaths }
 }
 
+function Get-MSPRmmExitCode {
+    <#
+        RMM exit code: 3 could not run, 2 any FAIL, 1 any WARN, 3 any ERROR (with no FAIL or WARN),
+        0 only PASS / INFO / SKIPPED. A FAIL outranks an ERROR so a confirmed problem is never
+        reported as "check broken"; the summary line still shows the ERROR count.
+    #>
+    param([switch]$CouldNotRun)
+    $c = Get-MSPSummaryCount
+    if ($CouldNotRun) { return 3 }
+    if ($c['FAIL'] -gt 0) { return 2 }
+    if ($c['WARN'] -gt 0) { return 1 }
+    if ($c['ERROR'] -gt 0) { return 3 }
+    return 0
+}
+
 function Complete-MSPRun {
     <#
         Ends the run: prints the summary and ticket block, exports if -OutputPath was given,
         and writes the end time to the log. Findings never change the exit code; the exit
         code only says whether the script itself ran.
+        RMM mode: also saves the JSON result to the results folder (Get-MSPResultFolder; the
+        newest 10 per script are kept), prints the one-line summary "<CheckId> WARN=n FAIL=n
+        ERROR=n" as the last line on stdout, and ENDS THE SCRIPT with the RMM exit code
+        (Get-MSPRmmExitCode). -CouldNotRun marks a run that stopped before its checks.
     #>
     [CmdletBinding()]
     param(
         [string]$OutputPath,
-        [switch]$PassThru
+        [switch]$PassThru,
+        [switch]$CouldNotRun
     )
     $run = $script:MSPRun
     $run.EndTime = Get-Date
@@ -717,19 +867,36 @@ function Complete-MSPRun {
         Write-Host (' Log file: {0}' -f $run.LogPath) -ForegroundColor DarkGray
     }
     Write-Host ''
+    if ($run.Rmm) {
+        $code = Get-MSPRmmExitCode -CouldNotRun:$CouldNotRun
+        try {
+            $folder = Initialize-MSPResultFolder
+            $saved = Export-MSPResult -OutputPath $folder -JsonOnly
+            if ((Get-MSPPlatform) -ne 'Windows') { & chmod 600 $saved.Json }
+            Limit-MSPResultHistory -Folder $folder -ScriptName $run.ScriptName
+        }
+        catch {
+            Write-Host (' Could not save the RMM result to "{0}": {1}' -f (Get-MSPResultFolder), $_.Exception.Message)
+            Write-MSPLog -Level ERROR -Message ('RMM result not saved: {0}' -f $_.Exception.Message)
+            $code = 3
+        }
+        Write-MSPLog -Message ('RMM exit code {0}' -f $code)
+        [Console]::Out.WriteLine(('{0} WARN={1} FAIL={2} ERROR={3}' -f $run.CheckId, $counts['WARN'], $counts['FAIL'], $counts['ERROR']))
+        exit $code
+    }
     if ($PassThru) { return (Get-MSPResultObject) }
 }
 #endregion MSPHelper:Core
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '1.0.0'
+$ScriptVersion = '1.1.0'
 Initialize-MSPRun -ScriptName 'Get-SuspiciousActivityReport' -ScriptVersion $ScriptVersion -CheckId 'C3' -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'First-look triage for signs of compromise (read-only; not an antivirus or EDR)' `
     -AdminSections @('Security log', 'Defender exclusions', 'other users'' programs')
 # Number ranges are checked here, not with [ValidateRange], so a wrong value gets a plain message
 # and a clean exit 1 instead of a parameter-binding error.
 if (-not (Test-MSPParameterRange -Bound $PSBoundParameters -Range ([ordered]@{ Days = 1, 90 }))) {
-    Complete-MSPRun -OutputPath $OutputPath
+    Complete-MSPRun -OutputPath $OutputPath -CouldNotRun
     exit 1
 }
 
@@ -796,6 +963,7 @@ Invoke-MSPCheck -Name 'Run keys' -Category 'Startup' -ScriptBlock {
     $keys = @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run', 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce',
         'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce',
         'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run', 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce')
+    if ($script:MSPRun.IsServiceAccount) { $keys = @($keys | Where-Object { $_ -notlike 'HKCU:*' }) }
     foreach ($key in $keys) {
         $values = Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue
         if (-not $values) { continue }
@@ -803,6 +971,24 @@ Invoke-MSPCheck -Name 'Run keys' -Category 'Startup' -ScriptBlock {
             if ($p.Name -like 'PS*') { continue }
             Add-StartupItem -Source ($key -replace '^(HK..):\\SOFTWARE\\(WOW6432Node\\)?Microsoft\\Windows\\CurrentVersion\\', '$1 ') -Name $p.Name -Command ([string]$p.Value)
         }
+    }
+    if ($script:MSPRun.IsServiceAccount) {
+        # SYSTEM's own HKCU is not a user's: read the Run keys of every signed-in user instead
+        # (a user's registry is only loaded while they are signed in).
+        $covered = New-Object System.Collections.Generic.List[string]
+        foreach ($u in @(Get-MSPUserProfile | Where-Object { $_.Loaded })) {
+            $covered.Add($u.User)
+            foreach ($leaf in 'Run', 'RunOnce') {
+                $values = Get-ItemProperty -LiteralPath ('Registry::HKEY_USERS\{0}\SOFTWARE\Microsoft\Windows\CurrentVersion\{1}' -f $u.Sid, $leaf) -ErrorAction SilentlyContinue
+                if (-not $values) { continue }
+                foreach ($p in $values.PSObject.Properties) {
+                    if ($p.Name -like 'PS*') { continue }
+                    Add-StartupItem -Source ('HKCU {0} ({1})' -f $leaf, $u.User) -Name $p.Name -Command ([string]$p.Value)
+                }
+            }
+        }
+        Add-MSPFinding -Check 'Users covered' -Category 'Startup' -Status INFO `
+            -Detail ('Running as {0}: per-user Run keys read for the users signed in now ({1}). Users who are signed out are not covered.' -f $script:MSPRun.User, $(if ($covered.Count) { $covered -join ', ' } else { 'none' }))
     }
 }
 
@@ -1056,6 +1242,12 @@ Invoke-MSPCheck -Name 'Hosts file' -Category 'Network' -ScriptBlock {
 }
 
 Invoke-MSPCheck -Name 'Proxy settings' -Category 'Network' -ScriptBlock {
+    # SYSTEM / root (an RMM agent) has no signed-in user's settings to read.
+    if ($script:MSPRun.IsServiceAccount) {
+        Add-MSPFinding -Check 'Proxy settings' -Category 'Network' -Status SKIPPED -Detail ('Not checked: running as {0}. The proxy is a per-user setting and needs a signed-in user.' -f $script:MSPRun.User) `
+            -Recommendation 'Run it as the signed-in user (for example an RMM procedure set to run as the logged-on user) to check it.'
+        return
+    }
     $ie = Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -ErrorAction SilentlyContinue
     $items = @()
     if ($ie -and [int]$ie.ProxyEnable -eq 1 -and $ie.ProxyServer) { $items += ('proxy {0}' -f $ie.ProxyServer) }

@@ -1624,6 +1624,176 @@ run_script bundle-flat "$BUNDLE" "$OUT" --passive --scan-lan
 check 'Bundle: --passive with --scan-lan refused (exit 2)' "$OUT.rc" '^2$'
 
 # =========================================================================================
+# RMM mode (--rmm), run as an RMM agent runs it: root with no signed-in technician
+# =========================================================================================
+# Permission bits: GNU stat first (BSD stat rejects -c; GNU stat -f means file system status).
+mode_of() { "$REAL_STAT" -c %a "$1" 2>/dev/null || "$REAL_STAT" -f %Lp "$1" 2>/dev/null; }
+run_rmm() {
+    # run_rmm ENV SCRIPT OUTFILE [ARGS...] - as run_script, but as root with no SUDO_USER (an RMM
+    # agent; detected, not simulated), HOME=/root, and the results folder in ENV/rr.
+    local env=$1 script=$2 out=$3
+    shift 3
+    PATH="$WORK/$env/bin:$SYS_PATH" MSP_TEST_ROOT="$WORK/$env/root" MSP_TEST_RESULTS_ROOT="$WORK/$env/rr" TMPDIR="$WORK/$env" HOME=/root \
+        "$BASH" "$REPO/$script" "$@" </dev/null >"$out" 2>&1
+    printf '%s\n' "$?" >"$out.rc"
+    tail -n 1 "$out" >"$out.last"
+}
+rmm_env() {
+    # rmm_env NAME - new_env as root, with two users (alice, bob) and their home folders.
+    new_env "$1"
+    stub "$BIN" id 'case "$1" in -u) echo 0 ;; -un) echo root ;; -Gn) echo root ;; *) echo "uid=0(root)" ;; esac'
+    mkdir -p "$FAKE/etc" "$FAKE/home/alice" "$FAKE/home/bob" "$FAKE/root"
+    printf 'root:x:0:0:root:/root:/bin/bash\nalice:x:1000:1000:Alice:/home/alice:/bin/bash\nbob:x:1001:1001:Bob:/home/bob:/bin/bash\nsvc:x:1002:1002::/home/svc:/usr/sbin/nologin\n' >"$FAKE/etc/passwd"
+    printf 'root:x:0:\nsudo:x:27:alice\n' >"$FAKE/etc/group"
+}
+df_line() { stub "$BIN" df "printf 'Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/nvme0n1p2 524288000 $1 $2 $3%% /\n'"; }
+
+# --- B5: exit codes 0 / 1 / 2 / 3, summary line, results folder --------------------------------
+rmm_env rmm-b5
+mb_file "$FAKE/home/alice/.cache/a.bin" 2
+mb_file "$FAKE/home/bob/.cache/b.bin" 3
+mb_file "$FAKE/home/bob/.local/share/Trash/files/old.zip" 1
+stub "$BIN" journalctl 'case "$*" in *--disk-usage*) echo "Archived and active journals take up 8.0M in the file system." ;; *-k*) : ;; esac'
+df_line 104857600 419430400 20
+OUT="$WORK/rmm-b5-ok.txt"
+run_rmm rmm-b5 "$B5" "$OUT" --rmm --scan-seconds 10
+RR="$WORK/rmm-b5/rr/results"
+check 'RMM B5 healthy: exit 0' "$OUT.rc" '^0$'
+check 'RMM B5: summary line last' "$OUT.last" '^B5 WARN=0 FAIL=0 ERROR=0$'
+check 'RMM B5: root with no SUDO_USER detected as an RMM agent' "$OUT" 'Account : .*no signed-in user'
+check 'RMM B5: mode shown' "$OUT" 'Mode +: RMM'
+check_not 'RMM B5: no colour codes' "$OUT" "$(printf '\033')"
+check 'RMM B5: home folder scan SKIPPED with the reason' "$OUT" '\[SKIPPED\] Largest folders: Home folder - Not checked: running as root'
+check 'RMM B5: users covered named (no service accounts)' "$OUT" "Users covered - Running as root: caches and Trash measured for every user \(alice, bob\)"
+check 'RMM B5: every user measured' "$OUT" 'User cache \(~/\.cache\) 5 MB'
+json=$(find "$RR" -name 'get-disk-space-report_*.json' 2>/dev/null | head -n 1)
+check_exists 'RMM B5: JSON in the results folder' "$json"
+check 'RMM B5: only JSON in the results folder' <(find "$RR" -type f ! -name '*.json' | wc -l | tr -d ' ') '^0$'
+check 'RMM B5: results folder 700' <(mode_of "$RR") '^700$'
+check 'RMM B5: parent folder 700' <(mode_of "$WORK/rmm-b5/rr") '^700$'
+[ -n "$json" ] && check 'RMM B5: result file 600' <(mode_of "$json") '^600$'
+df_line 471859200 52428800 90
+OUT="$WORK/rmm-b5-warn.txt"
+run_rmm rmm-b5 "$B5" "$OUT" --rmm --scan-seconds 10
+check 'RMM B5 10 % free (WARN): exit 1' "$OUT.rc" '^1$'
+check 'RMM B5 WARN: summary line' "$OUT.last" '^B5 WARN=[1-9][0-9]* FAIL=0 ERROR=0$'
+df_line 522190848 2097152 99
+OUT="$WORK/rmm-b5-fail.txt"
+run_rmm rmm-b5 "$B5" "$OUT" --rmm --scan-seconds 10
+check 'RMM B5 2 GB free (FAIL): exit 2' "$OUT.rc" '^2$'
+check 'RMM B5 FAIL: summary line' "$OUT.last" '^B5 WARN=[0-9]+ FAIL=[1-9][0-9]* ERROR=0$'
+OUT="$WORK/rmm-b5-range.txt"
+run_rmm rmm-b5 "$B5" "$OUT" --rmm --scan-seconds 601
+check 'RMM B5 out-of-range value (could not run): exit 3' "$OUT.rc" '^3$'
+check 'RMM B5 could not run: summary line still printed' "$OUT.last" '^B5 WARN=0 FAIL=0 ERROR=1$'
+OUT="$WORK/rmm-b5-usage.txt"
+run_rmm rmm-b5 "$B5" "$OUT" --rmm --no-such-option
+check 'RMM B5 unknown option: exit 3' "$OUT.rc" '^3$'
+OUT="$WORK/rmm-b5-env.txt"
+PATH="$WORK/rmm-b5/bin:$SYS_PATH" MSP_TEST_ROOT="$WORK/rmm-b5/root" MSP_TEST_RESULTS_ROOT="$WORK/rmm-b5/rr" TMPDIR="$WORK/rmm-b5" HOME=/root MSP_TOOLKIT_RMM=1 \
+    "$BASH" "$REPO/$B5" --scan-seconds 10 </dev/null >"$OUT" 2>&1
+printf '%s\n' "$?" >"$OUT.rc"
+check 'RMM B5: MSP_TOOLKIT_RMM=1 works like --rmm' <(printf '%s %s\n' "$(cat "$OUT.rc")" "$(tail -n 1 "$OUT")") '^2 B5 WARN=[0-9]+ FAIL=[1-9]'
+# Not an RMM agent: under sudo the signed-in technician's home is used as before.
+OUT="$WORK/rmm-b5-sudo.txt"
+PATH="$WORK/rmm-b5/bin:$SYS_PATH" MSP_TEST_ROOT="$WORK/rmm-b5/root" MSP_TEST_RESULTS_ROOT="$WORK/rmm-b5/rr-sudo" TMPDIR="$WORK/rmm-b5" HOME="$WORK/rmm-b5/root/home/alice" SUDO_USER=alice \
+    "$BASH" "$REPO/$B5" --rmm --scan-seconds 10 </dev/null >"$OUT" 2>&1
+check 'RMM B5 under sudo: not an agent, the home folder is scanned' "$OUT" 'Largest folders: Home folder - '
+check_not 'RMM B5 under sudo: no users-covered note' "$OUT" 'Users covered'
+
+# --- History: the newest 10 per script; other scripts left alone ------------------------------
+i=1
+while [ "$i" -le 11 ]; do
+    f="$RR/get-disk-space-report_OLDPC_202001$(printf '%02d' "$i")-000000.json"
+    printf '{}\n' >"$f"
+    touch -t "202001$(printf '%02d' "$i")0000" "$f"
+    i=$((i + 1))
+done
+printf '{}\n' >"$RR/get-performance-snapshot_OLDPC_20200101-000000.json"
+touch -t 201901010000 "$RR/get-performance-snapshot_OLDPC_20200101-000000.json"
+OUT="$WORK/rmm-b5-prune.txt"
+run_rmm rmm-b5 "$B5" "$OUT" --rmm --scan-seconds 10
+check 'RMM history: 10 results of the script kept' <(find "$RR" -name 'get-disk-space-report_*.json' | wc -l | tr -d ' ') '^10$'
+check 'RMM history: the oldest removed' <(find "$RR" -name 'get-disk-space-report_OLDPC_*.json' | wc -l | tr -d ' ') '^[0-9]$'
+check_exists 'RMM history: other scripts left alone' "$RR/get-performance-snapshot_OLDPC_20200101-000000.json"
+
+# --- A results folder planted in advance as a link is never used -------------------------------
+mkdir -p "$WORK/rmm-link/rr" "$WORK/rmm-link/elsewhere"
+cp -R "$WORK/rmm-b5/bin" "$WORK/rmm-b5/root" "$WORK/rmm-link/"
+ln -s "$WORK/rmm-link/elsewhere" "$WORK/rmm-link/rr/results"
+OUT="$WORK/rmm-link.txt"
+run_rmm rmm-link "$B5" "$OUT" --rmm --scan-seconds 10
+check 'RMM planted link: exit 3' "$OUT.rc" '^3$'
+check 'RMM planted link: nothing written through it' <(find "$WORK/rmm-link/elsewhere" -type f | wc -l | tr -d ' ') '^0$'
+check 'RMM planted link: summary line still printed' "$OUT.last" '^B5 WARN=[0-9]+ FAIL=[0-9]+ ERROR=[0-9]+$'
+
+# --- Remediation: B4 refuses in RMM mode without --force ---------------------------------------
+rmm_env rmm-b4
+CALLS="$WORK/rmm-b4/calls"
+: >"$CALLS"
+cat >"$BIN/systemctl" <<STUB
+#!/bin/sh
+case "\$*" in
+    *"show"*cups.service*) printf 'LoadState=loaded\nActiveState=active\nUnitFileState=enabled\nMainPID=100\n' ;;
+    *"show"*systemd-resolved.service*) printf 'LoadState=loaded\nActiveState=active\nUnitFileState=enabled\nMainPID=200\n' ;;
+    *restart*|*start*) echo "systemctl \$*" >>"$CALLS"; exit 0 ;;
+esac
+STUB
+chmod +x "$BIN/systemctl"
+OUT="$WORK/rmm-b4.txt"
+run_rmm rmm-b4 "$B4" "$OUT" --rmm
+check 'RMM B4 without --force: exit 3' "$OUT.rc" '^3$'
+check 'RMM B4 without --force: refusal names RMM mode' "$OUT" '\[SKIPPED\] Confirmation - No changes made: RMM mode never makes changes without --force'
+check_not 'RMM B4 without --force: nothing restarted' "$CALLS" 'restart'
+check 'RMM B4: summary line' "$OUT.last" '^B4 WARN=0 FAIL=0 ERROR=0$'
+OUT="$WORK/rmm-b4-force.txt"
+run_rmm rmm-b4 "$B4" "$OUT" --rmm --force
+check 'RMM B4 with --force: exit 0' "$OUT.rc" '^0$'
+check 'RMM B4 with --force: services restarted' "$CALLS" 'restart cups\.service'
+
+# --- Network: passive in RMM mode unless --active-network ------------------------------------
+OUT="$WORK/rmm-a2.txt"
+run_rmm a2-passive "$A2" "$OUT" --rmm
+check 'RMM A2: exit 0 or 1 (findings)' "$OUT.rc" '^[01]$'
+check 'RMM A2: passive, says how to scan' "$OUT" 'Network tests - RMM mode: passive \(ARP table only; nothing sent on the network\)\. Add --active-network'
+check_not 'RMM A2: no pinging' "$OUT" 'Pinging'
+OUT="$WORK/rmm-b2.txt"
+run_rmm b2-passive "$B2" "$OUT" --rmm
+check 'RMM B2: exit 0' "$OUT.rc" '^0$'
+check 'RMM B2: nothing sent' "$OUT" '\[SKIPPED\] Connectivity tests - Passive: nothing was sent'
+check 'RMM B2: says how to test' "$OUT" 'Add --active-network for the connection tests'
+OUT="$WORK/rmm-a7.txt"
+: >"$WORK/a7-router/curl-urls"
+run_rmm a7-router "$A7" "$OUT" --rmm
+check 'RMM A7 without --active-network: exit 3' "$OUT.rc" '^3$'
+check 'RMM A7: SKIPPED with the reason' "$OUT" '\[SKIPPED\] Router checks - Not run in RMM mode without --active-network'
+check 'RMM A7: summary line' "$OUT.last" '^A7 WARN=0 FAIL=0 ERROR=0$'
+check 'RMM A7: router not contacted' <(wc -l <"$WORK/a7-router/curl-urls" | tr -d ' ') '^0$'
+
+# --- Per-user checks as root with no signed-in technician -------------------------------------
+rmm_env rmm-a5
+mkdir -p "$FAKE/home/alice/.mozilla/firefox" "$FAKE/home/bob/.config/google-chrome"
+OUT="$WORK/rmm-a5.txt"
+run_rmm rmm-a5 "$A5" "$OUT" --rmm
+check 'RMM A5: summary line' "$OUT.last" '^A5 WARN=[0-9]+ FAIL=[0-9]+ ERROR=[0-9]+$'
+check 'RMM A5: every user covered and named, root left out' "$OUT" 'Users covered - Running as root: checked the browser profiles of 2 user\(s\): alice, bob\.'
+rmm_env rmm-a1
+OUT="$WORK/rmm-a1.txt"
+run_rmm rmm-a1 "$A1" "$OUT" --rmm
+check 'RMM A1: daily-account check SKIPPED with the reason' "$OUT" "\[SKIPPED\] Daily account has admin rights - Not checked: running as root"
+check 'RMM A1: summary line' "$OUT.last" '^A1 WARN=[0-9]+ FAIL=[0-9]+ ERROR=[0-9]+$'
+
+# --- Bundle: one summary line for the run; children in normal mode ----------------------------
+OUT="$WORK/rmm-bundle.txt"
+run_rmm a2-passive "$BUNDLE" "$OUT" --rmm --skip A1,A3,A4,A5,A6,A8 --output "$WORK/a2-passive/bundle-out"
+check 'RMM bundle: passive unless --active-network' "$OUT" 'Network tests - RMM mode: A2 reads the ARP table only and A7 \(router\) is not run'
+check 'RMM bundle: A7 not run' "$OUT" '\[SKIPPED\] get-router-security-check - Not run in RMM mode without --active-network'
+check 'RMM bundle: A2 completed (in normal mode)' "$OUT" '^  2 +A2 +get-home-network-map .*Completed$'
+check 'RMM bundle: one summary line, last' "$OUT.last" '^Bundle WARN=[0-9]+ FAIL=[0-9]+ ERROR=[0-9]+$'
+check 'RMM bundle: only the bundle printed a summary line' <(grep -cE '^[A-Za-z0-9]+ WARN=[0-9]+ FAIL=[0-9]+ ERROR=[0-9]+$' "$OUT") '^1$'
+check 'RMM bundle: a script WARN carried up (exit 1)' "$OUT.rc" '^1$'
+
+# =========================================================================================
 for f in "$WORK"/*/network-calls; do
     if [ -s "$f" ]; then FAILED=$((FAILED + 1)); printf 'FAIL: network stub called (%s):\n' "$f"; cat "$f"; else PASSED=$((PASSED + 1)); fi
 done

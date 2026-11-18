@@ -37,6 +37,11 @@
 #                               Needs PowerShell 7 (pwsh); without it, the command to run on
 #                               another computer is printed.
 #   --client NAME               Client/household name for the report title.
+#   --active-network  RMM mode only: run A2 in full and A7 (both send LAN traffic); otherwise
+#                 RMM mode behaves as --passive (--scan-lan and --online still apply).
+#   --rmm         RMM mode, for RMM agents: no colours or prompts, the JSON result saved to
+#                 /var/tmp/msp-toolkit/results, a one-line summary and an exit code to alert
+#                 on (0 OK, 1 WARN, 2 FAIL, 3 ERROR or not run). See the README.
 #   --help                      Show this help.
 #
 # Run order:
@@ -66,7 +71,7 @@
 # Risk Level    : Read-Only -- runs read-only scripts and writes result files only.
 # Prerequisites : macOS 12+ or Linux | bash 3.2+ | root: No (recommended: sudo, for complete
 #                 results) | The eight audit scripts must be present (see Run order)
-# Version       : 1.0.1
+# Version       : 1.1.0
 # Limitations   : Runs on the local computer only; repeat on each computer to audit. Per-script
 #                 output appears on screen as each one runs; each script's own log is in
 #                 ${TMPDIR:-/tmp}/msp-toolkit. The HTML report needs PowerShell 7, which is
@@ -78,7 +83,7 @@ MSP_SCRIPT_FILE=$0
 
 #region MSPToolkit (generated) Sections=Core
 # DO NOT EDIT — regenerate with Sync-MSPEmbeddedHelper.ps1
-# Source: endpoint-systems/utilities/msp-toolkit-common.sh | Sections: Core | SHA256: 7254aec8688b18c47620afce7827ff2104c3ce6df5f6ff626eeaf281011a6c25
+# Source: endpoint-systems/utilities/msp-toolkit-common.sh | Sections: Core | SHA256: 1673c650cfecef22e44429ccc14c47a6259ba98c6c09aaec7ad23bf4f2e2d501
 #region MSPHelper:Core
 # --- Run state ------------------------------------------------------------------------------
 # One toolkit script = one "run": one log file, one findings list, one optional export.
@@ -116,6 +121,14 @@ MSP_F_REC=()
 MSP_F_EVIDENCE=()
 MSP_DATA_COUNT=0
 MSP_DATA_NAMES=()
+# RMM mode (--rmm, or MSP_TOOLKIT_RMM=1 from the RMM procedure). Known before the script parses
+# its options, so an option error already exits 3 ("could not run") instead of 2 for the RMM.
+MSP_RMM=0
+case " $* " in *' --rmm '*) MSP_RMM=1 ;; esac
+[ "${MSP_TOOLKIT_RMM:-}" = '1' ] && MSP_RMM=1
+MSP_USAGE_EXIT=2
+[ "$MSP_RMM" = 1 ] && MSP_USAGE_EXIT=3
+MSP_IS_SERVICE='false'
 
 # --- Small utilities --------------------------------------------------------------------------
 msp_have() {
@@ -125,6 +138,31 @@ msp_have() {
 
 msp_is_root() {
     [ "$(id -u 2>/dev/null)" = "0" ]
+}
+
+msp_is_service_account() {
+    # True when running the way RMM agents run scripts: root with no signed-in technician (no
+    # SUDO_USER). Root's own home is not a user's, so per-user checks cover every user's home or
+    # say SKIPPED. MSP_TEST_SERVICE_ACCOUNT=1 (development tests only) simulates it.
+    [ "${MSP_TEST_SERVICE_ACCOUNT:-}" = '1' ] && return 0
+    msp_is_root && [ -z "${SUDO_USER:-}" ]
+}
+
+msp_user_homes() {
+    # Prints "USER<TAB>HOME" for each real user account with a home folder (macOS: UID 500 and
+    # up; Linux: UID 1000 and up with a login shell). HOME is as the system records it; callers
+    # add $MSP_TEST_ROOT where they read files.
+    local root=${MSP_TEST_ROOT:-} u h
+    if [ "$MSP_PLATFORM" = 'macOS' ]; then
+        dscl . -list /Users UniqueID 2>/dev/null | awk '$2 >= 500 && $1 !~ /^_/ { print $1 }' | while IFS= read -r u; do
+            h=$(dscl . -read "/Users/$u" NFSHomeDirectory 2>/dev/null | awk '{ print $2 }')
+            [ -n "$h" ] && [ -d "$root$h" ] && printf '%s\t%s\n' "$u" "$h"
+        done
+    else
+        getent passwd 2>/dev/null | awk -F: '$3 >= 1000 && $3 < 60000 && $7 !~ /(nologin|false)$/ { printf "%s\t%s\n", $1, $6 }' |
+            while IFS="$(printf '\t')" read -r u h; do [ -d "$root$h" ] && printf '%s\t%s\n' "$u" "$h"; done
+    fi
+    return 0
 }
 
 msp_repeat() {
@@ -301,6 +339,7 @@ msp_json_flatten() {
 msp_color_init() {
     # Colors only on an interactive terminal; plain text when piped, redirected, or NO_COLOR is set.
     MSP_COLOR=0
+    [ "${MSP_RMM:-0}" = 1 ] && return 0
     if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != "dumb" ]; then MSP_COLOR=1; fi
 }
 
@@ -414,7 +453,10 @@ msp_init() {
     MSP_HOST=${MSP_HOST%%.*}
     MSP_USER=$(id -un 2>/dev/null)
     MSP_IS_ADMIN='false'
-    if msp_is_root; then MSP_IS_ADMIN='true'; fi
+    if msp_is_root || [ "${MSP_TEST_SERVICE_ACCOUNT:-}" = '1' ]; then MSP_IS_ADMIN='true'; fi
+    MSP_IS_SERVICE='false'
+    if msp_is_service_account; then MSP_IS_SERVICE='true'; fi
+    [ "$MSP_RMM" = 1 ] && msp_param Rmm 1
     MSP_SHELL="bash ${BASH_VERSION%%(*}"
 
     MSP_WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/msp-run.XXXXXX" 2>/dev/null) || MSP_WORK_DIR=''
@@ -429,6 +471,7 @@ msp_init() {
     msp_log INFO "===== START $MSP_SCRIPT_NAME v$MSP_SCRIPT_VERSION ($MSP_CHECK_ID) ====="
     msp_log INFO "Host=$MSP_HOST; User=$MSP_USER; Elevated=$MSP_IS_ADMIN; Platform=$MSP_PLATFORM; OS=$MSP_OS_VERSION; Shell=$MSP_SHELL; Risk=$MSP_RISK"
     if [ -n "${SUDO_USER:-}" ]; then msp_log INFO "Started with sudo by: $SUDO_USER"; fi
+    [ "$MSP_RMM" = 1 ] && msp_log INFO "RMM mode; service account (no user home): $MSP_IS_SERVICE"
     local params=''
     i=0
     while [ "$i" -lt "$MSP_PARAM_COUNT" ]; do
@@ -448,6 +491,8 @@ msp_init() {
     msp_say 90 " User    : $MSP_USER   Elevated (root/sudo): $admin_text"
     msp_say 90 " Started : $(date '+%Y-%m-%d %H:%M:%S')"
     if [ -n "$MSP_LOG_PATH" ]; then msp_say 90 " Log     : $MSP_LOG_PATH"; else msp_say 90 " Log     : (could not create a log file; console output is complete)"; fi
+    [ "$MSP_RMM" = 1 ] && msp_say 90 " Mode    : RMM (no prompts; result saved to $(msp_rmm_folder); exit 0 OK, 1 WARN, 2 FAIL, 3 ERROR or not run)"
+    [ "$MSP_IS_SERVICE" = 'true' ] && msp_say 90 ' Account : root with no signed-in user: per-user checks cover every user home or say SKIPPED.'
     msp_say 36 "$bar"
     if [ "$MSP_IS_ADMIN" != 'true' ]; then
         msp_say 90 ' Not running as root (sudo). Checks that need it will show SKIPPED;'
@@ -922,10 +967,39 @@ msp_export() {
     return 0
 }
 
+msp__rmm_dir() {
+    # msp__rmm_dir DIR - creates DIR (mode 700) if needed and checks it is a real folder owned by
+    # this account, so a folder or link planted by someone else in advance (/var/tmp is writable
+    # by everyone) is never used. Returns 1 if it cannot be used.
+    if [ ! -e "$1" ] && [ ! -L "$1" ]; then (umask 077 && mkdir "$1") 2>/dev/null || return 1; fi
+    [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] || { msp_log ERROR "Not used (a link, not a folder, or owned by another account): $1"; return 1; }
+    chmod 700 "$1" 2>/dev/null
+}
+
+msp_rmm_folder() {
+    # Where RMM mode saves results: /var/tmp/msp-toolkit/results (MSP_TEST_RESULTS_ROOT, for
+    # development tests only, moves it).
+    if [ -n "${MSP_TEST_RESULTS_ROOT:-}" ]; then printf '%s/results' "${MSP_TEST_RESULTS_ROOT%/}"; else printf '/var/tmp/msp-toolkit/results'; fi
+}
+
+msp_rmm_exit_code() {
+    # msp_rmm_exit_code [--could-not-run] - 3 could not run, 2 any FAIL, 1 any WARN, 3 any ERROR
+    # (with no FAIL or WARN), 0 only PASS / INFO / SKIPPED. A FAIL outranks an ERROR so a confirmed
+    # problem is never reported as "check broken"; the summary line still shows the ERROR count.
+    if [ "${1-}" = '--could-not-run' ]; then printf '3'
+    elif [ "$(msp_count_status FAIL)" -gt 0 ]; then printf '2'
+    elif [ "$(msp_count_status WARN)" -gt 0 ]; then printf '1'
+    elif [ "$(msp_count_status ERROR)" -gt 0 ]; then printf '3'
+    else printf '0'; fi
+}
+
 msp_complete() {
-    # msp_complete [OUTPUT_FOLDER] - prints the summary and ticket block, exports if a folder
-    # was given, and writes the end of the log. Findings never change the exit code; the exit
-    # code only says whether the script itself ran.
+    # msp_complete [OUTPUT_FOLDER] [--could-not-run] - prints the summary and ticket block, exports
+    # if a folder was given, and writes the end of the log. Findings never change the exit code;
+    # the exit code only says whether the script itself ran.
+    # RMM mode: also saves the JSON result to msp_rmm_folder (mode 700, file 600; the newest 10
+    # per script are kept), prints "<CheckId> WARN=n FAIL=n ERROR=n" as the last line, and ENDS
+    # THE SCRIPT with msp_rmm_exit_code. --could-not-run marks a run that stopped before its checks.
     local out=${1-} err errf
     MSP_END_ISO=$(msp_iso_time)
     msp_print_summary
@@ -943,11 +1017,32 @@ msp_complete() {
     msp_log INFO "===== END $(date '+%Y-%m-%d %H:%M:%S') | duration ${duration}s | PASS $(msp_count_status PASS) WARN $(msp_count_status WARN) FAIL $(msp_count_status FAIL) INFO $(msp_count_status INFO) SKIPPED $(msp_count_status SKIPPED) ERROR $(msp_count_status ERROR) ====="
     if [ -n "$MSP_LOG_PATH" ] && [ "$MSP_LOG_FAILED" -eq 0 ]; then msp_say 90 " Log file: $MSP_LOG_PATH"; fi
     printf '\n'
+    if [ "${MSP_RMM:-0}" = 1 ]; then
+        local code folder json
+        code=$(msp_rmm_exit_code "${2-}")
+        folder=$(msp_rmm_folder)
+        json="$folder/${MSP_SCRIPT_NAME}_${MSP_HOST}_${MSP_START_STAMP}.json"
+        msp__data_sync
+        if msp__rmm_dir "${folder%/*}" && msp__rmm_dir "$folder" && (umask 077 && msp_json_result >"$json") 2>/dev/null; then
+            msp_say 90 " Result saved: $json"
+            msp_log INFO "Exported: $json"
+            # The newest 10 results of this script (ls -t: newest first; the names have no spaces).
+            # shellcheck disable=SC2012
+            ls -t "$folder/${MSP_SCRIPT_NAME}_"*.json 2>/dev/null | tail -n +11 | while IFS= read -r f; do rm -f "$f" && msp_log INFO "Removed old result $f"; done
+        else
+            msp_say 31 " Could not save the RMM result to $folder."
+            msp_log ERROR "RMM result not saved to $folder"
+            code=3
+        fi
+        msp_log INFO "RMM exit code $code"
+        printf '%s WARN=%s FAIL=%s ERROR=%s\n' "$MSP_CHECK_ID" "$(msp_count_status WARN)" "$(msp_count_status FAIL)" "$(msp_count_status ERROR)"
+        exit "$code"
+    fi
 }
 #endregion MSPHelper:Core
 #endregion MSPToolkit (generated)
 
-SCRIPT_VERSION='1.0.1'
+SCRIPT_VERSION='1.1.0'
 OUTPUT=''
 PASSIVE=0
 SCAN_LAN=0
@@ -962,8 +1057,9 @@ TIMEOUT_MINUTES=15
 TECHNICIAN=''
 CLIENT=''
 need_value() {
-    [ -n "${2-}" ] || { printf 'Missing value after %s\n' "$1" >&2; exit 2; }
+    [ -n "${2-}" ] || { printf 'Missing value after %s\n' "$1" >&2; exit "$MSP_USAGE_EXIT"; }
 }
+ACTIVE_NET=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --output) need_value "$1" "${2-}"; OUTPUT=$2; shift 2 ;;
@@ -978,30 +1074,33 @@ while [ $# -gt 0 ]; do
         --timeout-minutes)
             need_value "$1" "${2-}"
             case "$2" in
-                *[!0-9]*) printf -- '--timeout-minutes must be a number from 2 to 60\n' >&2; exit 2 ;;
+                *[!0-9]*) printf -- '--timeout-minutes must be a number from 2 to 60\n' >&2; exit "$MSP_USAGE_EXIT" ;;
             esac
-            if [ "$2" -lt 2 ] || [ "$2" -gt 60 ]; then printf -- '--timeout-minutes must be a number from 2 to 60\n' >&2; exit 2; fi
+            if [ "$2" -lt 2 ] || [ "$2" -gt 60 ]; then printf -- '--timeout-minutes must be a number from 2 to 60\n' >&2; exit "$MSP_USAGE_EXIT"; fi
             TIMEOUT_MINUTES=$2
             shift 2
             ;;
         --technician) need_value "$1" "${2-}"; TECHNICIAN=$2; shift 2 ;;
         --client) need_value "$1" "${2-}"; CLIENT=$2; shift 2 ;;
+        --active-network) ACTIVE_NET=1; shift ;;
+        --rmm) shift ;;
         -h | --help)
             awk 'NR > 2 && /^#/ { sub(/^# ?/, ""); print; next } NR > 2 { exit }' "$0"
             exit 0
             ;;
         *)
             printf 'Unknown option: %s (see --help)\n' "$1" >&2
-            exit 2
+            exit "$MSP_USAGE_EXIT"
             ;;
     esac
 done
 if [ "$PASSIVE" -eq 1 ] && { [ "$SCAN_LAN" -eq 1 ] || [ "$ONLINE" -eq 1 ]; }; then
     printf -- '--passive cannot be combined with --scan-lan or --online (both send network traffic)\n' >&2
-    exit 2
+    exit "$MSP_USAGE_EXIT"
 fi
 
 [ -n "$OUTPUT" ] && msp_param Output "$OUTPUT"
+[ "$ACTIVE_NET" -eq 1 ] && msp_param ActiveNetwork 1
 [ "$PASSIVE" -eq 1 ] && msp_param Passive 1
 [ "$SCAN_LAN" -eq 1 ] && msp_param ScanLan 1
 [ -n "$HOME_SSID" ] && msp_param HomeSsid "$HOME_SSID"
@@ -1015,6 +1114,16 @@ msp_param TimeoutMinutes "$TIMEOUT_MINUTES"
 [ -n "$CLIENT" ] && msp_param ClientName "$CLIENT"
 msp_init 'run-home-audit-bundle' "$SCRIPT_VERSION" 'Bundle' 'Read-Only' 'Home network audit: runs A1-A8 and collects the results' \
     'parts of A1, A3, A5 and A8 (each script says which)'
+# The child scripts run in normal mode (exit 0 = completed); the bundle alone gives the RMM
+# summary line and exit code. RMM mode stays passive (A2 ARP table only, no A7) unless
+# --active-network is given; --scan-lan and --online are explicit requests and still apply.
+unset MSP_TOOLKIT_RMM
+NET_PASSIVE=$PASSIVE
+if [ "$MSP_RMM" = 1 ] && [ "$ACTIVE_NET" -eq 0 ] && [ "$PASSIVE" -eq 0 ]; then
+    NET_PASSIVE=1
+    msp_finding --status INFO --category 'Setup' --check 'Network tests' \
+        --detail 'RMM mode: A2 reads the ARP table only and A7 (router) is not run. Add --active-network to run them in full.'
+fi
 
 HERE=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
 REPO_ROOT=$(cd "$HERE/../.." 2>/dev/null && pwd)
@@ -1062,7 +1171,7 @@ if [ -z "$SUFFIX" ]; then
     msp_finding --status ERROR --category 'Setup' --check 'Platform' \
         --detail "This runner is for macOS and Linux; this computer reports '$MSP_OS_VERSION'." \
         --rec 'On Windows, run Invoke-HomeAuditBundle.ps1 instead.'
-    msp_complete
+    msp_complete '' --could-not-run
     exit 1
 fi
 RUN_FOLDER=''
@@ -1076,7 +1185,7 @@ make_run_folder() {
 }
 msp_check 'Setup' 'Results folder' make_run_folder
 if [ -z "$RUN_FOLDER" ]; then
-    msp_complete
+    msp_complete '' --could-not-run
     exit 1
 fi
 if [ "$MSP_IS_ADMIN" != 'true' ]; then
@@ -1086,7 +1195,7 @@ fi
 if [ "$ALL_USERS" -eq 1 ] && [ "$MSP_IS_ADMIN" != 'true' ]; then
     msp_finding --status INFO --category 'Setup' --check 'All users' --detail '--all-users needs sudo; other users are not included in this run.'
 fi
-if [ "$PASSIVE" -eq 1 ]; then
+if [ "$NET_PASSIVE" -eq 1 ]; then
     msp_finding --status INFO --category 'Setup' --check 'Passive mode' \
         --detail 'Nothing is sent on the network: A2 reads the ARP table only and A7 (router) is not run.'
 fi
@@ -1105,8 +1214,10 @@ while IFS='|' read -r ID NAME FOLDER; do
         msp_data_row 'Runs' Step# "$STEP" CheckId "$ID" Script "$NAME" Result 'Skipped' Seconds# 0 PASS '' WARN '' FAIL '' ERROR ''
         continue
     fi
-    if [ "$ID" = 'A7' ] && [ "$PASSIVE" -eq 1 ]; then
-        msp_finding --status SKIPPED --category 'Run' --check "$NAME" --detail 'Not run with --passive: every router check sends traffic to the router.'
+    if [ "$ID" = 'A7' ] && [ "$NET_PASSIVE" -eq 1 ]; then
+        why='Not run with --passive: every router check sends traffic to the router.'
+        [ "$PASSIVE" -eq 1 ] || why='Not run in RMM mode without --active-network: every router check sends traffic to the router.'
+        msp_finding --status SKIPPED --category 'Run' --check "$NAME" --detail "$why"
         msp_data_row 'Runs' Step# "$STEP" CheckId "$ID" Script "$NAME" Result 'Skipped (passive)' Seconds# 0 PASS '' WARN '' FAIL '' ERROR ''
         continue
     fi
@@ -1120,10 +1231,10 @@ while IFS='|' read -r ID NAME FOLDER; do
     # Script-specific options.
     set -- "$SCRIPT" --output "$RUN_FOLDER"
     case "$ID" in
-        A2) [ "$PASSIVE" -eq 1 ] && set -- "$@" --passive ;;
+        A2) [ "$NET_PASSIVE" -eq 1 ] && set -- "$@" --passive ;;
         A3) [ -n "$HOME_SSID" ] && set -- "$@" --home-ssid "$HOME_SSID" ;;
         A4) [ "$SCAN_LAN" -eq 1 ] && set -- "$@" --scan-lan ;;
-        A5) [ "$ALL_USERS" -eq 1 ] && [ "$MSP_IS_ADMIN" = 'true' ] && set -- "$@" --all-users ;;
+        A5) { [ "$ALL_USERS" -eq 1 ] || [ "$MSP_IS_SERVICE" = 'true' ]; } && [ "$MSP_IS_ADMIN" = 'true' ] && set -- "$@" --all-users ;;
         A6) [ "$ONLINE" -eq 1 ] && set -- "$@" --online ;;
         A7) [ "$ROUTER_CHECKLIST" -eq 1 ] || set -- "$@" --skip-checklist-prompt ;;
         A8)
@@ -1162,7 +1273,13 @@ while IFS='|' read -r ID NAME FOLDER; do
 
     if [ -z "$REASON" ]; then
         COMPLETED=$((COMPLETED + 1))
-        msp_finding --status INFO --category 'Run' --check "$NAME" --quiet \
+        # In RMM mode each script's worst result is carried up, so the bundle's exit code and
+        # summary line alert on it (one WARN or FAIL per script).
+        RUN_STATUS=INFO
+        if [ "$MSP_RMM" = 1 ]; then
+            if [ "${S_FAIL:-0}" -gt 0 ]; then RUN_STATUS=FAIL; elif [ "${S_WARN:-0}" -gt 0 ]; then RUN_STATUS=WARN; fi
+        fi
+        msp_finding --status "$RUN_STATUS" --category 'Run' --check "$NAME" --quiet \
             --detail "Completed in ${SECONDS_TAKEN}s: PASS $S_PASS, WARN $S_WARN, FAIL $S_FAIL, ERROR $S_ERROR."
         RESULT='Completed'
     else
@@ -1188,6 +1305,13 @@ if [ -n "$RUNS_CSV" ] && [ -f "$RUNS_CSV" ]; then
 fi
 printf '\n'
 msp_say 32 " All results are in: $RUN_FOLDER"
+if [ "$MSP_RMM" = 1 ]; then
+    # RMM mode ends the script inside msp_complete, so the HTML report is not built here.
+    if [ "$COMPLETED" -eq 0 ]; then
+        msp_finding --status ERROR --category 'Run' --check 'Bundle' --detail 'No audit script completed.'
+        msp_complete "$RUN_FOLDER" --could-not-run
+    fi
+fi
 msp_complete "$RUN_FOLDER"
 
 REPORT_SCRIPT=''

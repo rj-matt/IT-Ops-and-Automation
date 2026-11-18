@@ -170,7 +170,8 @@ for that platform.
 **Scripts that change something** (B4, D1, D2, D3, Set-InactivityTimeout) always: show the
 current state and a numbered plan first; support `-WhatIf` / `--what-if` (plan only, nothing
 changed, no admin needed); ask you to type **YES**; refuse to change anything in a
-non-interactive session (RMM job, scheduled task) unless `-Force` / `--force` is given; record
+non-interactive session (RMM job, scheduled task) or in RMM mode unless `-Force` / `--force` is
+given (D3 refuses under SYSTEM even with `-Force`: it needs the user's own profile); record
 the state afterwards; and say plainly what cannot be undone. Exit codes: `0` done, `1` nothing
 changed (not admin / not confirmed / non-interactive), `2` a step failed.
 
@@ -382,9 +383,10 @@ Medium = this month; Low = when convenient.
 **ERROR is not FAIL.** "Could not check BitLocker (access denied)" says nothing about BitLocker;
 "BitLocker is off" is a FAIL. Never report an ERROR or SKIPPED as a finding against the client.
 
-**Exit code** (for RMM tools): `0` means the script ran, whatever it found. Diagnostics return
+**Exit code**: in a normal run `0` means the script ran, whatever it found. Diagnostics return
 non-zero only when the script itself could not run. Scripts that change something use `0` done,
-`1` nothing changed, `2` a step failed.
+`1` nothing changed, `2` a step failed. With `-Rmm` / `--rmm` the exit code follows the findings
+instead (see Running from an RMM).
 
 **Normal and not a problem:** ports 135/139/445 on a Windows PC (INFO), "Unknown" vendor for a
 network device (the built-in table is small), "Private/randomized MAC" for phones, browser
@@ -396,6 +398,87 @@ end-of-support date (the date is our best information but no official page confi
 Results only where you asked (`-OutputPath` / `--output`): a JSON file, a findings CSV and one
 CSV per table. Results can contain user, device and account names: keep them with the client's
 records, not on a shared USB stick.
+
+---
+
+## Running from an RMM
+
+Every script except A9 (the report builder) takes `-Rmm` (Windows) / `--rmm` (macOS/Linux) for
+running from an RMM agent, for example a Kaseya agent procedure. `MSP_TOOLKIT_RMM=1` in the
+environment does the same. In RMM mode a script:
+
+- uses no colour, asks nothing and never waits for input;
+- always saves the JSON result to a fixed folder: `%ProgramData%\MSP-Toolkit\results\` (Windows)
+  or `/var/tmp/msp-toolkit/results/` (macOS/Linux), as `<Script>_<Computer>_<timestamp>.json`.
+  The newest 10 results per script are kept; older ones are deleted. `-OutputPath` / `--output`
+  still saves an extra copy where you ask;
+- prints one summary line as the **last line on stdout**, for the RMM to capture:
+  `A1 WARN=2 FAIL=0 ERROR=0` (the check ID, then the counts);
+- ends with an exit code to alert on:
+
+| Exit code | Meaning |
+|---|---|
+| `0` | Every check PASS, INFO or SKIPPED |
+| `1` | At least one WARN (no FAIL) |
+| `2` | At least one FAIL |
+| `3` | An ERROR, or the script could not run (wrong option or value, not supported here, refused: a change without `-Force`, D3 as SYSTEM, A7 without `-ActiveNetwork`; or the result could not be saved) |
+
+FAIL outranks ERROR: a run with both exits 2 and still counts the error on the summary line. **No
+summary line** means the script did not start: PowerShell rejects an unknown parameter before
+the script runs (exit 1); bash scripts print a usage message and exit 3.
+
+**The results folder holds device and user details.** On Windows only Administrators and SYSTEM
+can open it (inheritance off, owner Administrators); on macOS/Linux it is mode 700 and each
+file 600, owned by root. A folder or link that someone else created there in advance is never
+used: the run exits 3 with "not used" in the output. Collect the files with the RMM (for
+example a "get file" step) and delete them from your side as you would any client data.
+
+**As SYSTEM / root with no signed-in user** (how RMM agents run scripts) the scripts detect it
+and say so in the banner. Per-user checks cover every user and name them in a **Users covered**
+finding: browsers (A5: every profile), installed programs (A8, E2: Windows per-user programs of
+the users signed in now, macOS every `~/Applications`), Run keys (C3 Windows: signed-in users),
+startup items (C3 and B6 macOS/Linux: every home), app crash reports (B3 macOS), temp files,
+caches and Trash (B5). Checks that only make sense for a signed-in user say **SKIPPED** with the
+reason: "Daily account has admin rights" (A1), the per-user proxy (B2, C3), File History and
+OneDrive folder backup (E3), the profile / home folder scan (B5; the users' folders are in the
+system drive list). D3 always refuses under SYSTEM; run it as the logged-on user.
+
+**Network traffic stays off in RMM mode** unless the procedure asks for it with
+`-ActiveNetwork` / `--active-network`: A2 and B2 run as `-Passive`, D2 skips its connectivity
+test, the bundle runs A2 passively and leaves out A7, and A7 on its own records SKIPPED and
+exits 3. `-ScanLan` (A4) and `-Online` (A6) are explicit requests and still apply.
+
+**Changes need `-Force`.** B4, D1, D2, D3 and Set-InactivityTimeout never change anything in
+RMM mode without `-Force` / `--force` (SKIPPED, exit 3). Run them with `-Rmm -WhatIf` first to
+see the plan in the procedure's output.
+
+**Example agent-procedure commands** (Kaseya: an "Execute Shell Command - Get Results to
+Variable" step, run as System / root; the output is then in `#global:cmdresults#`, its last
+line is the summary). Copy the toolkit to the device first, for example to
+`C:\MSP-Toolkit` or `/opt/msp-toolkit`.
+
+Windows:
+
+```bat
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "C:\MSP-Toolkit\endpoint-systems\diagnostics\storage\Get-DiskSpaceReport.ps1" -Rmm
+```
+
+macOS:
+
+```sh
+/bin/bash /opt/msp-toolkit/endpoint-systems/diagnostics/storage/get-disk-space-report.sh --rmm; echo "EXIT=$?"
+```
+
+Linux:
+
+```sh
+bash /opt/msp-toolkit/endpoint-systems/diagnostics/storage/get-disk-space-report.sh --rmm; echo "EXIT=$?"
+```
+
+If a procedure step cannot read the exit code, alert on the summary line instead: `FAIL=` above
+0 is the same as exit 2, `WARN=` above 0 as exit 1. The bundle gives one summary line for the
+whole run; each audit script's worst result counts as one WARN or FAIL in it, and its HTML
+report is not built in RMM mode (build it from the collected results with A9).
 
 ---
 

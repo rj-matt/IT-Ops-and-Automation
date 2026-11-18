@@ -41,6 +41,9 @@
          tests/Test-BatchBWindowsLogic.ps1 (B1-B3 Windows scripts against mocked cmdlets),
          tests/Test-DiskSpaceReportWindowsLogic.ps1 (B5 Windows on a fake drive; nothing deleted),
          tests/Test-PerformanceSnapshotWindowsLogic.ps1 (B6 Windows against mocked counters),
+         tests/Test-RmmMode.ps1 (-Rmm as SYSTEM: exit codes 0-3, summary line, results folder
+         history and permissions, a planted link refused, per-user coverage, D3 and remediation
+         refusals, B2 passive and A7 not run without -ActiveNetwork),
          tests/Test-BuildRelease.ps1 (tools/Build-Release.ps1 package contents and refusals,
          PowerShell 7 only) and
          tests/bash/test-scripts-mocked.sh under every bash (Linux scripts, Linux branches and
@@ -91,7 +94,7 @@
                     macOS/Linux: PowerShell 7 and bash
                     All: PSScriptAnalyzer (module path or %LOCALAPPDATA%\PSModules), ShellCheck
     Exit code     : 0 when every step that ran passed, 1 otherwise
-    Version       : 2.10.0
+    Version       : 2.11.0
 #>
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPositionalParameters', '', Justification = 'Add-Result (Step, Result, Detail) is called ~50 times; positional calls keep each step on one readable line.')]
 [CmdletBinding()]
@@ -524,6 +527,7 @@ $logic = @(
     @{ Name = 'C3 Windows against mocked cmdlets'; File = 'Test-SuspiciousActivityWindowsLogic.ps1' }
     @{ Name = 'E1-E4 Windows against mocked cmdlets'; File = 'Test-BatchEWindowsLogic.ps1' }
     @{ Name = 'Set-InactivityTimeout and RC4 audit against mocked cmdlets'; File = 'Test-WindowsHardeningAuditLogic.ps1' }
+    @{ Name = 'RMM mode as SYSTEM: exit codes, summary line, results folder, refusals'; File = 'Test-RmmMode.ps1' }
 )
 foreach ($t in $logic) {
     foreach ($h in $hosts) {
@@ -682,6 +686,27 @@ else {
         @{ Platform = 'Linux'; Name = 'B3 recent critical errors (Linux)'; Script = $b3sh; Args = @(); Expect = @(0) }
         @{ Platform = 'Linux'; Name = 'B4 --what-if (Linux)'; Script = $b4sh; Args = @('--what-if'); Expect = @(0); MustContain = 'nothing was changed' }
         @{ Platform = 'Linux'; Name = 'B4 non-interactive, no --force (must refuse)'; Script = $b4sh; Args = @(); Expect = @(1) }
+        # RMM mode (-Rmm / --rmm), as an RMM agent runs it. Env: MSP_TEST_SERVICE_ACCOUNT=1 makes the
+        # scripts behave as under SYSTEM / root with no signed-in user; the results folder is moved
+        # into the case's output folder (Rmm = $true). Exit codes 0-2 depend on this computer's
+        # findings; 3 = refused / not run. None of these sends traffic.
+        @{ Platform = 'Windows'; Name = 'RMM: B5 -Rmm as SYSTEM'; Script = $b5ps; Args = @('-Rmm', '-ScanSeconds', '20'); Expect = @(0, 1, 2); Rmm = $true; MustContain = '(?m)^B5 WARN=\d+ FAIL=\d+ ERROR=\d+\s*$' }
+        @{ Platform = 'Windows'; Name = 'RMM: A1 -Rmm as SYSTEM'; Script = "$ep/Get-EndpointSecurityStatus.ps1"; Args = @('-Rmm'); Expect = @(0, 1, 2); Rmm = $true; MustContain = '(?m)^A1 WARN=\d+ FAIL=\d+ ERROR=\d+\s*$' }
+        @{ Platform = 'Windows'; Name = 'RMM: A5 -Rmm as SYSTEM (every user profile)'; Script = "$si/Get-BrowserSecurityCheck.ps1"; Args = @('-Rmm'); Expect = @(0, 1, 2); Rmm = $true; MustContain = 'Users covered' }
+        @{ Platform = 'Windows'; Name = 'RMM: B2 -Rmm (passive without -ActiveNetwork)'; Script = $b2ps; Args = @('-Rmm'); Expect = @(0, 1, 2); Rmm = $true; MustContain = 'Add -ActiveNetwork' }
+        @{ Platform = 'Windows'; Name = 'RMM: A7 -Rmm (not run without -ActiveNetwork)'; Script = "$net/Get-RouterSecurityCheck.ps1"; Args = @('-Rmm'); Expect = @(3); Rmm = $true; MustContain = 'without -ActiveNetwork' }
+        @{ Platform = 'Windows'; Name = 'RMM: B4 -Rmm, no -Force (must refuse, exit 3)'; Script = 'endpoint-systems/remediation/safe/restart-services/Restart-CommonServices.ps1'; Args = @('-Rmm'); Expect = @(3); Rmm = $true; MustContain = 'RMM mode never makes changes' }
+        @{ Platform = 'Windows'; Name = 'RMM: D3 -Rmm -WhatIf as SYSTEM (must refuse, exit 3)'; Script = 'cloud-services/m365/remediation/Reset-OutlookProfile.ps1'; Args = @('-Rmm', '-WhatIf'); Expect = @(3); Rmm = $true; MustContain = 'runs as SYSTEM'; CheckOutlook = $true }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'RMM: B5 --rmm as root (macOS)'; Script = $b5sh; Args = @('--rmm', '--scan-seconds', '20'); Expect = @(0, 1, 2); Rmm = $true; MustContain = '(?m)^B5 WARN=\d+ FAIL=\d+ ERROR=\d+\s*$' }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'RMM: A5 --rmm as root (macOS, every user)'; Script = "$si/get-browser-security-check.sh"; Args = @('--rmm'); Expect = @(0, 1, 2); Rmm = $true; MustContain = 'Users covered' }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'RMM: B2 --rmm (macOS, passive)'; Script = $b2sh; Args = @('--rmm'); Expect = @(0, 1, 2); Rmm = $true; MustContain = 'Add --active-network' }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'RMM: A7 --rmm (macOS, not run)'; Script = "$net/get-router-security-check.sh"; Args = @('--rmm'); Expect = @(3); Rmm = $true; MustContain = 'without --active-network' }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'RMM: B4 --rmm, no --force (macOS, must refuse, exit 3)'; Script = $b4sh; Args = @('--rmm'); Expect = @(3); Rmm = $true; MustContain = 'RMM mode never makes changes' }
+        @{ Platform = 'Linux'; Name = 'RMM: B5 --rmm as root (Linux)'; Script = $b5sh; Args = @('--rmm', '--scan-seconds', '20'); Expect = @(0, 1, 2); Rmm = $true; MustContain = '(?m)^B5 WARN=\d+ FAIL=\d+ ERROR=\d+\s*$' }
+        @{ Platform = 'Linux'; Name = 'RMM: A5 --rmm as root (Linux, every user)'; Script = "$si/get-browser-security-check.sh"; Args = @('--rmm'); Expect = @(0, 1, 2); Rmm = $true; MustContain = 'Users covered' }
+        @{ Platform = 'Linux'; Name = 'RMM: B2 --rmm (Linux, passive)'; Script = $b2sh; Args = @('--rmm'); Expect = @(0, 1, 2); Rmm = $true; MustContain = 'Add --active-network' }
+        @{ Platform = 'Linux'; Name = 'RMM: A7 --rmm (Linux, not run)'; Script = "$net/get-router-security-check.sh"; Args = @('--rmm'); Expect = @(3); Rmm = $true; MustContain = 'without --active-network' }
+        @{ Platform = 'Linux'; Name = 'RMM: B4 --rmm, no --force (Linux, must refuse, exit 3)'; Script = $b4sh; Args = @('--rmm'); Expect = @(3); Rmm = $true; MustContain = 'RMM mode never makes changes' }
         @{ Platform = 'Windows'; Name = 'B2 full connectivity test'; Script = $b2ps; Args = @(); Expect = @(0); Active = 'ping gateway, DNS lookup, TCP 443 to 1.1.1.1/8.8.8.8, HTTP(S) to www.msftconnecttest.com and 3 cloud endpoints' }
         @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'B2 full connectivity test (macOS)'; Script = $b2sh; Args = @(); Expect = @(0); Active = 'ping gateway, DNS lookup, TCP 443 to 1.1.1.1/8.8.8.8, HTTP(S) to www.msftconnecttest.com and 3 cloud endpoints' }
         @{ Platform = 'Linux'; Name = 'B2 full connectivity test (Linux)'; Script = $b2sh; Args = @(); Expect = @(0); Active = 'ping gateway, DNS lookup, TCP 443 to 1.1.1.1/8.8.8.8, HTTP(S) to www.msftconnecttest.com and 3 cloud endpoints' }
@@ -711,15 +736,21 @@ else {
             # stdin from /dev/null: nothing may ever wait for keyboard input.
             $bashArgs = (@($case.Args) + @('--output', $out) | ForEach-Object { Format-BashQuote $_ }) -join ' '
             $shell = $(if ($case.Shell) { $case.Shell } else { 'bash' })
-            $r = Invoke-Bash -Shell $shell -Command ('{0} {1} {2} </dev/null' -f $shell, (Format-BashQuote (ConvertTo-BashPath $script)), $bashArgs)
+            $envPrefix = ''
+            if ($case.Rmm) { $envPrefix = 'env MSP_TEST_SERVICE_ACCOUNT=1 MSP_TEST_RESULTS_ROOT={0} ' -f (Format-BashQuote (ConvertTo-BashPath $out)) }
+            $r = Invoke-Bash -Shell $shell -Command ('{0}{1} {2} {3} </dev/null' -f $envPrefix, $shell, (Format-BashQuote (ConvertTo-BashPath $script)), $bashArgs)
             $console = $r.Output
             $code = $r.Code
         }
         else {
             # -NonInteractive: nothing may ever wait for keyboard input, and confirmation must refuse.
             $argList = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $script) + $case.Args + @('-OutputPath', $out)
-            $console = & { $ErrorActionPreference = 'Continue'; & $psExe @argList 2>&1 }
-            $code = $LASTEXITCODE
+            if ($case.Rmm) { $env:MSP_TEST_SERVICE_ACCOUNT = '1'; $env:MSP_TEST_RESULTS_ROOT = $out }
+            try {
+                $console = & { $ErrorActionPreference = 'Continue'; & $psExe @argList 2>&1 }
+                $code = $LASTEXITCODE
+            }
+            finally { Remove-Item Env:\MSP_TEST_SERVICE_ACCOUNT, Env:\MSP_TEST_RESULTS_ROOT -ErrorAction SilentlyContinue }
         }
         ($console | Out-String) | Set-Content -LiteralPath (Join-Path $out 'console.txt') -Encoding UTF8
         $problems = @()
@@ -730,6 +761,7 @@ else {
         }
         $json = @(Get-ChildItem -LiteralPath $out -Filter '*.json' -File -Recurse)
         if ($json.Count -eq 0) { $problems += 'no JSON result written' }
+        if ($case.Rmm -and @(Get-ChildItem -LiteralPath (Join-Path $out 'results') -Filter '*.json' -File -ErrorAction SilentlyContinue).Count -ne 1) { $problems += 'RMM mode: not exactly one JSON result in the results folder' }
         else {
             $v = & { $ErrorActionPreference = 'Continue'; & $psExe -NoProfile -ExecutionPolicy Bypass -File $validator -Path $out 2>&1 }
             if ($LASTEXITCODE -ne 0) { $problems += ('schema: {0}' -f ((@($v) | Where-Object { "$_" -match 'error' } | Select-Object -First 3) -join '; ')) }

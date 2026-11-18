@@ -9,6 +9,9 @@
 #
 # Options:
 #   --output DIR   Also save results as JSON and CSV (toolkit schema 2.0) for the HTML report.
+#   --rmm         RMM mode, for RMM agents: no colours or prompts, the JSON result saved to
+#                 /var/tmp/msp-toolkit/results, a one-line summary and an exit code to alert
+#                 on (0 OK, 1 WARN, 2 FAIL, 3 ERROR or not run). See the README.
 #   --help         Show this help.
 #
 # Every check runs on its own and reports PASS / WARN / FAIL / INFO, or SKIPPED (needs sudo, or
@@ -37,7 +40,7 @@
 # Risk Level    : Read-Only -- reads settings only; nothing is changed, installed or enabled.
 # Prerequisites : bash 3.2+ | systemd-based distribution (Debian/Ubuntu, Fedora/RHEL, and
 #                 similar) | root: No (sudo adds root password status and authoritative SSH settings)
-# Version       : 1.0.0
+# Version       : 1.1.0
 # Limitations   : Package managers other than apt and dnf are reported as SKIPPED. Pending
 #                 updates are as of the last package list refresh (date shown). Without root,
 #                 SSH settings are read from the config files (the running server is not asked).
@@ -49,7 +52,7 @@ MSP_SCRIPT_FILE=$0
 
 #region MSPToolkit (generated) Sections=Core,Net
 # DO NOT EDIT — regenerate with Sync-MSPEmbeddedHelper.ps1
-# Source: endpoint-systems/utilities/msp-toolkit-common.sh | Sections: Core,Net | SHA256: 8569a585c0f77693f9226c0fd1702fe364e582537e7c18b5e7d39da6f2f6bea0
+# Source: endpoint-systems/utilities/msp-toolkit-common.sh | Sections: Core,Net | SHA256: 1109d7c22dd45b6594ddc17b703308066cef150c9294cc95885ce839567cae47
 #region MSPHelper:Core
 # --- Run state ------------------------------------------------------------------------------
 # One toolkit script = one "run": one log file, one findings list, one optional export.
@@ -87,6 +90,14 @@ MSP_F_REC=()
 MSP_F_EVIDENCE=()
 MSP_DATA_COUNT=0
 MSP_DATA_NAMES=()
+# RMM mode (--rmm, or MSP_TOOLKIT_RMM=1 from the RMM procedure). Known before the script parses
+# its options, so an option error already exits 3 ("could not run") instead of 2 for the RMM.
+MSP_RMM=0
+case " $* " in *' --rmm '*) MSP_RMM=1 ;; esac
+[ "${MSP_TOOLKIT_RMM:-}" = '1' ] && MSP_RMM=1
+MSP_USAGE_EXIT=2
+[ "$MSP_RMM" = 1 ] && MSP_USAGE_EXIT=3
+MSP_IS_SERVICE='false'
 
 # --- Small utilities --------------------------------------------------------------------------
 msp_have() {
@@ -96,6 +107,31 @@ msp_have() {
 
 msp_is_root() {
     [ "$(id -u 2>/dev/null)" = "0" ]
+}
+
+msp_is_service_account() {
+    # True when running the way RMM agents run scripts: root with no signed-in technician (no
+    # SUDO_USER). Root's own home is not a user's, so per-user checks cover every user's home or
+    # say SKIPPED. MSP_TEST_SERVICE_ACCOUNT=1 (development tests only) simulates it.
+    [ "${MSP_TEST_SERVICE_ACCOUNT:-}" = '1' ] && return 0
+    msp_is_root && [ -z "${SUDO_USER:-}" ]
+}
+
+msp_user_homes() {
+    # Prints "USER<TAB>HOME" for each real user account with a home folder (macOS: UID 500 and
+    # up; Linux: UID 1000 and up with a login shell). HOME is as the system records it; callers
+    # add $MSP_TEST_ROOT where they read files.
+    local root=${MSP_TEST_ROOT:-} u h
+    if [ "$MSP_PLATFORM" = 'macOS' ]; then
+        dscl . -list /Users UniqueID 2>/dev/null | awk '$2 >= 500 && $1 !~ /^_/ { print $1 }' | while IFS= read -r u; do
+            h=$(dscl . -read "/Users/$u" NFSHomeDirectory 2>/dev/null | awk '{ print $2 }')
+            [ -n "$h" ] && [ -d "$root$h" ] && printf '%s\t%s\n' "$u" "$h"
+        done
+    else
+        getent passwd 2>/dev/null | awk -F: '$3 >= 1000 && $3 < 60000 && $7 !~ /(nologin|false)$/ { printf "%s\t%s\n", $1, $6 }' |
+            while IFS="$(printf '\t')" read -r u h; do [ -d "$root$h" ] && printf '%s\t%s\n' "$u" "$h"; done
+    fi
+    return 0
 }
 
 msp_repeat() {
@@ -272,6 +308,7 @@ msp_json_flatten() {
 msp_color_init() {
     # Colors only on an interactive terminal; plain text when piped, redirected, or NO_COLOR is set.
     MSP_COLOR=0
+    [ "${MSP_RMM:-0}" = 1 ] && return 0
     if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != "dumb" ]; then MSP_COLOR=1; fi
 }
 
@@ -385,7 +422,10 @@ msp_init() {
     MSP_HOST=${MSP_HOST%%.*}
     MSP_USER=$(id -un 2>/dev/null)
     MSP_IS_ADMIN='false'
-    if msp_is_root; then MSP_IS_ADMIN='true'; fi
+    if msp_is_root || [ "${MSP_TEST_SERVICE_ACCOUNT:-}" = '1' ]; then MSP_IS_ADMIN='true'; fi
+    MSP_IS_SERVICE='false'
+    if msp_is_service_account; then MSP_IS_SERVICE='true'; fi
+    [ "$MSP_RMM" = 1 ] && msp_param Rmm 1
     MSP_SHELL="bash ${BASH_VERSION%%(*}"
 
     MSP_WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/msp-run.XXXXXX" 2>/dev/null) || MSP_WORK_DIR=''
@@ -400,6 +440,7 @@ msp_init() {
     msp_log INFO "===== START $MSP_SCRIPT_NAME v$MSP_SCRIPT_VERSION ($MSP_CHECK_ID) ====="
     msp_log INFO "Host=$MSP_HOST; User=$MSP_USER; Elevated=$MSP_IS_ADMIN; Platform=$MSP_PLATFORM; OS=$MSP_OS_VERSION; Shell=$MSP_SHELL; Risk=$MSP_RISK"
     if [ -n "${SUDO_USER:-}" ]; then msp_log INFO "Started with sudo by: $SUDO_USER"; fi
+    [ "$MSP_RMM" = 1 ] && msp_log INFO "RMM mode; service account (no user home): $MSP_IS_SERVICE"
     local params=''
     i=0
     while [ "$i" -lt "$MSP_PARAM_COUNT" ]; do
@@ -419,6 +460,8 @@ msp_init() {
     msp_say 90 " User    : $MSP_USER   Elevated (root/sudo): $admin_text"
     msp_say 90 " Started : $(date '+%Y-%m-%d %H:%M:%S')"
     if [ -n "$MSP_LOG_PATH" ]; then msp_say 90 " Log     : $MSP_LOG_PATH"; else msp_say 90 " Log     : (could not create a log file; console output is complete)"; fi
+    [ "$MSP_RMM" = 1 ] && msp_say 90 " Mode    : RMM (no prompts; result saved to $(msp_rmm_folder); exit 0 OK, 1 WARN, 2 FAIL, 3 ERROR or not run)"
+    [ "$MSP_IS_SERVICE" = 'true' ] && msp_say 90 ' Account : root with no signed-in user: per-user checks cover every user home or say SKIPPED.'
     msp_say 36 "$bar"
     if [ "$MSP_IS_ADMIN" != 'true' ]; then
         msp_say 90 ' Not running as root (sudo). Checks that need it will show SKIPPED;'
@@ -893,10 +936,39 @@ msp_export() {
     return 0
 }
 
+msp__rmm_dir() {
+    # msp__rmm_dir DIR - creates DIR (mode 700) if needed and checks it is a real folder owned by
+    # this account, so a folder or link planted by someone else in advance (/var/tmp is writable
+    # by everyone) is never used. Returns 1 if it cannot be used.
+    if [ ! -e "$1" ] && [ ! -L "$1" ]; then (umask 077 && mkdir "$1") 2>/dev/null || return 1; fi
+    [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] || { msp_log ERROR "Not used (a link, not a folder, or owned by another account): $1"; return 1; }
+    chmod 700 "$1" 2>/dev/null
+}
+
+msp_rmm_folder() {
+    # Where RMM mode saves results: /var/tmp/msp-toolkit/results (MSP_TEST_RESULTS_ROOT, for
+    # development tests only, moves it).
+    if [ -n "${MSP_TEST_RESULTS_ROOT:-}" ]; then printf '%s/results' "${MSP_TEST_RESULTS_ROOT%/}"; else printf '/var/tmp/msp-toolkit/results'; fi
+}
+
+msp_rmm_exit_code() {
+    # msp_rmm_exit_code [--could-not-run] - 3 could not run, 2 any FAIL, 1 any WARN, 3 any ERROR
+    # (with no FAIL or WARN), 0 only PASS / INFO / SKIPPED. A FAIL outranks an ERROR so a confirmed
+    # problem is never reported as "check broken"; the summary line still shows the ERROR count.
+    if [ "${1-}" = '--could-not-run' ]; then printf '3'
+    elif [ "$(msp_count_status FAIL)" -gt 0 ]; then printf '2'
+    elif [ "$(msp_count_status WARN)" -gt 0 ]; then printf '1'
+    elif [ "$(msp_count_status ERROR)" -gt 0 ]; then printf '3'
+    else printf '0'; fi
+}
+
 msp_complete() {
-    # msp_complete [OUTPUT_FOLDER] - prints the summary and ticket block, exports if a folder
-    # was given, and writes the end of the log. Findings never change the exit code; the exit
-    # code only says whether the script itself ran.
+    # msp_complete [OUTPUT_FOLDER] [--could-not-run] - prints the summary and ticket block, exports
+    # if a folder was given, and writes the end of the log. Findings never change the exit code;
+    # the exit code only says whether the script itself ran.
+    # RMM mode: also saves the JSON result to msp_rmm_folder (mode 700, file 600; the newest 10
+    # per script are kept), prints "<CheckId> WARN=n FAIL=n ERROR=n" as the last line, and ENDS
+    # THE SCRIPT with msp_rmm_exit_code. --could-not-run marks a run that stopped before its checks.
     local out=${1-} err errf
     MSP_END_ISO=$(msp_iso_time)
     msp_print_summary
@@ -914,6 +986,27 @@ msp_complete() {
     msp_log INFO "===== END $(date '+%Y-%m-%d %H:%M:%S') | duration ${duration}s | PASS $(msp_count_status PASS) WARN $(msp_count_status WARN) FAIL $(msp_count_status FAIL) INFO $(msp_count_status INFO) SKIPPED $(msp_count_status SKIPPED) ERROR $(msp_count_status ERROR) ====="
     if [ -n "$MSP_LOG_PATH" ] && [ "$MSP_LOG_FAILED" -eq 0 ]; then msp_say 90 " Log file: $MSP_LOG_PATH"; fi
     printf '\n'
+    if [ "${MSP_RMM:-0}" = 1 ]; then
+        local code folder json
+        code=$(msp_rmm_exit_code "${2-}")
+        folder=$(msp_rmm_folder)
+        json="$folder/${MSP_SCRIPT_NAME}_${MSP_HOST}_${MSP_START_STAMP}.json"
+        msp__data_sync
+        if msp__rmm_dir "${folder%/*}" && msp__rmm_dir "$folder" && (umask 077 && msp_json_result >"$json") 2>/dev/null; then
+            msp_say 90 " Result saved: $json"
+            msp_log INFO "Exported: $json"
+            # The newest 10 results of this script (ls -t: newest first; the names have no spaces).
+            # shellcheck disable=SC2012
+            ls -t "$folder/${MSP_SCRIPT_NAME}_"*.json 2>/dev/null | tail -n +11 | while IFS= read -r f; do rm -f "$f" && msp_log INFO "Removed old result $f"; done
+        else
+            msp_say 31 " Could not save the RMM result to $folder."
+            msp_log ERROR "RMM result not saved to $folder"
+            code=3
+        fi
+        msp_log INFO "RMM exit code $code"
+        printf '%s WARN=%s FAIL=%s ERROR=%s\n' "$MSP_CHECK_ID" "$(msp_count_status WARN)" "$(msp_count_status FAIL)" "$(msp_count_status ERROR)"
+        exit "$code"
+    fi
 }
 #endregion MSPHelper:Core
 
@@ -1736,28 +1829,29 @@ msp_mac_vendor() {
 #endregion MSPHelper:Net
 #endregion MSPToolkit (generated)
 
-SCRIPT_VERSION='1.0.0'
+SCRIPT_VERSION='1.1.0'
 OUTPUT=''
 while [ $# -gt 0 ]; do
     case "$1" in
         --output)
             OUTPUT=${2-}
-            [ -n "$OUTPUT" ] || { printf 'Missing folder after --output\n' >&2; exit 2; }
+            [ -n "$OUTPUT" ] || { printf 'Missing folder after --output\n' >&2; exit "$MSP_USAGE_EXIT"; }
             shift 2
             ;;
+        --rmm) shift ;;
         -h | --help)
             awk 'NR > 2 && /^#/ { sub(/^# ?/, ""); print; next } NR > 2 { exit }' "$0"
             exit 0
             ;;
         *)
             printf 'Unknown option: %s (see --help)\n' "$1" >&2
-            exit 2
+            exit "$MSP_USAGE_EXIT"
             ;;
     esac
 done
 if [ "$(uname -s)" != 'Linux' ]; then
     printf 'This script is for Linux. On macOS use get-endpoint-security-status-macos.sh.\n' >&2
-    exit 2
+    exit "$MSP_USAGE_EXIT"
 fi
 
 [ -n "$OUTPUT" ] && msp_param Output "$OUTPUT"
@@ -2041,7 +2135,12 @@ check_daily_admin() {
         msp_finding --status PASS --category 'Accounts' --check 'Daily account has admin rights' --detail "$DAILY_USER cannot use sudo."
     fi
 }
-msp_check 'Accounts' 'Daily account has admin rights' check_daily_admin
+if [ "$MSP_IS_SERVICE" = 'true' ]; then
+    # root with no signed-in technician (an RMM agent): there is no daily account to look at.
+    msp_skip 'Accounts' 'Daily account has admin rights' "Not checked: running as $MSP_USER. This check is about the signed-in user's own account; the Local administrators finding lists who has admin rights."
+else
+    msp_check 'Accounts' 'Daily account has admin rights' check_daily_admin
+fi
 
 check_logins() {
     # Guest sessions: LightDM's allow-guest, or a "guest" account with a login shell.

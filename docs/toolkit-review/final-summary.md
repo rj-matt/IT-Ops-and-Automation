@@ -1,13 +1,13 @@
 # Final summary: MSP toolkit review (Batches A-E, Phase 5)
 
-Updated 2026-10-29 (CI added). Development machine: macOS 26 (Apple silicon), PowerShell 7, bash 3.2.57
+Updated 2026-11-18 (RMM mode added; CI added 2026-10-29). Development machine: macOS 26 (Apple silicon), PowerShell 7, bash 3.2.57
 and 5.3, ShellCheck, PSScriptAnalyzer. The per-batch details are in `batch-a-summary.md`,
 `batch-b-summary.md`, `batch-c-summary.md` and `batch-e-summary.md`; this file is the overall
 status and the one list of what still has to be run by hand.
 
-Last full harness on macOS (`pwsh -NoProfile -File tests/Invoke-ToolkitTests.ps1`, passive):
-114 steps, 45 passed, 0 failed, 69 not run (other platforms, sudo, active network).
-Stubbed bash tests: 459 passed under bash 3.2 and 5.3. PSScriptAnalyzer: no findings in any
+Last full harness on macOS (`pwsh -NoProfile -File tests/Invoke-ToolkitTests.ps1`, passive,
+2026-11-18, RMM mode included): 144 steps, 59 passed, 0 failed, 85 not run (other platforms,
+sudo, active network). Stubbed bash tests: 577 passed under bash 3.2 and 5.3. PSScriptAnalyzer: no findings in any
 script (the known-issues baseline is empty and was removed).
 
 **GitHub Actions CI** (`.github/workflows/ci.yml`, details in the README) now runs the same
@@ -186,6 +186,49 @@ same minute; the top processes match; start a full antivirus scan or a big file 
 is named under Known causes; on a laptop on battery with power saving on, the power finding warns;
 startup items match Task Manager > Startup apps / Login Items / Startup Applications.
 
+## RMM mode (added 2026-11-18)
+
+Every script except A9 takes `-Rmm` / `--rmm` (or `MSP_TOOLKIT_RMM=1`) for running from an RMM
+agent such as a Kaseya agent procedure. The README section "Running from an RMM" is the
+technician's reference; in short:
+
+- **Output:** no colour, no prompts, nothing waits for input. The JSON result always goes to
+  `%ProgramData%\MSP-Toolkit\results\` (Windows) or `/var/tmp/msp-toolkit/results/`
+  (macOS/Linux), newest 10 per script kept. The last stdout line is `<ID> WARN=n FAIL=n ERROR=n`.
+- **Exit codes:** 0 all PASS/INFO/SKIPPED, 1 WARN, 2 FAIL, 3 ERROR or could not run (FAIL
+  outranks ERROR). No summary line = the script did not start (PowerShell rejects an unknown
+  parameter before the script runs).
+- **Results folder:** Windows: owner Administrators, access for Administrators and SYSTEM only,
+  inheritance off. macOS/Linux: folder 700, files 600. A link, a non-folder or (macOS/Linux) a
+  folder owned by another account is never used (exit 3); `/var/tmp` is writable by everyone and
+  a standard user can create folders in `%ProgramData%`, so a planted folder would otherwise
+  receive root's / SYSTEM's results.
+- **SYSTEM / root with no signed-in user:** detected (SID S-1-5-18/19/20; uid 0 without
+  `SUDO_USER`) and shown in the banner. Per-user checks cover every user and add a "Users
+  covered" finding (A5, A8, E2, C3, B3 macOS, B5, B6); checks that need a signed-in user say
+  SKIPPED with the reason (A1 daily account, B2/C3 proxy, E3 File History and OneDrive, B5 profile
+  scan). B1 names who is signed in. D3 always refuses under SYSTEM, even with `-Force`.
+- **Changes:** B4, D1, D2, D3 and Set-InactivityTimeout refuse in RMM mode without `-Force`
+  (SKIPPED, exit 3).
+- **Network:** off unless `-ActiveNetwork` / `--active-network`: A2 and B2 run passive, D2 skips
+  its connectivity test, the bundles run A2 passive and leave out A7, A7 alone exits 3.
+  `-ScanLan` and `-Online` still apply. The bundles roll each script's worst result up into one
+  WARN/FAIL per script, give one summary line, and do not build the HTML report in RMM mode.
+- **Versions:** every changed script went up one minor version (B5 to 1.2.0).
+
+Tested on this Mac and added to the harness and CI:
+
+| Test | What it covers | Result here |
+|---|---|---|
+| `tests/Test-RmmMode.ps1` (logic step, 5.1 and 7) | Mocked SYSTEM (`MSP_TEST_SERVICE_ACCOUNT=1`) on B5's fake drive: exit 0/1/2/3, `MSP_TOOLKIT_RMM=1`, summary line last, no colour codes, only JSON in the folder, history of 10 (11 pre-seeded), permissions (Windows ACL / Unix 700 and 600), a planted link refused; B5 and A5 user coverage; D3 refused with `-Force -WhatIf`; `Confirm-MSPChange` refuses without `-Force`; B2 passive with stand-in network cmdlets that fail if called; A7 exit 3 | 44 passed (pwsh 7.6) |
+| `tests/bash/test-scripts-mocked.sh` (RMM block) | Stubbed root with no `SUDO_USER` (detected, not simulated): B5 exit 0/1/2/3, usage error exit 3, `MSP_TOOLKIT_RMM=1`, under sudo the old behaviour, permissions, history, planted link; B4 refusal and `--force`; A2/B2 passive, A7 exit 3 with no router request; A5 users covered (service accounts left out); A1 daily account SKIPPED; bundle with one summary line and a WARN carried up | 577 passed in all (bash 3.2 and 5.3) |
+| Harness runtime cases "RMM: ..." | Real runs, passive, with `MSP_TEST_SERVICE_ACCOUNT=1` and the results folder in the case folder: B5, A1 (Windows), A5, B2, A7 (exit 3), B4 (refusal, exit 3), D3 `-Rmm -WhatIf` (Windows, exit 3, Outlook profile unchanged) | macOS: 5 of 5 passed; Windows and Linux: CI |
+
+Platform status: macOS **run** (as the normal account with the service-account switch; not as
+real root). Windows and Linux: **CI only** for the runtime cases, mocked/stubbed otherwise. Not
+run anywhere: under the real SYSTEM account, as real root with no sudo, or from Kaseya. Those are
+hand test 8.
+
 ## C4 Microsoft 365 security posture (added 2026-11-02)
 
 `cloud-services/m365/audit/Get-M365SecurityPosture.ps1`, read-only, tenant-wide: MFA
@@ -325,6 +368,9 @@ Found by the first CI runs (2026-10-28/29) and fixed:
   `emdl.ws.microsoft.com`, `tsfe.trafficshaping.dsp.mp.microsoft.com`; Microsoft's "Windows Update
   issues troubleshooting" endpoint list). Pings from any other program, any other host or an
   address with no recorded name, and every other protocol still fail the job.
+- **RMM exit code in Kaseya.** The README examples capture the output with "Execute Shell
+  Command - Get Results to Variable". Whether that step exposes the exit code to the procedure
+  has to be confirmed in hand test 8; the summary line carries the same information either way.
 - **Guard gap: name lookups.** A DNS lookup is not tied to the program that made it on Windows
   (the DNS Client service does the lookup) or on macOS (mDNSResponder does), so a script whose
   only traffic was a name lookup would not fail the Windows or macOS job. On Linux the bash
@@ -615,3 +661,54 @@ Check: A2 finds the devices you know of; A4 finds no risky open ports you do not
 admin-page and UPnP results match the router's own pages, and the checklist answers appear in
 the A9 report; B2 says "Every layer works" on a good connection and names the adapter layer
 with Wi-Fi off.
+
+### 8. RMM mode for real (SYSTEM, root, and one run from Kaseya)
+
+Passive throughout: nothing here sends traffic beyond the computer (no `-ActiveNetwork`).
+Delete the results folders afterwards: they hold device and user names.
+
+**Windows as SYSTEM** (Sysinternals PsExec on a test PC, elevated prompt):
+
+```powershell
+psexec -s -i powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\MSP-Toolkit\endpoint-systems\diagnostics\storage\Get-DiskSpaceReport.ps1" -Rmm
+echo $LASTEXITCODE
+psexec -s powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\MSP-Toolkit\endpoint-systems\diagnostics\system-info\Get-BrowserSecurityCheck.ps1" -Rmm
+psexec -s powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\MSP-Toolkit\endpoint-systems\remediation\safe\restart-services\Restart-CommonServices.ps1" -Rmm
+psexec -s powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\MSP-Toolkit\cloud-services\m365\remediation\Reset-OutlookProfile.ps1" -Rmm -WhatIf
+icacls C:\ProgramData\MSP-Toolkit\results
+```
+
+Check: the banner says "Account : SYSTEM"; the last line is `B5 WARN=.. FAIL=.. ERROR=..` and
+matches the exit code; A5 "Users covered" names every user profile on the PC; B4 and D3 exit 3
+and change nothing; `icacls` lists only BUILTIN\Administrators and NT AUTHORITY\SYSTEM, no
+inherited entries; after 11 B5 runs there are 10 B5 files.
+
+**macOS and Linux as root with no technician** (`env -u SUDO_USER` makes sudo look like an
+agent):
+
+```bash
+sudo env -u SUDO_USER bash endpoint-systems/diagnostics/storage/get-disk-space-report.sh --rmm; echo "EXIT=$?"
+sudo env -u SUDO_USER bash endpoint-systems/diagnostics/system-info/get-browser-security-check.sh --rmm; echo "EXIT=$?"
+sudo env -u SUDO_USER bash endpoint-systems/remediation/safe/restart-services/restart-common-services.sh --rmm; echo "EXIT=$?"
+sudo ls -la /var/tmp/msp-toolkit /var/tmp/msp-toolkit/results
+```
+
+Check: "Account : root with no signed-in user"; B5 skips the home folder and names every user
+under "Users covered"; A5 lists every user's browsers and not root's; B4 exits 3; the folders are
+`drwx------ root` and the files `-rw------- root`.
+
+**One real run from Kaseya on a test machine** (a test device in the MSP's own VSA, not a
+client's):
+
+1. Copy the toolkit to the device (`C:\MSP-Toolkit`, `/opt/msp-toolkit`).
+2. New agent procedure with one step "Execute Shell Command - Get Results to Variable", run as
+   System (Windows) / root (macOS), with the README's command for that platform, followed by a
+   "Write Procedure Log Entry" of `#global:cmdresults#`.
+3. Run it on the test device, then a second procedure with `Restart-CommonServices.ps1 -Rmm`
+   (must refuse).
+
+Check: the procedure log ends with the summary line; how VSA shows the exit code (success or
+failure of the step for exit 1-3; note it in the README if the step fails on any non-zero code,
+so alerts can be built on that); the JSON file is in the results folder and can be fetched with a
+"Get File" step; the B4 procedure changed no service. Record the VSA version and the step names
+used.

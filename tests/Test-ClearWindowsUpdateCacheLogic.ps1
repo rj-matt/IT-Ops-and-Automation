@@ -143,7 +143,13 @@ $recheckAt = $text.IndexOf('$r.NewName = Get-FreeBackupName')
 Assert-True 'names are planned before services are stopped' ($planAt -gt 0 -and $stopAt -gt $planAt) ('plan at {0}, stop at {1}' -f $planAt, $stopAt)
 Assert-True 'name re-checked right before Rename-Item' ($recheckAt -gt $stopAt -and $recheckAt -lt $renameAt) ('recheck at {0}, rename at {1}' -f $recheckAt, $renameAt)
 # The undo steps mention Remove-Item as printed text; an actual Remove-Item command must not exist.
-$removeCalls = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -in @('Remove-Item', 'rm', 'del', 'rmdir', 'ri') }, $true)
+# The one exception is the shared helper's Limit-MSPResultHistory, which in RMM mode removes the
+# script's own old result files from the RMM results folder (never anything of Windows Update).
+$removeCalls = $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -in @('Remove-Item', 'rm', 'del', 'rmdir', 'ri') }, $true) | Where-Object {
+    $fn = $_.Parent
+    while ($fn -and $fn -isnot [System.Management.Automation.Language.FunctionDefinitionAst]) { $fn = $fn.Parent }
+    -not ($fn -and $fn.Name -eq 'Limit-MSPResultHistory')
+}
 Assert-Equal 'script never runs Remove-Item' 0 @($removeCalls).Count
 
 Write-Host ('{0} passed, {1} failed (PowerShell {2})' -f $script:passed, $script:failed, $PSVersionTable.PSVersion)
