@@ -38,7 +38,7 @@
 #                               another computer is printed.
 #   --client NAME               Client/household name for the report title.
 #   --active-network  RMM mode only: run A2 in full and A7 (both send LAN traffic); otherwise
-#                 RMM mode behaves as --passive (--scan-lan and --online still apply).
+#                 RMM mode behaves as --passive, and --scan-lan / --online record SKIPPED.
 #   --rmm         RMM mode, for RMM agents: no colours or prompts, the JSON result saved to
 #                 /var/tmp/msp-toolkit/results, a one-line summary and an exit code to alert
 #                 on (0 OK, 1 WARN, 2 FAIL, 3 ERROR or not run). See the README.
@@ -71,7 +71,7 @@
 # Risk Level    : Read-Only -- runs read-only scripts and writes result files only.
 # Prerequisites : macOS 12+ or Linux | bash 3.2+ | root: No (recommended: sudo, for complete
 #                 results) | The eight audit scripts must be present (see Run order)
-# Version       : 1.1.0
+# Version       : 1.2.0
 # Limitations   : Runs on the local computer only; repeat on each computer to audit. Per-script
 #                 output appears on screen as each one runs; each script's own log is in
 #                 ${TMPDIR:-/tmp}/msp-toolkit. The HTML report needs PowerShell 7, which is
@@ -1042,7 +1042,7 @@ msp_complete() {
 #endregion MSPHelper:Core
 #endregion MSPToolkit (generated)
 
-SCRIPT_VERSION='1.1.0'
+SCRIPT_VERSION='1.2.0'
 OUTPUT=''
 PASSIVE=0
 SCAN_LAN=0
@@ -1116,8 +1116,17 @@ msp_init 'run-home-audit-bundle' "$SCRIPT_VERSION" 'Bundle' 'Read-Only' 'Home ne
     'parts of A1, A3, A5 and A8 (each script says which)'
 # The child scripts run in normal mode (exit 0 = completed); the bundle alone gives the RMM
 # summary line and exit code. RMM mode stays passive (A2 ARP table only, no A7) unless
-# --active-network is given; --scan-lan and --online are explicit requests and still apply.
+# --active-network is given; --scan-lan and --online also need it.
 unset MSP_TOOLKIT_RMM
+if [ "$MSP_RMM" = 1 ] && [ "$ACTIVE_NET" -eq 0 ]; then
+    # --scan-lan and --online also need --active-network in RMM mode.
+    [ "$SCAN_LAN" -eq 1 ] && msp_skip 'Setup' '--scan-lan' 'RMM mode: add --active-network to allow network traffic; this can reach many client networks at once. A4 checks this computer'\''s own ports only.' \
+        'Run the bundle again with --rmm --scan-lan --active-network once the client has agreed.'
+    [ "$ONLINE" -eq 1 ] && msp_skip 'Setup' '--online' 'RMM mode: add --active-network to allow network traffic; this can reach many client networks at once. A6 uses the last local check.' \
+        'Run the bundle again with --rmm --online --active-network once the client has agreed.'
+    SCAN_LAN=0
+    ONLINE=0
+fi
 NET_PASSIVE=$PASSIVE
 if [ "$MSP_RMM" = 1 ] && [ "$ACTIVE_NET" -eq 0 ] && [ "$PASSIVE" -eq 0 ]; then
     NET_PASSIVE=1

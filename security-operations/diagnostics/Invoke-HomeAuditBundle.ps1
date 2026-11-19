@@ -25,7 +25,8 @@
 
 .PARAMETER ActiveNetwork
     RMM mode only: run Get-HomeNetworkMap in full and Get-RouterSecurityCheck (both send traffic on
-    the LAN). Without it, RMM mode behaves as -Passive (-ScanLan and -OnlineUpdateSearch still apply).
+    the LAN), and allow -ScanLan and -OnlineUpdateSearch. Without it, RMM mode behaves as -Passive,
+    and -ScanLan / -OnlineUpdateSearch record SKIPPED.
 
 .PARAMETER Rmm
     RMM mode, for RMM agents such as Kaseya: no colours or prompts, the JSON result always saved
@@ -98,7 +99,7 @@
     Risk Level    : Read-Only -- runs read-only scripts and writes result files only.
     Prerequisites : Windows PowerShell 5.1 | Admin: No (recommended: Yes, for complete results) |
                     Modules: built-in only | The eight audit scripts must be present (see .DESCRIPTION)
-    Version       : 1.3.0
+    Version       : 1.4.0
     Limitations   : Runs on the local PC only; repeat on each PC to audit. Per-script output
                     appears on screen as each one runs; each script's own log is in
                     %TEMP%\MSP-Toolkit.
@@ -927,7 +928,7 @@ function Complete-MSPRun {
 #endregion MSPHelper:Core
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '1.3.0'
+$ScriptVersion = '1.4.0'
 Initialize-MSPRun -ScriptName 'Invoke-HomeAuditBundle' -ScriptVersion $ScriptVersion -CheckId 'Bundle' -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'Home network audit: runs A1-A8 and collects the results'
 # Number ranges are checked here, not with [ValidateRange], so a wrong value gets a plain message
@@ -990,8 +991,18 @@ if ($Passive -and ($ScanLan -or $OnlineUpdateSearch)) {
 # The child scripts run in normal mode (their exit code 0 means "completed"); the bundle alone
 # gives the RMM summary line and exit code.
 $env:MSP_TOOLKIT_RMM = $null
-# RMM mode stays passive (ARP table only, no router checks) unless -ActiveNetwork is given.
-# -ScanLan and -OnlineUpdateSearch are explicit requests and still apply.
+# RMM mode stays passive (ARP table only, no router checks) unless -ActiveNetwork is given;
+# -ScanLan and -OnlineUpdateSearch also need -ActiveNetwork there.
+if ($script:MSPRun.Rmm -and -not $ActiveNetwork) {
+    foreach ($o in @(@{ On = [bool]$ScanLan; Name = '-ScanLan'; Script = 'Get-OpenPortScan checks this PC''s own ports only' }, @{ On = [bool]$OnlineUpdateSearch; Name = '-OnlineUpdateSearch'; Script = 'Get-WindowsUpdateCompliance uses Windows'' own last scan' })) {
+        if ($o.On) {
+            Add-MSPFinding -Check $o.Name -Category 'Setup' -Status SKIPPED -Detail ('RMM mode: add -ActiveNetwork to allow network traffic; this can reach many client networks at once. {0}.' -f $o.Script) `
+                -Recommendation ('Run the bundle again with -Rmm {0} -ActiveNetwork once the client has agreed.' -f $o.Name)
+        }
+    }
+    $ScanLan = [switch]$false
+    $OnlineUpdateSearch = [switch]$false
+}
 $netPassive = [bool]$Passive
 if ($script:MSPRun.Rmm -and -not $ActiveNetwork -and -not $Passive) {
     $netPassive = $true

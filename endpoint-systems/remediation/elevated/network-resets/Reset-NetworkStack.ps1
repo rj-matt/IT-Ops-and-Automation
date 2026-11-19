@@ -48,9 +48,6 @@
     Do not send the pre-flight connectivity probes (gateway ping, DNS lookup, TCP connection).
     The rest of the pre-flight only reads this PC's own settings.
 
-.PARAMETER ActiveNetwork
-    RMM mode only: run the pre-flight connectivity test. Without it, RMM mode skips it.
-
 .PARAMETER Rmm
     RMM mode, for RMM agents such as Kaseya: no colours or prompts, the JSON result always saved
     to %ProgramData%\MSP-Toolkit\results (macOS/Linux: /var/tmp/msp-toolkit/results; the newest
@@ -85,7 +82,7 @@
     Exit codes    : 0 reset done (restart required), or -WhatIf/-BackupOnly completed; 1 nothing
                     changed (not admin, not confirmed, non-interactive without -Force); 2 a step
                     failed (see findings; backup failure means nothing was changed)
-    Version       : 2.1.0
+    Version       : 2.2.0
     Limitations   : Cannot verify the result until after the restart (run
                     Get-NetworkConnectivityReport.ps1 then). Does not fix driver, hardware, router or
                     ISP problems. Static settings are detected for IPv4 only.
@@ -95,7 +92,6 @@ param(
     [switch]$Force,
     [switch]$BackupOnly,
     [switch]$SkipConnectivityTest,
-    [switch]$ActiveNetwork,
     [switch]$Rmm,
     [string]$OutputPath
 )
@@ -994,7 +990,7 @@ function Confirm-MSPChange {
 #endregion MSPHelper:Change
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '2.1.0'
+$ScriptVersion = '2.2.0'
 # Read -WhatIf into our own flag, then switch it off so it cannot reach the log writes and
 # module loading. The dry run prints its own "What if:" lines with Write-MSPWhatIf.
 $dryRun = [bool]$WhatIfPreference
@@ -1002,9 +998,15 @@ $WhatIfPreference = $false
 Initialize-MSPRun -ScriptName 'Reset-NetworkStack' -ScriptVersion $ScriptVersion -CheckId 'D2' -RiskLevel 'Elevated' `
     -Parameters $PSBoundParameters -Description 'Winsock / TCP/IP reset with pre-flight checks and a saved copy of settings (needs a restart; not fully reversible)' `
     -AdminSections 'the reset itself (not needed for -WhatIf or -BackupOnly)'
-# RMM mode leaves out the connectivity test (it sends traffic) unless -ActiveNetwork is given.
-$rmmNoNetwork = $script:MSPRun.Rmm -and -not $ActiveNetwork -and -not $SkipConnectivityTest
-if ($rmmNoNetwork) { $SkipConnectivityTest = [switch]$true }
+# Never from an RMM agent, even with -Force: the reset cuts off the agent's own connection and
+# needs a restart, so nobody could follow up if something goes wrong.
+if ($script:MSPRun.Rmm) {
+    Add-MSPFinding -Check 'RMM mode' -Category 'Safety' -Status SKIPPED `
+        -Detail 'Not run in RMM mode, even with -Force: the reset cuts off the RMM agent''s connection and needs a restart. Nothing was changed.' `
+        -Recommendation 'Run it with someone at the machine, or on a remote session that survives a restart.'
+    Complete-MSPRun -OutputPath $OutputPath -CouldNotRun
+    exit 1
+}
 
 $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
 $exitCode = 0
@@ -1130,7 +1132,7 @@ Invoke-MSPCheck -Name 'Remote session' -Category 'Preflight' -ScriptBlock {
 Write-MSPSection -Title 'Pre-flight: connectivity'
 # =========================================================================================
 if ($SkipConnectivityTest) {
-    Add-MSPFinding -Check 'Connectivity test' -Category 'Preflight' -Status SKIPPED -Detail $(if ($rmmNoNetwork) { 'Not tested: RMM mode without -ActiveNetwork. No traffic was sent.' } else { 'Not tested (-SkipConnectivityTest). No traffic was sent.' }) `
+    Add-MSPFinding -Check 'Connectivity test' -Category 'Preflight' -Status SKIPPED -Detail 'Not tested (-SkipConnectivityTest). No traffic was sent.' `
         -Recommendation 'Run Get-NetworkConnectivityReport.ps1 if you need to see which layer fails.'
 }
 else {

@@ -73,7 +73,7 @@ $env:COMPUTERNAME = 'TESTPC'
 
 function Invoke-Bundle {
     <# Runs the copied bundle with the mock; returns exit code, recorded command lines and the bundle's own result. #>
-    param([string]$Name, [string]$Options)
+    param([string]$Name, [string]$Options, [string]$Extra = '')
     $dir = Join-Path $work $Name
     $flat = Join-Path $dir 'usb'
     $out = Join-Path $dir 'out'
@@ -82,8 +82,8 @@ function Invoke-Bundle {
     foreach ($s in $scripts) { [System.IO.File]::WriteAllText((Join-Path $flat ('{0}.ps1' -f $s)), '# placeholder') }
     $calls = Join-Path $dir 'calls.txt'
     $wrapper = Join-Path $dir 'run.ps1'
-    $text = "{0}`n`$env:MSP_TEST_CALLS = '{1}'`n& '{2}' -OutputPath '{3}' {4}`nexit `$LASTEXITCODE`n" -f $mock, ($calls -replace "'", "''"),
-        ((Join-Path $flat 'Invoke-HomeAuditBundle.ps1') -replace "'", "''"), ($out -replace "'", "''"), $Options
+    $text = "{0}`n`$env:MSP_TEST_CALLS = '{1}'`n{5}`n& '{2}' -OutputPath '{3}' {4}`nexit `$LASTEXITCODE`n" -f $mock, ($calls -replace "'", "''"),
+        ((Join-Path $flat 'Invoke-HomeAuditBundle.ps1') -replace "'", "''"), ($out -replace "'", "''"), $Options, $Extra
     [System.IO.File]::WriteAllText($wrapper, $text, (New-Object System.Text.UTF8Encoding($true)))
     $console = & $exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $wrapper 2>&1 | Out-String
     $code = $LASTEXITCODE
@@ -117,6 +117,22 @@ try {
     $a2 = @($r.Calls | Where-Object { $_ -match 'Get-HomeNetworkMap\.ps1' })
     Assert-True 'default: A2 without -Passive' ($a2.Count -eq 1 -and $a2[0] -notmatch '-Passive') ($a2 -join '')
     Assert-True 'default: A7 started without the checklist prompt' (@($r.Calls | Where-Object { $_ -match 'Get-RouterSecurityCheck\.ps1.*-SkipChecklistPrompt' }).Count -eq 1)
+
+    # --- RMM mode: -ScanLan and -OnlineUpdateSearch need -ActiveNetwork ------------------------
+    # The RMM results folder is moved into the case folder (development-only setting).
+    $rmmEnv = "`$env:MSP_TEST_RESULTS_ROOT = '{0}'" -f ((Join-Path $work 'rmm-results') -replace "'", "''")
+    $r = Invoke-Bundle 'rmm-lan' '-Rmm -ScanLan -OnlineUpdateSearch' $rmmEnv
+    Assert-True 'RMM without -ActiveNetwork: exit 0' ($r.Code -eq 0) ("exit {0}`n{1}" -f $r.Code, $r.Console)
+    Assert-True 'RMM without -ActiveNetwork: A4 and A6 started without -ScanLan / -Online' (@($r.Calls | Where-Object { $_ -match '-ScanLan|-Online' }).Count -eq 0) ($r.Calls -join "`n")
+    Assert-True 'RMM without -ActiveNetwork: A4 still started' (@($r.Calls | Where-Object { $_ -match 'Get-OpenPortScan\.ps1' }).Count -eq 1) ($r.Calls -join "`n")
+    foreach ($o in '-ScanLan', '-OnlineUpdateSearch') {
+        $f = @($r.Result.Findings | Where-Object { $_.Check -eq $o })
+        Assert-True ('RMM without -ActiveNetwork: {0} SKIPPED with the reason' -f $o) ($f.Count -eq 1 -and $f[0].Status -eq 'SKIPPED' -and $f[0].Detail -like 'RMM mode: add -ActiveNetwork to allow network traffic; this can reach many client networks at once.*') ($f | ConvertTo-Json -Compress)
+    }
+    Assert-True 'RMM: summary line last' ($r.Console.TrimEnd() -match '(?m)^Bundle WARN=\d+ FAIL=\d+ ERROR=\d+$') ''
+    $r = Invoke-Bundle 'rmm-active' '-Rmm -ActiveNetwork -ScanLan -OnlineUpdateSearch' $rmmEnv
+    Assert-True 'RMM with -ActiveNetwork: A4 started with -ScanLan' (@($r.Calls | Where-Object { $_ -match 'Get-OpenPortScan\.ps1.* -ScanLan' }).Count -eq 1) ($r.Calls -join "`n")
+    Assert-True 'RMM with -ActiveNetwork: A6 started with -Online' (@($r.Calls | Where-Object { $_ -match 'Get-WindowsUpdateCompliance\.ps1.* -Online' }).Count -eq 1) ($r.Calls -join "`n")
 
     # --- refused combinations ---------------------------------------------------------------
     foreach ($combo in '-Passive -ScanLan', '-Passive -OnlineUpdateSearch') {

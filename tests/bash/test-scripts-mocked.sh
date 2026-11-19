@@ -1770,6 +1770,30 @@ check 'RMM A7: SKIPPED with the reason' "$OUT" '\[SKIPPED\] Router checks - Not 
 check 'RMM A7: summary line' "$OUT.last" '^A7 WARN=0 FAIL=0 ERROR=0$'
 check 'RMM A7: router not contacted' <(wc -l <"$WORK/a7-router/curl-urls" | tr -d ' ') '^0$'
 
+# --- A4 --scan-lan and A6 --online need --active-network in RMM mode ---------------------------
+rmm_env rmm-a4
+linux_net 'default via 198.51.100.1 dev eth0 metric 100' '2: eth0    inet 198.51.100.23/24 scope global eth0'
+printf '198.51.100.1 lladdr 00:09:5b:11:22:33 REACHABLE\n198.51.100.40 lladdr 18:b4:30:00:00:01 REACHABLE\n' >"$WORK/rmm-a4/neigh.txt"
+stub "$BIN" ss 'printf "State Recv-Q Send-Q Local Address:Port Peer Address:Port Process\nLISTEN 0 5 0.0.0.0:23 0.0.0.0:*\n"'
+OUT="$WORK/rmm-a4.txt"
+run_rmm rmm-a4 "$A4" "$OUT" --rmm --scan-lan
+check 'RMM A4 --scan-lan without --active-network: SKIPPED with the reason' "$OUT" "\[SKIPPED\] Local network port check - RMM mode: add --active-network to allow network traffic; this can reach many client networks at once\. Only this computer's own ports were checked\."
+check 'RMM A4: passive checks still ran' "$OUT" '\[FAIL\] +Port 23 Telnet - Listening on the network'
+check_not 'RMM A4: no probing' "$OUT" 'Port check scope'
+check 'RMM A4: exit follows the findings (Telnet FAIL = 2)' "$OUT.rc" '^2$'
+check 'RMM A4: summary line' "$OUT.last" '^A4 WARN=[0-9]+ FAIL=[1-9][0-9]* ERROR=0$'
+OUT="$WORK/rmm-a6.txt"
+run_rmm a6-old "$A6L" "$OUT" --rmm --online
+check 'RMM A6 --online without --active-network: SKIPPED with the reason' "$OUT" '\[SKIPPED\] Online update search - RMM mode: add --active-network to allow network traffic; this can reach many client networks at once\. The last local check is used instead\.'
+check_not 'RMM A6: repositories not asked' "$OUT" 'Asking the repositories'
+check 'RMM A6: passive checks still ran' "$OUT" '\[FAIL\] +OS version support - Ubuntu 20\.04'
+check 'RMM A6: summary line' "$OUT.last" '^A6 WARN=[0-9]+ FAIL=[0-9]+ ERROR=[0-9]+$'
+OUT="$WORK/rmm-bundle-lan.txt"
+run_rmm rmm-a4 "$BUNDLE" "$OUT" --rmm --scan-lan --online --skip A1,A2,A3,A5,A6,A7,A8 --output "$WORK/rmm-a4/bundle-out"
+check 'RMM bundle --scan-lan: SKIPPED with the reason' "$OUT" '\[SKIPPED\] --scan-lan - RMM mode: add --active-network to allow network traffic; this can reach many client networks at once\.'
+check 'RMM bundle --online: SKIPPED with the reason' "$OUT" '\[SKIPPED\] --online - RMM mode: add --active-network'
+check 'RMM bundle: A4 started without --scan-lan' "$OUT" 'Local network port check - Not run \(use --scan-lan'
+
 # --- Per-user checks as root with no signed-in technician -------------------------------------
 rmm_env rmm-a5
 mkdir -p "$FAKE/home/alice/.mozilla/firefox" "$FAKE/home/bob/.config/google-chrome"

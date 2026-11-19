@@ -18,6 +18,10 @@
       Update settings   Group Policy / registry settings that disable or delay updates, a company
                         WSUS server, paused updates, and disabled update services.
 
+.PARAMETER ActiveNetwork
+    RMM mode only: allow -Online (it asks Microsoft Update over the internet). In RMM mode without
+    it, -Online records SKIPPED and Windows' own last scan is used.
+
 .PARAMETER Rmm
     RMM mode, for RMM agents such as Kaseya: no colours or prompts, the JSON result always saved
     to %ProgramData%\MSP-Toolkit\results (macOS/Linux: /var/tmp/msp-toolkit/results; the newest
@@ -45,7 +49,7 @@
                     un-pauses or changes anything.
     Prerequisites : Windows PowerShell 5.1 | Admin: No | Modules: none (Windows Update COM API) |
                     -Online needs internet access
-    Version       : 1.3.0
+    Version       : 1.4.0
     Limitations   : The lifecycle table is built in (dates as published by Microsoft, last
                     reviewed 2026-10); update the table when new versions ship. Windows 10
                     Extended Security Updates (ESU) enrolment cannot be detected reliably, so it
@@ -59,7 +63,8 @@
 param(
     [switch]$Rmm,
     [string]$OutputPath,
-    [switch]$Online
+    [switch]$Online,
+    [switch]$ActiveNetwork
 )
 
 #region MSPToolkit (generated) Sections=Core,Updates
@@ -952,9 +957,15 @@ function Get-MSPPendingReboot {
 #endregion MSPHelper:Updates
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '1.3.0'
+$ScriptVersion = '1.4.0'
 Initialize-MSPRun -ScriptName 'Get-WindowsUpdateCompliance' -ScriptVersion $ScriptVersion -CheckId 'A6' -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'Windows Update compliance and end-of-support check (read-only)'
+# An RMM job can run on many clients' computers at once: -Online needs -ActiveNetwork there.
+if ($script:MSPRun.Rmm -and $Online -and -not $ActiveNetwork) {
+    $Online = [switch]$false
+    Add-MSPFinding -Check 'Online update search' -Category 'Updates' -Status SKIPPED -Detail 'RMM mode: add -ActiveNetwork to allow network traffic; this can reach many client networks at once. Windows'' own last scan is used instead.' `
+        -Recommendation 'Run it again with -Rmm -Online -ActiveNetwork to ask Microsoft Update directly.'
+}
 
 # --- Microsoft lifecycle table -------------------------------------------------------------
 # Build -> version and end-of-servicing dates. Consumer = Home/Pro; Business = Enterprise/Education.

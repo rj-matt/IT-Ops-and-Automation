@@ -43,7 +43,8 @@
          tests/Test-PerformanceSnapshotWindowsLogic.ps1 (B6 Windows against mocked counters),
          tests/Test-RmmMode.ps1 (-Rmm as SYSTEM: exit codes 0-3, summary line, results folder
          history and permissions, a planted link refused, per-user coverage, D3 and remediation
-         refusals, B2 passive and A7 not run without -ActiveNetwork),
+         refusals, B2 passive and A7 not run without -ActiveNetwork, A4 -ScanLan and A6 -Online
+         SKIPPED without -ActiveNetwork, D2 refused),
          tests/Test-BuildRelease.ps1 (tools/Build-Release.ps1 package contents and refusals,
          PowerShell 7 only) and
          tests/bash/test-scripts-mocked.sh under every bash (Linux scripts, Linux branches and
@@ -94,7 +95,7 @@
                     macOS/Linux: PowerShell 7 and bash
                     All: PSScriptAnalyzer (module path or %LOCALAPPDATA%\PSModules), ShellCheck
     Exit code     : 0 when every step that ran passed, 1 otherwise
-    Version       : 2.11.0
+    Version       : 2.12.0
 #>
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPositionalParameters', '', Justification = 'Add-Result (Step, Result, Detail) is called ~50 times; positional calls keep each step on one readable line.')]
 [CmdletBinding()]
@@ -697,6 +698,13 @@ else {
         @{ Platform = 'Windows'; Name = 'RMM: A7 -Rmm (not run without -ActiveNetwork)'; Script = "$net/Get-RouterSecurityCheck.ps1"; Args = @('-Rmm'); Expect = @(3); Rmm = $true; MustContain = 'without -ActiveNetwork' }
         @{ Platform = 'Windows'; Name = 'RMM: B4 -Rmm, no -Force (must refuse, exit 3)'; Script = 'endpoint-systems/remediation/safe/restart-services/Restart-CommonServices.ps1'; Args = @('-Rmm'); Expect = @(3); Rmm = $true; MustContain = 'RMM mode never makes changes' }
         @{ Platform = 'Windows'; Name = 'RMM: D3 -Rmm -WhatIf as SYSTEM (must refuse, exit 3)'; Script = 'cloud-services/m365/remediation/Reset-OutlookProfile.ps1'; Args = @('-Rmm', '-WhatIf'); Expect = @(3); Rmm = $true; MustContain = 'runs as SYSTEM'; CheckOutlook = $true }
+        @{ Platform = 'Windows'; Name = 'RMM: A4 -Rmm -ScanLan (SKIPPED without -ActiveNetwork, nothing sent)'; Script = "$ep/Get-OpenPortScan.ps1"; Args = @('-Rmm', '-ScanLan'); Expect = @(0, 1, 2); Rmm = $true; MustContain = 'this can reach many client networks at once' }
+        @{ Platform = 'Windows'; Name = 'RMM: A6 -Rmm -Online (SKIPPED without -ActiveNetwork, nothing sent)'; Script = "$si/Get-WindowsUpdateCompliance.ps1"; Args = @('-Rmm', '-Online'); Expect = @(0, 1, 2); Rmm = $true; MustContain = 'this can reach many client networks at once' }
+        @{ Platform = 'Windows'; Name = 'RMM: D2 -Rmm -WhatIf (always refused, exit 3)'; Script = 'endpoint-systems/remediation/elevated/network-resets/Reset-NetworkStack.ps1'; Args = @('-Rmm', '-WhatIf'); Expect = @(3); Rmm = $true; MustContain = 'survives a restart' }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'RMM: A4 --rmm --scan-lan (macOS, SKIPPED, nothing sent)'; Script = "$ep/get-open-port-scan.sh"; Args = @('--rmm', '--scan-lan'); Expect = @(0, 1, 2); Rmm = $true; MustContain = 'this can reach many client networks at once' }
+        @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'RMM: A6 --rmm --online (macOS, SKIPPED, nothing sent)'; Script = "$si/get-update-compliance-macos.sh"; Args = @('--rmm', '--online'); Expect = @(0, 1, 2); Rmm = $true; MustContain = 'this can reach many client networks at once' }
+        @{ Platform = 'Linux'; Name = 'RMM: A4 --rmm --scan-lan (Linux, SKIPPED, nothing sent)'; Script = "$ep/get-open-port-scan.sh"; Args = @('--rmm', '--scan-lan'); Expect = @(0, 1, 2); Rmm = $true; MustContain = 'this can reach many client networks at once' }
+        @{ Platform = 'Linux'; Name = 'RMM: A6 --rmm --online (Linux, SKIPPED, nothing sent)'; Script = "$si/get-update-compliance-linux.sh"; Args = @('--rmm', '--online'); Expect = @(0, 1, 2); Rmm = $true; MustContain = 'this can reach many client networks at once' }
         @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'RMM: B5 --rmm as root (macOS)'; Script = $b5sh; Args = @('--rmm', '--scan-seconds', '20'); Expect = @(0, 1, 2); Rmm = $true; MustContain = '(?m)^B5 WARN=\d+ FAIL=\d+ ERROR=\d+\s*$' }
         @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'RMM: A5 --rmm as root (macOS, every user)'; Script = "$si/get-browser-security-check.sh"; Args = @('--rmm'); Expect = @(0, 1, 2); Rmm = $true; MustContain = 'Users covered' }
         @{ Platform = 'macOS'; Shell = '/bin/bash'; Name = 'RMM: B2 --rmm (macOS, passive)'; Script = $b2sh; Args = @('--rmm'); Expect = @(0, 1, 2); Rmm = $true; MustContain = 'Add --active-network' }

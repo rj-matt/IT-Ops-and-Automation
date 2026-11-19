@@ -12,6 +12,7 @@
 #   --max-parallel N    Simultaneous connection attempts, 1-32 (default 32).
 #   --output DIR        Also save results as JSON and CSV (toolkit schema 2.0), with
 #                       ListeningPorts and LanOpenPorts tables.
+#   --active-network  RMM mode only: allow --scan-lan (otherwise SKIPPED; own ports only).
 #   --rmm         RMM mode, for RMM agents: no colours or prompts, the JSON result saved to
 #                 /var/tmp/msp-toolkit/results, a one-line summary and an exit code to alert
 #                 on (0 OK, 1 WARN, 2 FAIL, 3 ERROR or not run). See the README.
@@ -42,7 +43,7 @@
 #                 connections. Nothing is changed and no logins are attempted.
 # Prerequisites : macOS 12+ or Linux (iproute2 ss) | bash 3.2+ | root: No (on Linux, root shows
 #                 the owning process of other users' sockets) | nc optional (bash /dev/tcp otherwise)
-# Version       : 1.1.0
+# Version       : 1.2.0
 # Limitations   : TCP only. "Reachable from the network" means bound to a network address; the
 #                 firewall may still block it (see the A1 endpoint script). The LAN check shows
 #                 what devices expose INSIDE the home network, not to the internet. Same checks
@@ -1830,11 +1831,12 @@ msp_mac_vendor() {
 #endregion MSPHelper:Net
 #endregion MSPToolkit (generated)
 
-SCRIPT_VERSION='1.1.0'
+SCRIPT_VERSION='1.2.0'
 OUTPUT=''
 SCAN_LAN=0
 TARGETS_ARG=''
 MAX_PARALLEL=32
+ACTIVE_NET=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --output)
@@ -1854,6 +1856,7 @@ while [ $# -gt 0 ]; do
             if [ "$MAX_PARALLEL" -lt 1 ] || [ "$MAX_PARALLEL" -gt 32 ]; then printf -- '--max-parallel must be 1-32\n' >&2; exit "$MSP_USAGE_EXIT"; fi
             shift 2
             ;;
+        --active-network) ACTIVE_NET=1; shift ;;
         --rmm) shift ;;
         -h | --help)
             awk 'NR > 2 && /^#/ { sub(/^# ?/, ""); print; next } NR > 2 { exit }' "$0"
@@ -1870,8 +1873,15 @@ done
 msp_param ScanLan "$SCAN_LAN"
 [ -n "$TARGETS_ARG" ] && msp_param Target "$TARGETS_ARG"
 msp_param MaxParallel "$MAX_PARALLEL"
+[ "$ACTIVE_NET" -eq 1 ] && msp_param ActiveNetwork 1
 msp_init 'get-open-port-scan' "$SCRIPT_VERSION" 'A4' 'Read-Only' \
     'Listening ports on this computer; optional local-network port check (read-only)'
+# An RMM job can run on many clients' computers at once: --scan-lan needs --active-network there.
+LAN_BLOCKED_BY_RMM=0
+if [ "$MSP_RMM" = 1 ] && [ "$SCAN_LAN" -eq 1 ] && [ "$ACTIVE_NET" -eq 0 ]; then
+    SCAN_LAN=0
+    LAN_BLOCKED_BY_RMM=1
+fi
 
 # Port|Name|Level|Why. Level: Risky (FAIL), Review (WARN), Sharing (INFO: file sharing),
 # Web (INFO), Other (INFO). Same table as Get-OpenPortScan.ps1 ("Windows" there = Sharing here).
@@ -1984,7 +1994,10 @@ msp_check 'LocalPorts' 'Listening TCP ports' check_listening
 
 # =========================================================================================
 if [ "$SCAN_LAN" -eq 0 ]; then
-    if [ -n "$TARGETS_ARG" ]; then
+    if [ "$LAN_BLOCKED_BY_RMM" -eq 1 ]; then
+        msp_skip 'LanScan' 'Local network port check' 'RMM mode: add --active-network to allow network traffic; this can reach many client networks at once. Only this computer'\''s own ports were checked.' \
+            'Run it again with --rmm --scan-lan --active-network once the client has agreed to the local network being scanned.'
+    elif [ -n "$TARGETS_ARG" ]; then
         msp_finding --status INFO --category 'LanScan' --check 'Local network port check' --detail '--target was given without --scan-lan, so no devices were scanned.'
     else
         msp_finding --status INFO --category 'LanScan' --check 'Local network port check' --detail 'Not run (use --scan-lan to check other home devices for risky open ports).'

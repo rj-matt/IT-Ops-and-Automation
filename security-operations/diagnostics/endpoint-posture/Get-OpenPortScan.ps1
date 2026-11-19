@@ -22,6 +22,10 @@
     Only scan a network with the owner's permission. A home network audit the client asked
     for is fine; a hotel, office or coffee-shop network is not.
 
+.PARAMETER ActiveNetwork
+    RMM mode only: allow -ScanLan (it sends traffic to every device on the local network). In RMM
+    mode without it, -ScanLan records SKIPPED and only this PC's own ports are checked.
+
 .PARAMETER Rmm
     RMM mode, for RMM agents such as Kaseya: no colours or prompts, the JSON result always saved
     to %ProgramData%\MSP-Toolkit\results (macOS/Linux: /var/tmp/msp-toolkit/results; the newest
@@ -65,7 +69,7 @@
                     TCP connections. Nothing is changed and no logins are attempted.
     Prerequisites : Windows PowerShell 5.1 | Admin: No (admin shows more process paths) |
                     Modules: built-in only (NetTCPIP)
-    Version       : 2.2.0
+    Version       : 2.3.0
     Limitations   : TCP only (UDP services such as SSDP/UPnP are covered by Get-RouterSecurityCheck.ps1).
                     "Reachable from the network" means the port is bound to a network address;
                     Windows Firewall may still block it (see Get-EndpointSecurityStatus.ps1).
@@ -79,6 +83,7 @@ param(
     [switch]$Rmm,
     [string]$OutputPath,
     [switch]$ScanLan,
+    [switch]$ActiveNetwork,
     [string[]]$Target,
     [int]$TimeoutMs = 500,
     [int]$ThrottleLimit = 32
@@ -1608,7 +1613,7 @@ function Get-MSPMacVendor {
 #endregion MSPHelper:Net
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '2.2.0'
+$ScriptVersion = '2.3.0'
 Initialize-MSPRun -ScriptName 'Get-OpenPortScan' -ScriptVersion $ScriptVersion -CheckId 'A4' -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'Listening ports on this PC; optional local-network port check (read-only)'
 # Number ranges are checked here, not with [ValidateRange], so a wrong value gets a plain message
@@ -1617,6 +1622,9 @@ if (-not (Test-MSPParameterRange -Bound $PSBoundParameters -Range ([ordered]@{ T
     Complete-MSPRun -OutputPath $OutputPath -CouldNotRun
     exit 1
 }
+# An RMM job can run on many clients' computers at once: -ScanLan needs -ActiveNetwork there.
+$lanBlockedByRmm = [bool]($script:MSPRun.Rmm -and $ScanLan -and -not $ActiveNetwork)
+if ($lanBlockedByRmm) { $ScanLan = [switch]$false }
 
 # What each well-known port is, and how worried to be when it is reachable from the network.
 # Level: Risky (FAIL), Review (WARN), Windows (INFO: normal for Windows), Web (INFO), Other (INFO).
@@ -1753,7 +1761,11 @@ Invoke-MSPCheck -Name 'Current network type' -Category 'LocalPorts' -ScriptBlock
 
 # =========================================================================================
 if (-not $ScanLan) {
-    if ($Target) {
+    if ($lanBlockedByRmm) {
+        Add-MSPFinding -Check 'Local network port check' -Category 'LanScan' -Status SKIPPED -Detail 'RMM mode: add -ActiveNetwork to allow network traffic; this can reach many client networks at once. Only this PC''s own ports were checked.' `
+            -Recommendation 'Run it again with -Rmm -ScanLan -ActiveNetwork once the client has agreed to the local network being scanned.'
+    }
+    elseif ($Target) {
         Add-MSPFinding -Check 'Local network port check' -Category 'LanScan' -Status INFO -Detail '-Target was given without -ScanLan, so no devices were scanned.'
     }
     else {

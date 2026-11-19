@@ -27,8 +27,10 @@
       Remediation     Confirm-MSPChange refuses in RMM mode without -Force (SKIPPED) and goes
                       ahead with -Force.
       Network         B2 in RMM mode runs passive (its network cmdlets are stand-ins that fail
-                      the run if called); A7 records SKIPPED and exits 3. -ActiveNetwork is not
-                      run here (it would send traffic).
+                      the run if called); A7 records SKIPPED and exits 3; A4 -ScanLan and A6
+                      -Online record SKIPPED and the passive checks still run. -ActiveNetwork is
+                      not run here (it would send traffic).
+      D2              refuses in RMM mode even with -Force (run with -WhatIf as well).
 
 .EXAMPLE
     pwsh -NoProfile -File tests/Test-RmmMode.ps1
@@ -37,7 +39,7 @@
     Risk Level    : Safe -- writes and removes files in a temporary folder only; no network
     Prerequisites : Windows PowerShell 5.1 or PowerShell 7 | Admin: No
     Exit code     : 0 all passed, 1 any failure
-    Version       : 1.0.0
+    Version       : 1.1.0
 #>
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPositionalParameters', '', Justification = 'Assert-True (Name, Condition, Detail) is a one-line test assertion used throughout.')]
 [CmdletBinding()]
@@ -298,6 +300,43 @@ function Invoke-WebRequest { throw 'Invoke-WebRequest must not be called in RMM 
     $f = Get-Finding $r.Result 'Router checks'
     Assert-True 'A7 in RMM mode: SKIPPED with the reason' ($f -and $f.Status -eq 'SKIPPED' -and $f.Detail -match 'without -ActiveNetwork') $(if ($f) { $f.Detail })
     Assert-True 'A7 in RMM mode: summary line' ($r.Last -ceq 'A7 WARN=0 FAIL=0 ERROR=0') $r.Last
+
+    # --- A4 -ScanLan and A6 -Online need -ActiveNetwork in RMM mode; D2 never runs ------------------
+    $reason = 'RMM mode: add -ActiveNetwork to allow network traffic; this can reach many client networks at once.'
+    $a4Mocks = @'
+function Get-NetTCPConnection { [CmdletBinding()] param([string]$State) [pscustomobject]@{ LocalAddress = '0.0.0.0'; LocalPort = 23; OwningProcess = 4; State = 'Listen' } }
+function Get-NetConnectionProfile { [CmdletBinding()] param() [pscustomobject]@{ Name = 'Home'; NetworkCategory = 'Private'; InterfaceAlias = 'Wi-Fi' } }
+function Get-Process { [CmdletBinding()] param([int[]]$Id, [string]$Name, [Parameter(ValueFromRemainingArguments = $true)]$Rest) [pscustomobject]@{ Id = 4; ProcessName = 'System'; Path = '' } }
+function Get-NetNeighbor { throw 'Get-NetNeighbor must not be called in RMM mode without -ActiveNetwork' }
+function Test-Connection { throw 'Test-Connection must not be called in RMM mode without -ActiveNetwork' }
+function Test-NetConnection { throw 'Test-NetConnection must not be called in RMM mode without -ActiveNetwork' }
+function New-Object {
+    [CmdletBinding()] param([Parameter(Position = 0)][string]$TypeName, [Parameter(Position = 1)][object[]]$ArgumentList, [string]$ComObject)
+    if ($TypeName -match 'Ping|TcpClient|Socket') { throw ('{0} must not be created in RMM mode without -ActiveNetwork' -f $TypeName) }
+    if ($ComObject) { throw ('COM object {0} not available (mocked).' -f $ComObject) }
+    Microsoft.PowerShell.Utility\New-Object @PSBoundParameters
+}
+'@
+    $r = Invoke-Rmm -Name 'a4' -Script (Join-Path $repo 'security-operations/diagnostics/endpoint-posture/Get-OpenPortScan.ps1') -ScriptArgs @('-Rmm', '-ScanLan') -Scene $a4Mocks
+    $f = Get-Finding $r.Result 'Local network port check'
+    Assert-True 'A4 -Rmm -ScanLan without -ActiveNetwork: SKIPPED with the reason' ($f -and $f.Status -eq 'SKIPPED' -and $f.Detail.StartsWith($reason)) $(if ($f) { $f.Detail } else { $r.Console })
+    Assert-True 'A4: nothing sent' ($r.Console -notmatch 'must not be (called|created)') ''
+    Assert-True 'A4: passive checks still ran' (@($r.Result.Findings | Where-Object { $_.Category -eq 'LocalPorts' }).Count -gt 0) ''
+    Assert-True 'A4: summary line' ($r.Last -match '^A4 WARN=\d+ FAIL=\d+ ERROR=\d+$') $r.Last
+
+    $r = Invoke-Rmm -Name 'a6' -Script (Join-Path $repo 'endpoint-systems/diagnostics/system-info/Get-WindowsUpdateCompliance.ps1') -ScriptArgs @('-Rmm', '-Online') -Scene $a4Mocks
+    $f = Get-Finding $r.Result 'Online update search'
+    Assert-True 'A6 -Rmm -Online without -ActiveNetwork: SKIPPED with the reason' ($f -and $f.Status -eq 'SKIPPED' -and $f.Detail.StartsWith($reason)) $(if ($f) { $f.Detail } else { $r.Console })
+    Assert-True 'A6: Microsoft Update not asked' ($r.Console -notmatch 'Asking Microsoft Update') ''
+    Assert-True 'A6: passive checks still ran' (@($r.Result.Findings | Where-Object { $_.Check -ne 'Online update search' }).Count -gt 0) ''
+    Assert-True 'A6: summary line' ($r.Last -match '^A6 WARN=\d+ FAIL=\d+ ERROR=\d+$') $r.Last
+
+    # -WhatIf as well, so nothing could change even if the refusal were missing.
+    $r = Invoke-Rmm -Name 'd2' -Script (Join-Path $repo 'endpoint-systems/remediation/elevated/network-resets/Reset-NetworkStack.ps1') -ScriptArgs @('-Rmm', '-Force', '-WhatIf') -Scene $a4Mocks
+    Assert-True 'D2 in RMM mode: refused even with -Force, exit 3' ($r.Code -eq 3) ('exit {0}' -f $r.Code)
+    $f = Get-Finding $r.Result 'RMM mode'
+    Assert-True 'D2 in RMM mode: SKIPPED with the reason' ($f -and $f.Status -eq 'SKIPPED' -and $f.Detail -match 'cuts off the RMM agent''s connection and needs a restart' -and $f.Recommendation -match 'survives a restart') $(if ($f) { $f.Detail })
+    Assert-True 'D2 in RMM mode: nothing else ran' (@($r.Result.Findings | Where-Object { $_.Check -ne 'RMM mode' }).Count -eq 0) (($r.Result.Findings | ForEach-Object { $_.Check }) -join ', ')
 }
 finally {
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue

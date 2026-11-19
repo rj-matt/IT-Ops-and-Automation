@@ -13,6 +13,7 @@
 #                 ask the Snap Store for snap updates. Needs internet. The system's own package
 #                 lists are not changed and nothing is downloaded or installed.
 #   --output DIR  Also save results as JSON and CSV (toolkit schema 2.0), with a PendingUpdates table.
+#   --active-network  RMM mode only: allow --online (otherwise SKIPPED; last local check used).
 #   --rmm         RMM mode, for RMM agents: no colours or prompts, the JSON result saved to
 #                 /var/tmp/msp-toolkit/results, a one-line summary and an exit code to alert
 #                 on (0 OK, 1 WARN, 2 FAIL, 3 ERROR or not run). See the README.
@@ -37,7 +38,7 @@
 # Scope         : This computer only. Without --online, no network traffic.
 # Risk Level    : Read-Only -- reads package records and settings; never installs, removes or changes anything.
 # Prerequisites : bash 3.2+ | apt (Debian/Ubuntu family) or dnf (Fedora/RHEL family) | root: No
-# Version       : 1.2.0
+# Version       : 1.3.0
 # Limitations   : The support table is built in (reviewed 2026-10-21; dates only from each
 #                 project's own pages, each row with its source URL and the day it was
 #                 checked; dates no official page confirmed are reported as "not confirmed").
@@ -1010,9 +1011,10 @@ msp_complete() {
 #endregion MSPHelper:Core
 #endregion MSPToolkit (generated)
 
-SCRIPT_VERSION='1.2.0'
+SCRIPT_VERSION='1.3.0'
 OUTPUT=''
 ONLINE=0
+ACTIVE_NET=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --output)
@@ -1021,6 +1023,7 @@ while [ $# -gt 0 ]; do
             shift 2
             ;;
         --online) ONLINE=1; shift ;;
+        --active-network) ACTIVE_NET=1; shift ;;
         --rmm) shift ;;
         -h | --help)
             awk 'NR > 2 && /^#/ { sub(/^# ?/, ""); print; next } NR > 2 { exit }' "$0"
@@ -1039,7 +1042,14 @@ fi
 
 [ -n "$OUTPUT" ] && msp_param Output "$OUTPUT"
 msp_param Online "$ONLINE"
+[ "$ACTIVE_NET" -eq 1 ] && msp_param ActiveNetwork 1
 msp_init 'get-update-compliance-linux' "$SCRIPT_VERSION" 'A6' 'Read-Only' 'Linux update compliance and end-of-support check (read-only)'
+# An RMM job can run on many clients' computers at once: --online needs --active-network there.
+if [ "$MSP_RMM" = 1 ] && [ "$ONLINE" -eq 1 ] && [ "$ACTIVE_NET" -eq 0 ]; then
+    ONLINE=0
+    msp_skip 'Updates' 'Online update search' 'RMM mode: add --active-network to allow network traffic; this can reach many client networks at once. The last local check is used instead.' \
+        'Run it again with --rmm --online --active-network to ask the update servers directly.'
+fi
 
 ROOT=${MSP_TEST_ROOT:-}
 NOW=$(date +%s)

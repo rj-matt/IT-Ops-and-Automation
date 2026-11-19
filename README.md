@@ -171,7 +171,8 @@ for that platform.
 current state and a numbered plan first; support `-WhatIf` / `--what-if` (plan only, nothing
 changed, no admin needed); ask you to type **YES**; refuse to change anything in a
 non-interactive session (RMM job, scheduled task) or in RMM mode unless `-Force` / `--force` is
-given (D3 refuses under SYSTEM even with `-Force`: it needs the user's own profile); record
+given (D3 refuses under SYSTEM even with `-Force`: it needs the user's own profile; D2 always
+refuses in RMM mode: it cuts off the agent's connection and needs a restart); record
 the state afterwards; and say plainly what cannot be undone. Exit codes: `0` done, `1` nothing
 changed (not admin / not confirmed / non-interactive), `2` a step failed.
 
@@ -421,7 +422,7 @@ environment does the same. In RMM mode a script:
 | `0` | Every check PASS, INFO or SKIPPED |
 | `1` | At least one WARN (no FAIL) |
 | `2` | At least one FAIL |
-| `3` | An ERROR, or the script could not run (wrong option or value, not supported here, refused: a change without `-Force`, D3 as SYSTEM, A7 without `-ActiveNetwork`; or the result could not be saved) |
+| `3` | An ERROR, or the script could not run (wrong option or value, not supported here, refused: a change without `-Force`, D2 always, D3 as SYSTEM, A7 without `-ActiveNetwork`; or the result could not be saved) |
 
 FAIL outranks ERROR: a run with both exits 2 and still counts the error on the summary line. **No
 summary line** means the script did not start: PowerShell rejects an unknown parameter before
@@ -444,13 +445,25 @@ OneDrive folder backup (E3), the profile / home folder scan (B5; the users' fold
 system drive list). D3 always refuses under SYSTEM; run it as the logged-on user.
 
 **Network traffic stays off in RMM mode** unless the procedure asks for it with
-`-ActiveNetwork` / `--active-network`: A2 and B2 run as `-Passive`, D2 skips its connectivity
-test, the bundle runs A2 passively and leaves out A7, and A7 on its own records SKIPPED and
-exits 3. `-ScanLan` (A4) and `-Online` (A6) are explicit requests and still apply.
+`-ActiveNetwork` / `--active-network`. One procedure can run on many clients' computers at
+once, so a network option given without it is not used:
 
-**Changes need `-Force`.** B4, D1, D2, D3 and Set-InactivityTimeout never change anything in
-RMM mode without `-Force` / `--force` (SKIPPED, exit 3). Run them with `-Rmm -WhatIf` first to
-see the plan in the procedure's output.
+- A2 and B2 run as `-Passive`;
+- A4 `-ScanLan` / `--scan-lan` and A6 `-Online` / `--online` record SKIPPED ("RMM mode: add
+  -ActiveNetwork to allow network traffic; this can reach many client networks at once") and
+  the script still runs its passive checks (A4: this computer's own ports; A6: the last local
+  update check);
+- the bundle runs A2 passively, leaves out A7, and records `-ScanLan` / `-OnlineUpdateSearch`
+  (`--scan-lan` / `--online`) as SKIPPED with the same reason;
+- A7 on its own records SKIPPED and exits 3.
+
+Outside RMM mode these options work as before, without `-ActiveNetwork`.
+
+**Changes need `-Force`.** B4, D1, D3 and Set-InactivityTimeout never change anything in RMM
+mode without `-Force` / `--force` (SKIPPED, exit 3). Run them with `-Rmm -WhatIf` first to see
+the plan in the procedure's output. **D2 (network stack reset) always refuses in RMM mode**, even
+with `-Force` (exit 3): the reset cuts off the RMM agent's connection and needs a restart, so run
+it with someone at the machine, or on a remote session that survives a restart.
 
 **Example agent-procedure commands** (Kaseya: an "Execute Shell Command - Get Results to
 Variable" step, run as System / root; the output is then in `#global:cmdresults#`, its last

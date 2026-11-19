@@ -6,8 +6,8 @@ and 5.3, ShellCheck, PSScriptAnalyzer. The per-batch details are in `batch-a-sum
 status and the one list of what still has to be run by hand.
 
 Last full harness on macOS (`pwsh -NoProfile -File tests/Invoke-ToolkitTests.ps1`, passive,
-2026-11-18, RMM mode included): 144 steps, 59 passed, 0 failed, 85 not run (other platforms,
-sudo, active network). Stubbed bash tests: 577 passed under bash 3.2 and 5.3. PSScriptAnalyzer: no findings in any
+2026-11-18, RMM mode and its follow-up included): 151 steps, 61 passed, 0 failed, 90 not run
+(other platforms, sudo, active network). Stubbed bash tests: 590 passed under bash 3.2 and 5.3. PSScriptAnalyzer: no findings in any
 script (the known-issues baseline is empty and was removed).
 
 **GitHub Actions CI** (`.github/workflows/ci.yml`, details in the README) now runs the same
@@ -208,21 +208,27 @@ technician's reference; in short:
   covered" finding (A5, A8, E2, C3, B3 macOS, B5, B6); checks that need a signed-in user say
   SKIPPED with the reason (A1 daily account, B2/C3 proxy, E3 File History and OneDrive, B5 profile
   scan). B1 names who is signed in. D3 always refuses under SYSTEM, even with `-Force`.
-- **Changes:** B4, D1, D2, D3 and Set-InactivityTimeout refuse in RMM mode without `-Force`
-  (SKIPPED, exit 3).
-- **Network:** off unless `-ActiveNetwork` / `--active-network`: A2 and B2 run passive, D2 skips
-  its connectivity test, the bundles run A2 passive and leave out A7, A7 alone exits 3.
-  `-ScanLan` and `-Online` still apply. The bundles roll each script's worst result up into one
+- **Changes:** B4, D1, D3 and Set-InactivityTimeout refuse in RMM mode without `-Force`
+  (SKIPPED, exit 3). D2 always refuses in RMM mode, even with `-Force` (follow-up, 2026-11-18):
+  the reset cuts off the agent's connection and needs a restart.
+- **Network:** off unless `-ActiveNetwork` / `--active-network`: A2 and B2 run passive, the
+  bundles run A2 passive and leave out A7, A7 alone exits 3. A4 `-ScanLan` and A6 `-Online`
+  (and the bundles' `-ScanLan` / `-OnlineUpdateSearch`) record SKIPPED with "RMM mode: add
+  -ActiveNetwork to allow network traffic; this can reach many client networks at once" and the
+  passive checks still run (follow-up, 2026-11-18; outside RMM mode unchanged). The bundles roll each script's worst result up into one
   WARN/FAIL per script, give one summary line, and do not build the HTML report in RMM mode.
-- **Versions:** every changed script went up one minor version (B5 to 1.2.0).
+- **Versions:** every changed script went up one minor version (B5 to 1.2.0); the follow-up
+  raised A4, A6, D2 and both bundles one more (A4 2.3.0 / 1.2.0, A6 1.4.0 / 1.3.0, D2 2.2.0,
+  bundles 1.4.0 / 1.2.0).
 
 Tested on this Mac and added to the harness and CI:
 
 | Test | What it covers | Result here |
 |---|---|---|
-| `tests/Test-RmmMode.ps1` (logic step, 5.1 and 7) | Mocked SYSTEM (`MSP_TEST_SERVICE_ACCOUNT=1`) on B5's fake drive: exit 0/1/2/3, `MSP_TOOLKIT_RMM=1`, summary line last, no colour codes, only JSON in the folder, history of 10 (11 pre-seeded), permissions (Windows ACL / Unix 700 and 600), a planted link refused; B5 and A5 user coverage; D3 refused with `-Force -WhatIf`; `Confirm-MSPChange` refuses without `-Force`; B2 passive with stand-in network cmdlets that fail if called; A7 exit 3 | 44 passed (pwsh 7.6) |
-| `tests/bash/test-scripts-mocked.sh` (RMM block) | Stubbed root with no `SUDO_USER` (detected, not simulated): B5 exit 0/1/2/3, usage error exit 3, `MSP_TOOLKIT_RMM=1`, under sudo the old behaviour, permissions, history, planted link; B4 refusal and `--force`; A2/B2 passive, A7 exit 3 with no router request; A5 users covered (service accounts left out); A1 daily account SKIPPED; bundle with one summary line and a WARN carried up | 577 passed in all (bash 3.2 and 5.3) |
-| Harness runtime cases "RMM: ..." | Real runs, passive, with `MSP_TEST_SERVICE_ACCOUNT=1` and the results folder in the case folder: B5, A1 (Windows), A5, B2, A7 (exit 3), B4 (refusal, exit 3), D3 `-Rmm -WhatIf` (Windows, exit 3, Outlook profile unchanged) | macOS: 5 of 5 passed; Windows and Linux: CI |
+| `tests/Test-RmmMode.ps1` (logic step, 5.1 and 7) | Mocked SYSTEM (`MSP_TEST_SERVICE_ACCOUNT=1`) on B5's fake drive: exit 0/1/2/3, `MSP_TOOLKIT_RMM=1`, summary line last, no colour codes, only JSON in the folder, history of 10 (11 pre-seeded), permissions (Windows ACL / Unix 700 and 600), a planted link refused; B5 and A5 user coverage; D3 refused with `-Force -WhatIf`; `Confirm-MSPChange` refuses without `-Force`; B2 passive with stand-in network cmdlets that fail if called; A7 exit 3; A4 `-ScanLan` and A6 `-Online` SKIPPED with the reason while the passive checks run (stand-ins fail if anything is sent); D2 refused with `-Force -WhatIf`, nothing else run | 55 passed (pwsh 7.6) |
+| `tests/bash/test-scripts-mocked.sh` (RMM block) | Stubbed root with no `SUDO_USER` (detected, not simulated): B5 exit 0/1/2/3, usage error exit 3, `MSP_TOOLKIT_RMM=1`, under sudo the old behaviour, permissions, history, planted link; B4 refusal and `--force`; A2/B2 passive, A7 exit 3 with no router request; A5 users covered (service accounts left out); A1 daily account SKIPPED; bundle with one summary line and a WARN carried up; A4 `--scan-lan` and A6 `--online` SKIPPED with the reason, passive checks still run, no network stub called; bundle `--scan-lan` / `--online` SKIPPED and A4 started without `--scan-lan` | 590 passed in all (bash 3.2 and 5.3) |
+| Harness runtime cases "RMM: ..." | Real runs, passive, with `MSP_TEST_SERVICE_ACCOUNT=1` and the results folder in the case folder: B5, A1 (Windows), A5, B2, A7 (exit 3), B4 (refusal, exit 3), D3 `-Rmm -WhatIf` (Windows, exit 3, Outlook profile unchanged), A4 `-ScanLan` and A6 `-Online` SKIPPED, D2 `-Rmm -WhatIf` (Windows, exit 3) | macOS: 7 of 7 passed; Windows and Linux: CI |
+| `tests/Test-HomeAuditBundleWindowsLogic.ps1` (mocked Start-Process) | RMM: `-ScanLan` / `-OnlineUpdateSearch` SKIPPED without `-ActiveNetwork` and not passed to A4/A6; passed on with `-ActiveNetwork` | 27 passed |
 
 Platform status: macOS **run** (as the normal account with the service-account switch; not as
 real root). Windows and Linux: **CI only** for the runtime cases, mocked/stubbed otherwise. Not
@@ -675,12 +681,15 @@ echo $LASTEXITCODE
 psexec -s powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\MSP-Toolkit\endpoint-systems\diagnostics\system-info\Get-BrowserSecurityCheck.ps1" -Rmm
 psexec -s powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\MSP-Toolkit\endpoint-systems\remediation\safe\restart-services\Restart-CommonServices.ps1" -Rmm
 psexec -s powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\MSP-Toolkit\cloud-services\m365\remediation\Reset-OutlookProfile.ps1" -Rmm -WhatIf
+psexec -s powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\MSP-Toolkit\endpoint-systems\remediation\elevated\network-resets\Reset-NetworkStack.ps1" -Rmm -WhatIf
+psexec -s powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\MSP-Toolkit\security-operations\diagnostics\endpoint-posture\Get-OpenPortScan.ps1" -Rmm -ScanLan
 icacls C:\ProgramData\MSP-Toolkit\results
 ```
 
 Check: the banner says "Account : SYSTEM"; the last line is `B5 WARN=.. FAIL=.. ERROR=..` and
-matches the exit code; A5 "Users covered" names every user profile on the PC; B4 and D3 exit 3
-and change nothing; `icacls` lists only BUILTIN\Administrators and NT AUTHORITY\SYSTEM, no
+matches the exit code; A5 "Users covered" names every user profile on the PC; B4, D2 and D3
+exit 3 and change nothing; A4 records the LAN check as SKIPPED ("this can reach many client
+networks at once") and still lists this PC's ports; `icacls` lists only BUILTIN\Administrators and NT AUTHORITY\SYSTEM, no
 inherited entries; after 11 B5 runs there are 10 B5 files.
 
 **macOS and Linux as root with no technician** (`env -u SUDO_USER` makes sudo look like an
