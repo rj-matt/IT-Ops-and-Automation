@@ -1,5 +1,7 @@
 # Batch A summary (A1-A9)
 
+> Historical record. Open items here may be closed; final-summary.md is the current status.
+
 Updated 2026-10-23 (Windows bundle `-Passive` added after the A-3 stop). Built in steps A-1 (A1-A4), A-2 (A5-A8) and A-3 (A9 for every platform,
 device checklist, macOS/Linux bundle), plus the A9 finding-ID fix, the A6 support-date review
 and the A8 `~/Applications` change. Development machine: macOS 26 (Apple silicon),

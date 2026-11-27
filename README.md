@@ -579,14 +579,16 @@ with `-WhatIf`, `-BackupOnly`, or in non-interactive mode without `-Force` (whic
 
 ### Release package
 
-`pwsh -NoProfile -File tools/Build-Release.ps1 -Version 1.2.0` (PowerShell 7, any platform)
-writes `dist/MSP-Toolkit-1.2.0.zip` and its `.sha256`. The zip holds only the scripts, the shared
+`pwsh -NoProfile -File tools/Build-Release.ps1 -Version 1.0.0` (PowerShell 7, any platform)
+writes `dist/MSP-Toolkit-1.0.0.zip` and its `.sha256` (a leading `v`, as in the tag `v1.0.0`, is
+dropped from the file name). The zip holds only the scripts, the shared
 data files (`approved-remote-tools.txt`, `software-watchlist.txt`) and this README, plus
 `SHA256SUMS` and `START-HERE.txt` (per-platform unblock and run steps); never `_archive`, `tests`,
 `docs`, `.github`, `tools` or any Markdown file other than this README. In a git checkout only tracked files are packaged. The
 build refuses to run if `Sync-MSPEmbeddedHelper.ps1 -Check` fails or a `.sh` file has CR line
 endings. `dist/` is ignored by git. Pushing a tag `v*` builds the package in CI after the three
-test jobs pass and uploads it as the run's artifact.
+test jobs pass and uploads it as the run's artifact (`MSP-Toolkit-<tag>`). The last tag, `v0.9.0`
+(2026-11-03), predates C4, C5, B5, B6 and RMM mode; the next one is `v1.0.0`.
 
 ### Continuous integration (GitHub Actions)
 

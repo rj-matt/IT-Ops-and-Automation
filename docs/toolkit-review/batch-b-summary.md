@@ -1,5 +1,7 @@
 # Batch B summary (B1-B4)
 
+> Historical record. Open items here may be closed; final-summary.md is the current status.
+
 Updated 2026-10-21. Commit `9523d99`. Development machine: macOS 26, PowerShell 7,
 bash 3.2.57 and 5.3, ShellCheck, PSScriptAnalyzer.
 

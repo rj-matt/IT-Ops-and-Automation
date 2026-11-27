@@ -1,5 +1,7 @@
 # Batch C summary (C1-C3)
 
+> Historical record. Open items here may be closed; final-summary.md is the current status.
+
 Updated 2026-10-26 (C1/C2 on Windows PowerShell 5.1, C2 P1 test, consent note). Commits `a632f1c` (Windows bundle `-Passive`, finishing Batch A) and
 `55fcb93` (Batch C). Development machine: macOS 26, PowerShell 7, bash 3.2.57 and 5.3,
 ShellCheck, PSScriptAnalyzer. No Microsoft 365 tenant was contacted.

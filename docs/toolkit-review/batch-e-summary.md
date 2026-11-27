@@ -1,5 +1,7 @@
 # Batch E summary (E1-E4)
 
+> Historical record. Open items here may be closed; final-summary.md is the current status.
+
 Updated 2026-10-26. Commit `9034075` (Batch E, A8 last-login fix); C1/C2 follow-up `82ba739`
 is in `batch-c-summary.md`. Development machine: macOS 26, PowerShell 7, bash 3.2.57 and 5.3,
 ShellCheck, PSScriptAnalyzer.

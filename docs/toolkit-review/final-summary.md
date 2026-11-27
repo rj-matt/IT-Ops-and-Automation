@@ -13,17 +13,17 @@ script (the known-issues baseline is empty and was removed).
 **GitHub Actions CI** (`.github/workflows/ci.yml`, details in the README) now runs the same
 harness, passive only, on every push and pull request to `main`:
 
-| Runner | Harness | Result (run 7, 2026-10-29, commit fab9f51) |
+| Runner | Harness | Result (run 34, 2026-11-19, commit 786b689: the latest green run on `main` when this was written) |
 |---|---|---|
-| windows-latest (Windows Server 2025), Windows PowerShell 5.1, administrator | 113 steps | 54 passed, 0 failed, 59 not run |
-| windows-latest, PowerShell 7.6, administrator | 113 steps | 54 passed, 0 failed, 59 not run |
-| ubuntu-latest (Ubuntu 24.04), PowerShell 7.6, bash 5.2, normal account `msptest` | 111 steps | 41 passed, 0 failed, 70 not run; stubbed bash tests 450 passed (one B3 block runs only on a macOS host) |
-| macos-latest (macOS 26, arm64), PowerShell 7.6, `/bin/bash` 3.2, normal account `msptest` | 109 steps | 40 passed, 0 failed, 69 not run; stubbed bash tests 459 passed |
+| windows-latest (image windows-2025-vs2026), Windows PowerShell 5.1, administrator | 156 steps | 79 passed, 0 failed, 77 not run |
+| windows-latest, PowerShell 7.6, administrator | 156 steps | 79 passed, 0 failed, 77 not run |
+| ubuntu-latest (image ubuntu-26.04), PowerShell 7.6, bash 5.3, normal account `msptest` | 148 steps | 57 passed, 0 failed, 91 not run; stubbed bash tests 581 passed (some blocks run only on a macOS host) |
+| macos-latest (image macos-26-arm64), PowerShell 7.6, `/bin/bash` 3.2, normal account `msptest` | 146 steps | 56 passed, 0 failed, 90 not run; stubbed bash tests 590 passed |
 
-Network guard on every runner: canary attempts to 192.0.2.1 blocked and counted, then nothing
-counted during the tests. On Windows, 27 TCP port 80 connections to Microsoft/CDN addresses
-(Windows certificate downloads inside PowerShell, 25 of them from pwsh 7) were listed and not
-counted (see open items). Only the four harness summaries were uploaded as artifacts.
+Network guard on every runner (run 34): canary attempts blocked and counted, then nothing counted
+during the tests. On Windows, 56 TCP port 80 connections to Microsoft's certificate revocation
+hosts (Windows CRL/OCSP checks inside PowerShell) were listed and not counted (see open items).
+Only the four harness summaries were uploaded as artifacts.
 
 NOT RUN in CI, by design: active network cases, other platforms' cases, root/sudo runs, bash 3.2
 on Linux, and on Windows the bash steps (no WSL distribution) and ShellCheck (it runs on Linux
@@ -306,8 +306,10 @@ otherwise the list starts with the password reset (1.1.0, 2026-11-09).
 `tools/Build-Release.ps1` builds `dist/MSP-Toolkit-<version>.zip` (scripts, the two data files,
 README, `SHA256SUMS`, `START-HERE.txt`) and refuses to build when the embedded-helper check fails.
 `tests/Test-BuildRelease.ps1` (32 checks, in the harness on PowerShell 7) covers the contents,
-checksums, executable `.sh` entries and the refusals. The CI release job runs only on a `v*` tag
-and has not run yet: no tag has been pushed. To make the first release (sends the tag to GitHub):
+checksums, executable `.sh` entries and the refusals. The CI release job runs only on a `v*` tag.
+Tag `v0.9.0` (commit 0b06ee9) has been pushed: CI run #11 (2026-11-03) passed the three test jobs
+and built the package, artifact `MSP-Toolkit-v0.9.0`. **v0.9.0 predates C4, C5, B5, B6 and RMM
+mode**: it does not contain them. The next release (sends the tag to GitHub):
 `git tag v1.0.0 && git push origin v1.0.0`, then download the `MSP-Toolkit-v1.0.0` artifact from
 that run and check it with `shasum -a 256 -c` / `sha256sum -c` against the `.sha256` file.
 
