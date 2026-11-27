@@ -1799,6 +1799,20 @@ check 'RMM planted link: exit 3' "$OUT.rc" '^3$'
 check 'RMM planted link: nothing written through it' <(find "$WORK/rmm-link/elsewhere" -type f | wc -l | tr -d ' ') '^0$'
 check 'RMM planted link: summary line still printed' "$OUT.last" '^B5 WARN=[0-9]+ FAIL=[0-9]+ ERROR=[0-9]+$'
 
+# --- A results folder and a log folder another account created in advance ------------------------
+# (Simulated with MSP_TEST_FOREIGN_OWNER: a test cannot create a folder someone else owns.)
+mkdir -p "$WORK/rmm-foreign/rr/results" "$WORK/rmm-foreign/msp-toolkit"
+chmod 777 "$WORK/rmm-foreign/rr/results" "$WORK/rmm-foreign/msp-toolkit"
+cp -R "$WORK/rmm-b5/bin" "$WORK/rmm-b5/root" "$WORK/rmm-foreign/"
+OUT="$WORK/rmm-foreign.txt"
+MSP_TEST_FOREIGN_OWNER="$WORK/rmm-foreign/rr/results|$WORK/rmm-foreign/msp-toolkit" run_rmm rmm-foreign "$B5" "$OUT" --rmm --scan-seconds 10
+check 'RMM planted foreign results folder: exit 3' "$OUT.rc" '^3$'
+check 'RMM planted foreign results folder: says it was not used' "$OUT" 'Could not save the RMM result'
+check 'RMM planted foreign results folder: nothing written into it' <(find "$WORK/rmm-foreign/rr/results" -type f | wc -l | tr -d ' ') '^0$'
+check 'RMM planted foreign results folder: permissions not taken over' <(mode_of "$WORK/rmm-foreign/rr/results") '^777$'
+check 'RMM planted foreign log folder: nothing written into it' <(find "$WORK/rmm-foreign/msp-toolkit" -type f | wc -l | tr -d ' ') '^0$'
+check 'RMM planted foreign log folder: log in a new private folder' "$OUT" "Log +: $WORK/rmm-foreign/msp-toolkit\\.[A-Za-z0-9]{6}/get-disk-space-report_"
+
 # --- Remediation: B4 refuses in RMM mode without --force ---------------------------------------
 rmm_env rmm-b4
 CALLS="$WORK/rmm-b4/calls"

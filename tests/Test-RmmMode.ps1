@@ -242,6 +242,61 @@ try {
         Assert-True 'planted link: summary line still printed' ($r.Last -match '^B5 WARN=\d+ FAIL=\d+ ERROR=\d+$') $r.Last
     }
 
+    # A plain results folder another account created in advance (a standard user can create folders
+    # in %ProgramData%) is refused, not taken over. A test cannot create a folder someone else owns,
+    # so MSP_TEST_FOREIGN_OWNER marks it as such.
+    $root = Join-Path $work 'rr-foreign'
+    $planted = Join-Path $root 'results'
+    $null = New-Item -ItemType Directory -Path $planted -Force
+    if (-not $onWindows) { & chmod 777 $planted }
+    $aclBefore = $null
+    if ($onWindows) { $aclBefore = (Get-Acl -LiteralPath $planted).Sddl }
+    $r = Invoke-Rmm -Name 'foreign' -ResultsRoot $root -Extra ('$env:MSP_TEST_FOREIGN_OWNER = ''{0}''' -f ($planted -replace "'", "''"))
+    Assert-True 'planted foreign results folder: exit 3' ($r.Code -eq 3) ('exit {0}' -f $r.Code)
+    Assert-True 'planted foreign results folder: nothing written' (@(Get-ChildItem -LiteralPath $planted -Force).Count -eq 0) ''
+    Assert-True 'planted foreign results folder: says it was not used' ($r.Console -match 'belongs to another account; it was not used') ''
+    if ($onWindows) { Assert-True 'planted foreign results folder: permissions not taken over' ((Get-Acl -LiteralPath $planted).Sddl -eq $aclBefore) '' }
+    else { Assert-True 'planted foreign results folder: permissions not taken over' ((Get-UnixMode $planted) -eq '777') (Get-UnixMode $planted) }
+    Assert-True 'planted foreign results folder: summary line still printed' ($r.Last -match '^B5 WARN=\d+ FAIL=\d+ ERROR=\d+$') $r.Last
+
+    # A log folder another account created in advance (C:\Windows\Temp is SYSTEM's TEMP; /tmp is
+    # shared): a new private folder with a random name is used, nothing is written into it.
+    if ($onWindows) {
+        $logBase = Join-PathPart $systemProfile 'AppData', 'Local', 'Temp'
+        $plantedLog = Join-Path $logBase 'MSP-Toolkit'
+        $extra = ''
+    }
+    else {
+        $logBase = Join-Path $work 'tmp-foreign'
+        $plantedLog = Join-Path $logBase 'msp-toolkit'
+        $extra = ('$env:TMPDIR = ''{0}''' -f ($logBase -replace "'", "''")) + "`n"
+    }
+    if (Test-Path -LiteralPath $plantedLog) { Remove-Item -LiteralPath $plantedLog -Recurse -Force }
+    $null = New-Item -ItemType Directory -Path $plantedLog -Force
+    if (-not $onWindows) { & chmod 777 $plantedLog }
+    $extra += ('$env:MSP_TEST_FOREIGN_OWNER = ''{0}''' -f ($plantedLog -replace "'", "''"))
+    $r = Invoke-Rmm -Name 'foreign-log' -Extra $extra
+    Assert-True 'planted foreign log folder: run completes (exit 0)' ($r.Code -eq 0) ('exit {0}; console: {1}' -f $r.Code, $r.Console)
+    Assert-True 'planted foreign log folder: nothing written into it' (@(Get-ChildItem -LiteralPath $plantedLog -Force).Count -eq 0) ''
+    $logLine = @($r.Lines | Where-Object { $_ -like ' Log     : *' }) | Select-Object -First 1
+    $logFile = ''
+    if ($logLine) { $logFile = $logLine.Substring(' Log     : '.Length) }
+    $logDir = ''
+    if ($logFile) { $logDir = Split-Path $logFile -Parent }
+    Assert-True 'planted foreign log folder: a new folder with a random name used instead' ($logDir -and (Split-Path $logDir -Parent) -eq $logBase -and (Split-Path $logDir -Leaf) -ne (Split-Path $plantedLog -Leaf) -and (Test-Path -LiteralPath $logFile)) ('log line: [{0}]' -f $logLine)
+    if ($logDir -and (Test-Path -LiteralPath $logDir)) {
+        if ($onWindows) {
+            $acl = Get-Acl -LiteralPath $logDir
+            $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+            $sids = @($acl.Access | ForEach-Object { $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } | Select-Object -Unique)
+            Assert-True 'fallback log folder: inheritance off; only Administrators, SYSTEM and this account' ($acl.AreAccessRulesProtected -and @($sids | Where-Object { $_ -notin @('S-1-5-32-544', 'S-1-5-18', $me) }).Count -eq 0) ($sids -join ', ')
+        }
+        else {
+            Assert-True 'fallback log folder: mode 700' ((Get-UnixMode $logDir) -eq '700') (Get-UnixMode $logDir)
+            Assert-True 'fallback log file: mode 600' ((Get-UnixMode $logFile) -eq '600') (Get-UnixMode $logFile)
+        }
+    }
+
     # --- Per-user checks as SYSTEM ---------------------------------------------------------------
     $r = Invoke-Rmm -Name 'a5' -Script (Join-Path $repo 'endpoint-systems/diagnostics/system-info/Get-BrowserSecurityCheck.ps1') -ScriptArgs @('-Rmm')
     Assert-True 'A5: summary line' ($r.Last -match '^A5 WARN=\d+ FAIL=\d+ ERROR=\d+$') $r.Last
