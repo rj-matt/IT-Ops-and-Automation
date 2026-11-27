@@ -247,20 +247,34 @@ try {
     # so MSP_TEST_FOREIGN_OWNER marks it as such.
     $root = Join-Path $work 'rr-foreign'
     $planted = Join-Path $root 'results'
-    $null = New-Item -ItemType Directory -Path $planted -Force
+    # First a normal run, so the parent folder (MSP_TEST_RESULTS_ROOT) is created and locked down
+    # before anything is planted; its permissions then cannot change during the planted run.
+    $pre = Invoke-Rmm -Name 'foreign-pre' -ResultsRoot $root
+    Assert-True 'planted foreign results folder: the parent is set up by a normal run first' ($pre.Code -eq 0 -and $pre.Json.Count -eq 1) ('exit {0}; {1} result(s)' -f $pre.Code, $pre.Json.Count)
+    Remove-Item -LiteralPath $planted -Recurse -Force
+    $null = New-Item -ItemType Directory -Path $planted
     if (-not $onWindows) { & chmod 777 $planted }
-    $aclBefore = $null
-    # Taking the folder over would change its owner and turn its inheritance off (the toolkit's
-    # private ACL always does). Restricting the parent folder still changes the entries Windows
-    # passes down to it, so those are shown but not compared.
-    function Get-OwnAcl { param([string]$Path) $a = Get-Acl -LiteralPath $Path; '{0}|{1}' -f $a.Owner, $a.AreAccessRulesProtected }
-    function Get-AclEntry { param([string]$Path) ((@((Get-Acl -LiteralPath $Path).Access | ForEach-Object { '{0}:{1}:{2}' -f $_.IdentityReference, $_.FileSystemRights, $_.IsInherited })) -join ',') }
-    if ($onWindows) { $aclBefore = Get-OwnAcl $planted }
+    $sddlBefore = ''
+    $entriesBefore = ''
+    if ($onWindows) {
+        $acl = Get-Acl -LiteralPath $planted
+        $sddlBefore = $acl.GetSecurityDescriptorSddlForm('Owner, Access')
+        $entriesBefore = (@($acl.Access | ForEach-Object { '{0}:{1}:{2}' -f $_.IdentityReference, $_.FileSystemRights, $_.IsInherited })) -join ', '
+    }
     $r = Invoke-Rmm -Name 'foreign' -ResultsRoot $root -Extra ('$env:MSP_TEST_FOREIGN_OWNER = ''{0}''' -f ($planted -replace "'", "''"))
     Assert-True 'planted foreign results folder: exit 3' ($r.Code -eq 3) ('exit {0}' -f $r.Code)
     Assert-True 'planted foreign results folder: nothing written' (@(Get-ChildItem -LiteralPath $planted -Force).Count -eq 0) ''
     Assert-True 'planted foreign results folder: says it was not used' ($r.Console -match 'belongs to another account; it was not used') ''
-    if ($onWindows) { $aclAfter = Get-OwnAcl $planted; Assert-True 'planted foreign results folder: permissions not taken over (owner unchanged, inheritance not turned off)' ($aclAfter -eq $aclBefore) ('before [{0}] after [{1}]; entries now: {2}' -f $aclBefore, $aclAfter, (Get-AclEntry $planted)) }
+    if ($onWindows) {
+        # The whole security descriptor (owner and every entry, own or inherited) must be unchanged.
+        $acl = Get-Acl -LiteralPath $planted
+        $sddlAfter = $acl.GetSecurityDescriptorSddlForm('Owner, Access')
+        $entriesAfter = (@($acl.Access | ForEach-Object { '{0}:{1}:{2}' -f $_.IdentityReference, $_.FileSystemRights, $_.IsInherited })) -join ', '
+        Write-Host ('  planted results folder SDDL before: {0}' -f $sddlBefore)
+        Write-Host ('  planted results folder SDDL after:  {0}' -f $sddlAfter)
+        Assert-True 'planted foreign results folder: permissions not taken over (full SDDL unchanged)' ($sddlAfter -ceq $sddlBefore) `
+            ('before [{0}] after [{1}]; entries before: {2}; entries after: {3}' -f $sddlBefore, $sddlAfter, $entriesBefore, $entriesAfter)
+    }
     else { Assert-True 'planted foreign results folder: permissions not taken over' ((Get-UnixMode $planted) -eq '777') (Get-UnixMode $planted) }
     Assert-True 'planted foreign results folder: summary line still printed' ($r.Last -match '^B5 WARN=\d+ FAIL=\d+ ERROR=\d+$') $r.Last
 

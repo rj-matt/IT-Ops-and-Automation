@@ -46,7 +46,7 @@
 # Prerequisites : Linux with systemd for the service, time and journal checks | bash 3.2+ |
 #                 root: No (Yes, or the adm / systemd-journal group, for the journal; Yes for
 #                 certificates)
-# Version       : 1.1.1
+# Version       : 1.1.2
 # Limitations   : A snapshot, not monitoring. Hardware RAID controllers and SMART are not
 #                 checked. Pending package updates: run get-update-compliance-linux.sh (A6).
 #                 MSP_TEST_ROOT (development tests only) prefixes the files read.
@@ -1048,7 +1048,7 @@ msp_complete() {
 #endregion MSPHelper:Core
 #endregion MSPToolkit (generated)
 
-SCRIPT_VERSION='1.1.1'
+SCRIPT_VERSION='1.1.2'
 OUTPUT=''
 while [ $# -gt 0 ]; do
     case "$1" in

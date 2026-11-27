@@ -64,7 +64,7 @@
 # Prerequisites : Linux with systemd for most checks | bash 3.2+ | root: No (sudo adds other
 #                 users' crontabs, units and SSH keys, every process, and the journal; or the
 #                 adm / systemd-journal group for the journal)
-# Version       : 1.1.1
+# Version       : 1.1.2
 # Limitations   : NOT an antivirus or EDR: no file scanning, no memory analysis, no rootkit
 #                 detection beyond ld.so.preload, no history of what ran. Programs installed in
 #                 /usr or /opt are not flagged by folder. MSP_TEST_ROOT (development tests
@@ -1067,7 +1067,7 @@ msp_complete() {
 #endregion MSPHelper:Core
 #endregion MSPToolkit (generated)
 
-SCRIPT_VERSION='1.1.1'
+SCRIPT_VERSION='1.1.2'
 OUTPUT=''
 DAYS=14
 while [ $# -gt 0 ]; do

@@ -107,7 +107,7 @@
                     (Install-Module Microsoft.Graph, ExchangeOnlineManagement -Scope CurrentUser)
                     | Account: Global Reader, plus View-Only Audit Logs for the audit log. An admin
                     must consent to the seven Graph scopes once per tenant (see above).
-    Version       : 1.2.1
+    Version       : 1.2.2
     Limitations   : A clean result does not prove the account is safe. Sign-ins need Entra ID P1,
                     risk needs P2. Rules created through MAPI as hidden rules are not listed by
                     Get-InboxRule. Logs can lag by up to a few hours; the audit log by up to a day.
@@ -1137,7 +1137,7 @@ function Confirm-MSPChange {
 #endregion MSPHelper:Change
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '1.2.1'
+$ScriptVersion = '1.2.2'
 Initialize-MSPRun -ScriptName 'Get-AccountCompromiseTriage' -ScriptVersion $ScriptVersion -CheckId 'C5' -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'Microsoft 365 account compromise triage for one user (read-only; changes nothing)'
 # Number ranges are checked here, not with [ValidateRange], so a wrong value gets a plain message

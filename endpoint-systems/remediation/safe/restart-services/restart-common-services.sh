@@ -63,7 +63,7 @@
 #                 NetworkManager (only when named) drops the network for a few seconds.
 # Prerequisites : macOS 12+ (launchd) or Linux with systemd | bash 3.2+ | root: Yes for changes
 #                 (No for --what-if)
-# Version       : 1.1.1
+# Version       : 1.1.2
 # Limitations   : Does not clear stuck print jobs or repair printer drivers. A service that stops
 #                 again right away has a deeper problem (check get-recent-critical-errors.sh).
 #                 Linux without systemd is not supported (reported, nothing changed).
@@ -1128,7 +1128,7 @@ msp_confirm_change() {
 #endregion MSPHelper:Change
 #endregion MSPToolkit (generated)
 
-SCRIPT_VERSION='1.1.1'
+SCRIPT_VERSION='1.1.2'
 OUTPUT=''
 SERVICES='all'
 START_IF_STOPPED=0

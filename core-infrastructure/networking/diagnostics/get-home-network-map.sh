@@ -44,7 +44,7 @@
 # Risk Level    : Read-Only -- sends ICMP echo (ping) and ARP to local addresses (nothing with
 #                 --passive); changes nothing.
 # Prerequisites : macOS 12+ or Linux with iproute2 | bash 3.2+ | root: No
-# Version       : 1.1.1
+# Version       : 1.1.2
 # Limitations   : Devices that are asleep, on a guest/IoT network or another subnet are not
 #                 seen. Vendor is a hint from a small table; "Unknown" does not mean malicious.
 #                 Phones/tablets often use private (randomized) MACs. IPv6-only devices are not
@@ -1865,7 +1865,7 @@ msp_mac_vendor() {
 #endregion MSPHelper:Net
 #endregion MSPToolkit (generated)
 
-SCRIPT_VERSION='1.1.1'
+SCRIPT_VERSION='1.1.2'
 OUTPUT=''
 SKIP_PING=0
 SKIP_NAMES=0
