@@ -1163,12 +1163,13 @@ Invoke-MSPCheck -Name 'IPv4 settings' -Category 'Preflight' -ScriptBlock {
             Add-MSPFinding -Check ('IPv4: {0}' -f $a.Name) -Category 'Preflight' -Status INFO -Detail ('{0}: virtual or VPN adapter ({1}); its settings come from its own software.' -f $a.Name, $a.InterfaceDescription)
             continue
         }
-        # 2>$null as well: on an adapter without IPv4, Get-NetIPConfiguration's internal
-        # Get-NetIPInterface call writes "No MSFT_NetIPInterface objects found" despite -ErrorAction.
+        # 2>$null as well: on an adapter without IPv4, Get-NetIPInterface writes "No
+        # MSFT_NetIPInterface objects found" despite -ErrorAction. Addresses and the gateway are
+        # read directly: Get-NetIPConfiguration throws ("Exception setting NetAdapter") when
+        # Windows reports more than one adapter object for an interface.
         $ipIf = Get-NetIPInterface -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue 2>$null
-        $cfg = Get-NetIPConfiguration -InterfaceIndex $a.ifIndex -ErrorAction SilentlyContinue 2>$null
-        $addr = @($cfg.IPv4Address | Where-Object { $_ })
-        $gw = @($cfg.IPv4DefaultGateway | ForEach-Object { $_.NextHop })
+        $addr = @(Get-NetIPAddress -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue 2>$null | Where-Object { $_ })
+        $gw = @(Get-NetRoute -InterfaceIndex $a.ifIndex -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue 2>$null | ForEach-Object { $_.NextHop })
         $dns = @((Get-DnsClientServerAddress -InterfaceIndex $a.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses)
         # Static DNS servers are stored in the interface's NameServer value; DHCP ones are not.
         $guid = $a.InterfaceGuid
@@ -1363,7 +1364,13 @@ if ($PSCmdlet.ShouldProcess($backupDir, 'Save current network settings')) {
             $text = (& $captures[$name] 2>&1 | Out-String -Width 200)
             [System.IO.File]::WriteAllText((Join-Path $backupDir $name), $text, (New-Object System.Text.UTF8Encoding($false)))
         }
-        Get-NetIPConfiguration -ErrorAction SilentlyContinue | Export-Clixml -LiteralPath (Join-Path $backupDir 'ipconfiguration.clixml')
+        # Get-NetIPConfiguration can throw on some adapters (see the IPv4 settings check); then the
+        # addresses and routes it is built from are saved instead.
+        try { Get-NetIPConfiguration -ErrorAction Stop | Export-Clixml -LiteralPath (Join-Path $backupDir 'ipconfiguration.clixml') }
+        catch {
+            [pscustomobject]@{ IPAddress = @(Get-NetIPAddress -ErrorAction SilentlyContinue); Route = @(Get-NetRoute -ErrorAction SilentlyContinue) } |
+                Export-Clixml -LiteralPath (Join-Path $backupDir 'ipconfiguration.clixml')
+        }
 
         # Re-entry commands for static settings: the one part of the old setup a technician can restore.
         $restore = New-Object System.Collections.Generic.List[string]

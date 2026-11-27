@@ -397,6 +397,25 @@ function New-Object {
     $f = Get-Finding $r.Result 'RMM mode'
     Assert-True 'D2 in RMM mode: SKIPPED with the reason' ($f -and $f.Status -eq 'SKIPPED' -and $f.Detail -match 'cuts off the RMM agent''s connection and needs a restart' -and $f.Recommendation -match 'survives a restart') $(if ($f) { $f.Detail })
     Assert-True 'D2 in RMM mode: nothing else ran' (@($r.Result.Findings | Where-Object { $_.Check -ne 'RMM mode' }).Count -eq 0) (($r.Result.Findings | ForEach-Object { $_.Check }) -join ', ')
+
+    # D2 outside RMM mode (-WhatIf, so nothing changes): Get-NetIPConfiguration throws on some
+    # adapters ("Exception setting NetAdapter", seen on a CI runner); the IPv4 pre-flight must still
+    # read the address and gateway instead of reporting ERROR.
+    if ($onWindows) {
+        $d2Mocks = @'
+function Get-NetAdapter { [CmdletBinding()] param([Parameter(ValueFromRemainingArguments = $true)]$Rest) [pscustomobject]@{ Name = 'Ethernet'; InterfaceDescription = 'Mock Ethernet'; Status = 'Up'; LinkSpeed = '1 Gbps'; ifIndex = 7; InterfaceGuid = '{00000000-0000-0000-0000-000000000007}' } }
+function Get-NetIPConfiguration { throw 'Exception setting "NetAdapter": "Cannot convert the "System.Object[]" value of type "System.Object[]" to type "Microsoft.Management.Infrastructure.CimInstance"."' }
+function Get-NetIPInterface { [CmdletBinding()] param([int]$InterfaceIndex, [string]$AddressFamily) [pscustomobject]@{ Dhcp = 'Enabled' } }
+function Get-NetIPAddress { [CmdletBinding()] param([int]$InterfaceIndex, [string]$AddressFamily) [pscustomobject]@{ IPAddress = '198.51.100.23'; PrefixLength = 24 } }
+function Get-NetRoute { [CmdletBinding()] param([int]$InterfaceIndex, [string]$DestinationPrefix) [pscustomobject]@{ NextHop = '198.51.100.1' } }
+function Get-DnsClientServerAddress { [CmdletBinding()] param([int]$InterfaceIndex, [string]$AddressFamily) [pscustomobject]@{ ServerAddresses = @('198.51.100.1') } }
+function Test-Connection { throw 'Test-Connection must not be called with -SkipConnectivityTest' }
+function Test-NetConnection { throw 'Test-NetConnection must not be called with -SkipConnectivityTest' }
+'@
+        $r = Invoke-Rmm -Name 'd2-ipconfig' -Script (Join-Path $repo 'endpoint-systems/remediation/elevated/network-resets/Reset-NetworkStack.ps1') -ScriptArgs @('-WhatIf', '-SkipConnectivityTest') -Scene $d2Mocks
+        Assert-True 'D2 pre-flight with Get-NetIPConfiguration throwing: address and gateway read' ($r.Console -match 'IPv4: Ethernet - Ethernet: 198\.51\.100\.23/24 gateway 198\.51\.100\.1') $r.Console
+        Assert-True 'D2 pre-flight with Get-NetIPConfiguration throwing: no ERROR for IPv4 settings' ($r.Console -notmatch 'IPv4 settings - The check could not complete') ''
+    }
 }
 finally {
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
