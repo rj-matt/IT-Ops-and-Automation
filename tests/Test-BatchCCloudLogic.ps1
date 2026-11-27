@@ -268,11 +268,11 @@ $global:ExoMailbox = [pscustomobject]@{
     ProhibitSendQuota = '49.5 GB (53,150,220,288 bytes)'; ProhibitSendReceiveQuota = '50 GB (53,687,091,200 bytes)'; IssueWarningQuota = '49 GB (52,613,349,376 bytes)'
     RecoverableItemsQuota = '30 GB (32,212,254,720 bytes)'; ArchiveStatus = 'None'; ArchiveGuid = '00000000-0000-0000-0000-000000000000'; AutoExpandingArchiveEnabled = $false
     LitigationHoldEnabled = $true; LitigationHoldDate = (Get-Date '2026-01-15'); InPlaceHolds = @(); ComplianceTagHoldApplied = $false; DelayHoldApplied = $false; RetentionHoldEnabled = $false
-    ForwardingAddress = $null; ForwardingSmtpAddress = 'smtp:mallory.backup@gmail.com'; DeliverToMailboxAndForward = $false; GrantSendOnBehalfTo = @('Carol Assistant')
+    ForwardingAddress = $null; ForwardingSmtpAddress = 'smtp:mallory.backup@example.net'; DeliverToMailboxAndForward = $false; GrantSendOnBehalfTo = @('Carol Assistant')
 }
 $global:ExoStats = [pscustomobject]@{ TotalItemSize = '49.6 GB (53,257,594,470 bytes)'; TotalDeletedItemSize = '28.5 GB (30,601,641,984 bytes)'; ItemCount = 120000; LastLogonTime = (Get-Date).AddHours(-2) }
 $global:ExoRules = @(
-    [pscustomobject]@{ Name = 'Sync'; Enabled = $true; ForwardTo = @('"Ext" [SMTP:collect@proton.me]'); ForwardAsAttachmentTo = $null; RedirectTo = $null; DeleteMessage = $false; MoveToFolder = $null; MarkAsRead = $false; Description = 'forward' },
+    [pscustomobject]@{ Name = 'Sync'; Enabled = $true; ForwardTo = @('"Ext" [SMTP:collect@example.com]'); ForwardAsAttachmentTo = $null; RedirectTo = $null; DeleteMessage = $false; MoveToFolder = $null; MarkAsRead = $false; Description = 'forward' },
     [pscustomobject]@{ Name = '.'; Enabled = $true; ForwardTo = $null; ForwardAsAttachmentTo = $null; RedirectTo = $null; DeleteMessage = $false; MoveToFolder = 'alice:\RSS Feeds'; MarkAsRead = $true; Description = 'hide' },
     [pscustomobject]@{ Name = 'Newsletters'; Enabled = $true; ForwardTo = $null; ForwardAsAttachmentTo = $null; RedirectTo = $null; DeleteMessage = $false; MoveToFolder = 'alice:\Newsletters'; MarkAsRead = $false; Description = 'move' }
 )
@@ -317,8 +317,8 @@ Assert-Finding $r 'C1: no archive while nearly full' 'Archive' 'WARN' 'No archiv
 Assert-Finding $r 'C1: litigation hold listed' 'Holds' 'INFO' 'litigation hold since 2026-01-15'
 Assert-Finding $r 'C1: recoverable items near full' 'Recoverable items' 'WARN' '95 %'
 Assert-True 'C1: recoverable items advice respects the hold' ([string](Get-Finding $r 'Recoverable items').Recommendation -match 'legal hold')
-Assert-Finding $r 'C1: external forwarding, no copy' 'Mailbox forwarding' 'WARN' 'mallory\.backup@gmail\.com \(NO copy.*outside the organization'
-Assert-Finding $r 'C1: forwarding rule' 'Forwarding rules' 'WARN' '"Sync" -> .*collect@proton\.me.*outside the organization'
+Assert-Finding $r 'C1: external forwarding, no copy' 'Mailbox forwarding' 'WARN' 'mallory\.backup@example\.net \(NO copy.*outside the organization'
+Assert-Finding $r 'C1: forwarding rule' 'Forwarding rules' 'WARN' '"Sync" -> .*collect@example\.com.*outside the organization'
 Assert-Finding $r 'C1: hiding rule' 'Rules that hide mail' 'WARN' '"\." moves to .*RSS Feeds and marks read'
 Assert-True 'C1: normal move rule not flagged' ([string](Get-Finding $r 'Rules that hide mail').Detail -notmatch 'Newsletters')
 Assert-Finding $r 'C1: auto-reply' 'Auto-reply' 'INFO' 'Enabled; outside senders: All'

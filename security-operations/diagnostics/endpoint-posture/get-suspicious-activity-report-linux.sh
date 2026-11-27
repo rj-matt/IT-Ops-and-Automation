@@ -64,7 +64,7 @@
 # Prerequisites : Linux with systemd for most checks | bash 3.2+ | root: No (sudo adds other
 #                 users' crontabs, units and SSH keys, every process, and the journal; or the
 #                 adm / systemd-journal group for the journal)
-# Version       : 1.1.0
+# Version       : 1.1.1
 # Limitations   : NOT an antivirus or EDR: no file scanning, no memory analysis, no rootkit
 #                 detection beyond ld.so.preload, no history of what ran. Programs installed in
 #                 /usr or /opt are not flagged by folder. MSP_TEST_ROOT (development tests
@@ -1034,7 +1034,7 @@ msp_complete() {
 #endregion MSPHelper:Core
 #endregion MSPToolkit (generated)
 
-SCRIPT_VERSION='1.1.0'
+SCRIPT_VERSION='1.1.1'
 OUTPUT=''
 DAYS=14
 while [ $# -gt 0 ]; do
@@ -1373,7 +1373,11 @@ msp_check 'Processes' 'Programs running from unusual folders' check_processes
 
 check_connections() {
     local out line pid peer total hits=''
-    msp_have ss || { printf 'ss: command not found\n' >&2; return 1; }
+    if ! msp_have ss; then
+        msp_skip 'Processes' 'Connections from flagged programs' 'ss is not installed on this computer, so open network connections could not be listed.' \
+            'Install iproute2 (it provides ss) to include this check, or list connections by hand with netstat -tnp.'
+        return 0
+    fi
     out=$(ss -tnpH state established 2>/dev/null)
     total=$(printf '%s\n' "$out" | grep -c .)
     while IFS= read -r line; do

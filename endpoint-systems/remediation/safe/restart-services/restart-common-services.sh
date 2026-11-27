@@ -63,7 +63,7 @@
 #                 NetworkManager (only when named) drops the network for a few seconds.
 # Prerequisites : macOS 12+ (launchd) or Linux with systemd | bash 3.2+ | root: Yes for changes
 #                 (No for --what-if)
-# Version       : 1.1.0
+# Version       : 1.1.1
 # Limitations   : Does not clear stuck print jobs or repair printer drivers. A service that stops
 #                 again right away has a deeper problem (check get-recent-critical-errors.sh).
 #                 Linux without systemd is not supported (reported, nothing changed).
@@ -1095,7 +1095,7 @@ msp_confirm_change() {
 #endregion MSPHelper:Change
 #endregion MSPToolkit (generated)
 
-SCRIPT_VERSION='1.1.0'
+SCRIPT_VERSION='1.1.1'
 OUTPUT=''
 SERVICES='all'
 START_IF_STOPPED=0
@@ -1247,7 +1247,7 @@ $(service_row "$name")
 EOF
     msp_data_row 'ServicesBefore' Name "$name" DisplayName "$(display_name "$name")" Status "$status" StartType "$start" Pid "$pid"
     action='None'
-    if [ "$status" = 'NotFound' ]; then why='Service not found on this computer.'
+    if [ "$status" = 'NotFound' ]; then why='Not present on this computer, so there is nothing to restart.'
     elif [ "$start" = 'Disabled' ] || [ "$start" = 'Masked' ]; then why="$start. This script never changes a disabled or masked service."
     elif [ "$name" = 'mDNSResponder' ]; then action='FlushCache'; why='macOS restarts it at once if stopped; its cache will be cleared instead.'
     elif [ "$status" = 'Running' ]; then action='Restart'; why='Running; will be restarted.'
@@ -1257,11 +1257,13 @@ EOF
     fi
     fstatus='INFO'
     rec=''
-    if [ "$status" = 'NotFound' ] || [ "$start" = 'Disabled' ] || [ "$start" = 'Masked' ]; then fstatus='WARN'; fi
+    # A service this computer does not have is normal (a server without printing): INFO, not a problem.
+    if [ "$start" = 'Disabled' ] || [ "$start" = 'Masked' ]; then fstatus='WARN'; fi
     if [ "$start" = 'Boot' ] && [ "$status" != 'Running' ]; then fstatus='WARN'; fi
     [ "$start" = 'Disabled' ] || [ "$start" = 'Masked' ] && rec='A disabled service is usually set on purpose (by an admin or security software); find out why before enabling it.'
-    msp_finding --status "$fstatus" --category 'Before' --check "Service $name" --rec "$rec" \
-        --detail "$(display_name "$name"): $status, start type $start${pid:+, pid $pid}. $why"
+    detail="$(display_name "$name"): $status, start type ${start:-unknown}${pid:+, pid $pid}. $why"
+    [ "$status" = 'NotFound' ] && detail="$(display_name "$name"): $why"
+    msp_finding --status "$fstatus" --category 'Before' --check "Service $name" --rec "$rec" --detail "$detail"
     PLAN="$PLAN$name|$action|$status
 "
 done <<EOF

@@ -294,12 +294,12 @@ $global:SignIns = @(
 )
 $global:Risky = [pscustomobject]@{ RiskLevel = 'high'; RiskState = 'atRisk' }
 $global:Detections = @([pscustomobject]@{ DetectedDateTime = $now.AddHours(-25); RiskEventType = 'unfamiliarFeatures'; RiskLevel = 'medium'; RiskState = 'atRisk'; IPAddress = '198.51.100.66'; Location = [pscustomobject]@{ CountryOrRegion = 'NG' } })
-$global:Mailbox = [pscustomobject]@{ RecipientTypeDetails = 'UserMailbox'; ForwardingSmtpAddress = 'smtp:alice.backup@gmail.com'; ForwardingAddress = $null; DeliverToMailboxAndForward = $false; GrantSendOnBehalfTo = @('Carol Assistant') }
+$global:Mailbox = [pscustomobject]@{ RecipientTypeDetails = 'UserMailbox'; ForwardingSmtpAddress = 'smtp:alice.backup@example.net'; ForwardingAddress = $null; DeliverToMailboxAndForward = $false; GrantSendOnBehalfTo = @('Carol Assistant') }
 $global:Rules += @(
     [pscustomobject]@{ Name = '.'; Enabled = $true; ForwardTo = $null; ForwardAsAttachmentTo = $null; RedirectTo = $null; DeleteMessage = $false; MoveToFolder = 'alice:\RSS Feeds'; MarkAsRead = $true },
     [pscustomobject]@{ Name = 'Payments'; Enabled = $true; ForwardTo = $null; ForwardAsAttachmentTo = $null; RedirectTo = $null; DeleteMessage = $true; MoveToFolder = $null; MarkAsRead = $false; SubjectOrBodyContainsWords = @('invoice', 'payment') },
-    [pscustomobject]@{ Name = 'Sync'; Enabled = $true; ForwardTo = @('"Ext" [SMTP:collect@proton.me]'); ForwardAsAttachmentTo = $null; RedirectTo = $null; DeleteMessage = $false; MoveToFolder = $null; MarkAsRead = $false },
-    [pscustomobject]@{ Name = 'Old'; Enabled = $false; ForwardTo = @('[SMTP:old@outlook.com]'); ForwardAsAttachmentTo = $null; RedirectTo = $null; DeleteMessage = $false; MoveToFolder = $null; MarkAsRead = $false }
+    [pscustomobject]@{ Name = 'Sync'; Enabled = $true; ForwardTo = @('"Ext" [SMTP:collect@example.com]'); ForwardAsAttachmentTo = $null; RedirectTo = $null; DeleteMessage = $false; MoveToFolder = $null; MarkAsRead = $false },
+    [pscustomobject]@{ Name = 'Old'; Enabled = $false; ForwardTo = @('[SMTP:old@old-mail.invalid]'); ForwardAsAttachmentTo = $null; RedirectTo = $null; DeleteMessage = $false; MoveToFolder = $null; MarkAsRead = $false }
 )
 $global:Perms += @([pscustomobject]@{ User = 'bob@contoso.com'; AccessRights = @('FullAccess'); IsInherited = $false; Deny = $false })
 $global:SendAs = @([pscustomobject]@{ Trustee = 'NT AUTHORITY\SELF'; AccessRights = @('SendAs'); IsInherited = $false }, [pscustomobject]@{ Trustee = 'mallory@contoso.com'; AccessRights = @('SendAs'); IsInherited = $false })
@@ -337,9 +337,9 @@ try {
     Assert-Finding $r 'IMAP sign-in = WARN High' 'Legacy-protocol sign-ins' 'WARN' 'IMAP4 x1' 'High'
     Assert-Finding $r 'Two countries within hours = WARN High' 'Two countries within hours' 'WARN' 'US .* -> NG' 'High'
     Assert-Finding $r 'High risk with detection' 'Risk' 'WARN' '^Risk level high \(atRisk\); 1 risk detection.*unfamiliarFeatures' 'High'
-    Assert-Finding $r 'Attacker rules flagged, harmless and disabled not' 'Inbox rules' 'WARN' '^3 of 5 rule\(s\) look like an attacker''s: "\." \(moves to RSS Feeds, marks as read\); "Payments" \(deletes mail, matches "invoice; payment"\); "Sync" \(forwards outside to collect@proton\.me\)\.$' 'High'
+    Assert-Finding $r 'Attacker rules flagged, harmless and disabled not' 'Inbox rules' 'WARN' '^3 of 5 rule\(s\) look like an attacker''s: "\." \(moves to RSS Feeds, marks as read\); "Payments" \(deletes mail, matches "invoice; payment"\); "Sync" \(forwards outside to collect@example\.com\)\.$' 'High'
     Assert-Equal 'InboxRules table lists every rule' 5 @($r.Result.Data.InboxRules).Count
-    Assert-Finding $r 'External forwarding = WARN High' 'Mailbox forwarding' 'WARN' 'alice\.backup@gmail\.com \(NO copy' 'High'
+    Assert-Finding $r 'External forwarding = WARN High' 'Mailbox forwarding' 'WARN' 'alice\.backup@example\.net \(NO copy' 'High'
     Assert-Finding $r 'Delegates listed without SELF' 'Delegates' 'INFO' '^bob@contoso\.com \(Full Access\); mallory@contoso\.com \(Send As\); Carol Assistant \(Send on Behalf\)\.'
     Assert-Finding $r 'MFA method added in the window = WARN High' 'MFA methods' 'WARN' 'microsoftAuthenticator iPhone 15 \(added .*User registered security info' 'High'
     Assert-True 'Password is not listed as an MFA method' (@($r.Result.Data.MfaMethods | Where-Object { $_.Type -eq 'password' }).Count -eq 0)
@@ -352,7 +352,7 @@ try {
     Assert-Finding $r 'Compromise indicators counted' 'Compromise indicators' 'WARN' 'sign\(s\) of compromise' 'High'
     $todo = [string](Get-Finding $r 'What to do now').Detail
     foreach ($p in 'Reset the password of alice@contoso\.com', 'Revoke all sessions', 'Remove the inbox rule "\."', 'Remove the inbox rule "Payments"', 'Remove the inbox rule "Sync"',
-        'Remove the mailbox forwarding to alice\.backup@gmail\.com', 'iPhone 15', 'Mail Sync Pro', 'Check Sent Items, Deleted Items and the message trace', 'mallory@contoso\.com', 'Tell the client') {
+        'Remove the mailbox forwarding to alice\.backup@example\.net', 'iPhone 15', 'Mail Sync Pro', 'Check Sent Items, Deleted Items and the message trace', 'mallory@contoso\.com', 'Tell the client') {
         Assert-True ('What to do now names: {0}' -f $p) ($todo -match $p) $todo
     }
     Assert-True 'What to do now printed as a section' ($r.Console -match 'What to do now \(by hand; this script changed nothing\)')

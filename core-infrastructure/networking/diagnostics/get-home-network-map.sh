@@ -44,7 +44,7 @@
 # Risk Level    : Read-Only -- sends ICMP echo (ping) and ARP to local addresses (nothing with
 #                 --passive); changes nothing.
 # Prerequisites : macOS 12+ or Linux with iproute2 | bash 3.2+ | root: No
-# Version       : 1.1.0
+# Version       : 1.1.1
 # Limitations   : Devices that are asleep, on a guest/IoT network or another subnet are not
 #                 seen. Vendor is a hint from a small table; "Unknown" does not mean malicious.
 #                 Phones/tablets often use private (randomized) MACs. IPv6-only devices are not
@@ -1832,7 +1832,7 @@ msp_mac_vendor() {
 #endregion MSPHelper:Net
 #endregion MSPToolkit (generated)
 
-SCRIPT_VERSION='1.1.0'
+SCRIPT_VERSION='1.1.1'
 OUTPUT=''
 SKIP_PING=0
 SKIP_NAMES=0
@@ -1932,6 +1932,11 @@ SUBNET_OK=0
 find_subnet() {
     if msp_local_subnet; then
         SUBNET_OK=1
+        return 0
+    fi
+    if [ "$MSP_PLATFORM" = 'Linux' ] && ! msp_have ip; then
+        msp_skip 'Scope' 'Local subnet' 'ip is not installed on this computer, so the local network could not be identified and no device was listed.' \
+            'Install iproute2 (it provides ip) and run again.'
         return 0
     fi
     if [ "$MSP_NET_SKIP" -eq 1 ]; then

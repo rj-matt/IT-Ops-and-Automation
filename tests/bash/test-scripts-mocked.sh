@@ -20,6 +20,9 @@ set -u
 # The fake computer's signed-in user is "alice". When this test itself runs under sudo (CI runs it
 # as a separate account), SUDO_USER would point the scripts at the real caller instead.
 unset SUDO_USER SUDO_UID SUDO_GID SUDO_COMMAND
+# The cases must not see this computer's proxy settings either (C3 and B2 report them): a case
+# that needs a proxy sets it itself.
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy NO_PROXY no_proxy
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
@@ -328,6 +331,14 @@ json=$(find "$WORK/a2-passive/export" -name "*.json" 2>/dev/null | head -n 1)
 check_exists 'A2 passive: JSON exported' "$json"
 [ -n "$json" ] && check 'A2 passive: unidentified ID uses the MAC (same as Windows)' "$json" '"Id": "A2\.Unidentified\.00-00-01-02-03-04"'
 [ -n "$json" ] && check 'A2 passive: shared MAC ID' "$json" '"Id": "A2\.SharedMac\.00-00-01-02-03-04"'
+
+# --- No ip command (a minimal Linux without iproute2): SKIPPED with the reason, not ERROR --------
+new_env a2-noip
+OUT="$WORK/a2-noip.txt"
+run_script a2-noip "$A2" "$OUT" --passive
+check 'A2 without ip: exit 0' "$OUT.rc" '^0$'
+check 'A2 without ip: local subnet SKIPPED naming the command' "$OUT" '\[SKIPPED\] Local subnet - ip is not installed on this computer'
+check_not 'A2 without ip: no ERROR findings' "$OUT" '\[ERROR\]'
 
 # --- Only a VPN has a gateway: nothing is scanned ------------------------------------------
 new_env a2-vpn
@@ -1024,6 +1035,29 @@ check 'B4 linux: masked service reported' "$OUT.none" '\[WARN\] +Service systemd
 check 'B4 linux: on-demand service left alone' "$OUT.none" 'Service cups - .*Left alone; use --start-if-stopped'
 check_not 'B4 linux: no calls for masked/on-demand' "$CALLS" 'start'
 
+# --- A computer with none of the allow-listed services: INFO, nothing to change -----------------
+new_env b4-none
+CALLS="$WORK/b4-none/calls"
+: >"$CALLS"
+cat >"$BIN/systemctl" <<STUB
+#!/bin/sh
+case "\$*" in
+    *"show"*) printf 'LoadState=not-found\nActiveState=inactive\nUnitFileState=\nMainPID=0\n' ;;
+    *restart*|*start*) echo "systemctl \$*" >>"$CALLS"; exit 0 ;;
+esac
+STUB
+chmod +x "$BIN/systemctl"
+OUT="$WORK/b4-none.txt"
+run_script b4-none "$B4" "$OUT" --force
+check 'B4 no matching service: exit 0' "$OUT.rc" '^0$'
+check 'B4 no matching service: INFO, not present' "$OUT" '\[INFO\] +Service cups - Printing \(CUPS\): Not present on this computer, so there is nothing to restart\.'
+check 'B4 no matching service: resolved INFO too' "$OUT" '\[INFO\] +Service systemd-resolved - DNS cache and name resolution: Not present on this computer'
+check_not 'B4 no matching service: no WARN' "$OUT" '\[WARN\]'
+check_not 'B4 no matching service: no empty start type' "$OUT" 'start type \.'
+check_not 'B4 no matching service: no "Service not found"' "$OUT" 'Service not found'
+check 'B4 no matching service: nothing to change' "$OUT" '\[INFO\] +Result - Nothing to change\.'
+check_not 'B4 no matching service: nothing started' "$CALLS" 'start'
+
 new_env b4-mac
 CALLS="$WORK/b4-mac/calls"
 : >"$CALLS"
@@ -1124,6 +1158,16 @@ for c in 'Startup items in unusual folders' 'Startup items that run scripts' 'Ne
 done
 check 'C3 linux clean: journal not readable = SKIPPED' "$OUT" '\[SKIPPED\] Failed sign-ins - Skipped: this account can only see its own journal'
 check_not 'C3 linux clean: no ERROR findings' "$OUT" '\[ERROR\]'
+
+# --- Linux without ss (no iproute2): SKIPPED with the reason, not ERROR ----------------------------
+mkdir -p "$WORK/c3-noss"
+cp -R "$WORK/c3-linux-clean/bin" "$WORK/c3-linux-clean/root" "$WORK/c3-noss/"
+rm -f "$WORK/c3-noss/bin/ss"
+OUT="$WORK/c3-noss.txt"
+run_script c3-noss "$C3L" "$OUT"
+check 'C3 linux without ss: exit 0' "$OUT.rc" '^0$'
+check 'C3 linux without ss: connections SKIPPED naming the command' "$OUT" '\[SKIPPED\] Connections from flagged programs - ss is not installed on this computer'
+check_not 'C3 linux without ss: no ERROR findings' "$OUT" '\[ERROR\]'
 
 # --- macOS: flagged items (the real run on the development Mac was clean) --------------------
 new_env c3-mac
@@ -1407,6 +1451,23 @@ check 'E4 good: no swap' "$OUT" '\[INFO\] +Swap usage - No swap configured'
 check 'E4 good: no RAID' "$OUT" '\[INFO\] +RAID arrays - No Linux software RAID'
 check_not 'E4 good: no ERROR findings' "$OUT" '\[ERROR\]'
 
+# --- E4 Linux without ss, timedatectl and journalctl: SKIPPED with the reason, not ERROR -------------
+mkdir -p "$WORK/e4-missing"
+cp -R "$WORK/e4-good/bin" "$WORK/e4-good/root" "$WORK/e4-missing/"
+rm -f "$WORK/e4-missing/bin/ss" "$WORK/e4-missing/bin/timedatectl" "$WORK/e4-missing/bin/journalctl"
+OUT="$WORK/e4-missing.txt"
+run_script e4-missing "$E4S" "$OUT"
+check 'E4 missing commands: exit 0' "$OUT.rc" '^0$'
+check 'E4 without ss: listening services SKIPPED naming the command' "$OUT" '\[SKIPPED\] Listening services - ss is not installed on this computer'
+check 'E4 without timedatectl: time sync SKIPPED naming the command' "$OUT" '\[SKIPPED\] Time synchronization - timedatectl is not installed on this computer'
+check 'E4 without journalctl: OOM kills SKIPPED naming the command, not "not readable"' "$OUT" '\[SKIPPED\] Out-of-memory kills - journalctl is not installed on this computer'
+check_not 'E4 missing commands: no ERROR findings' "$OUT" '\[ERROR\]'
+# A command that exists but fails is still ERROR (the check itself could not run).
+stub "$WORK/e4-missing/bin" timedatectl 'exit 1'
+OUT="$WORK/e4-timefail.txt"
+run_script e4-missing "$E4S" "$OUT"
+check 'E4 timedatectl present but failing: still ERROR' "$OUT" '\[ERROR\] +Time synchronization - The check could not complete: timedatectl gave no answer'
+
 # =========================================================================================
 # B5 get-disk-space-report.sh (Linux, with real du on a fake root)
 # =========================================================================================
@@ -1582,6 +1643,17 @@ check_exists 'Bundle linux: bundle JSON' "$json"
 [ -n "$json" ] && check 'Bundle linux: CheckId Bundle' "$json" '"CheckId": "Bundle"'
 [ -n "$json" ] && check 'Bundle linux: Runs table' "$json" '"Step":8,"CheckId":"A8","Script":"get-home-device-inventory","Result":"Completed"'
 
+# --- Linux without ip: A2 inside the bundle reports SKIPPED, the bundle counts no ERROR ----------------
+mkdir -p "$WORK/bundle-noip"
+cp -R "$WORK/bundle-linux/bin" "$WORK/bundle-linux/root" "$WORK/bundle-noip/"
+rm -f "$WORK/bundle-noip/bin/ip"
+OUT="$WORK/bundle-noip.txt"
+run_script bundle-noip "$BUNDLE" "$OUT" --passive --skip A1,A3,A4,A5,A6,A8 --output "$WORK/bundle-noip/out"
+check 'Bundle without ip: exit 0' "$OUT.rc" '^0$'
+check 'Bundle without ip: A2 local subnet SKIPPED naming the command' "$OUT" '\[SKIPPED\] Local subnet - ip is not installed on this computer'
+check 'Bundle without ip: A2 completed with no ERROR (results table)' "$OUT" '^  2 +A2 +get-home-network-map +[0-9]+ +[0-9]+ +[0-9]+ +[0-9]+ +0 +Completed$'
+check_not 'Bundle without ip: no ERROR findings' "$OUT" '\[ERROR\]'
+
 # --- Flat copy with one script missing and one that crashes: the rest still run -------------
 new_env bundle-flat
 flat="$WORK/bundle-flat/usb/toolkit/x"
@@ -1750,6 +1822,12 @@ OUT="$WORK/rmm-b4-force.txt"
 run_rmm rmm-b4 "$B4" "$OUT" --rmm --force
 check 'RMM B4 with --force: exit 0' "$OUT.rc" '^0$'
 check 'RMM B4 with --force: services restarted' "$CALLS" 'restart cups\.service'
+# None of the allow-listed services on this computer: nothing to change, exit 0 (not a WARN).
+cp "$WORK/b4-none/bin/systemctl" "$WORK/rmm-b4/bin/systemctl"
+OUT="$WORK/rmm-b4-none.txt"
+run_rmm rmm-b4 "$B4" "$OUT" --rmm
+check 'RMM B4 no matching service: exit 0' "$OUT.rc" '^0$'
+check 'RMM B4 no matching service: summary line' "$OUT.last" '^B4 WARN=0 FAIL=0 ERROR=0$'
 
 # --- Network: passive in RMM mode unless --active-network ------------------------------------
 OUT="$WORK/rmm-a2.txt"
