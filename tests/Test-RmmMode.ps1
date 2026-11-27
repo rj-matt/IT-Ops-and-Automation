@@ -250,12 +250,15 @@ try {
     $null = New-Item -ItemType Directory -Path $planted -Force
     if (-not $onWindows) { & chmod 777 $planted }
     $aclBefore = $null
-    if ($onWindows) { $aclBefore = (Get-Acl -LiteralPath $planted).Sddl }
+    # What taking the folder over would change: its owner, its own (explicit) entries and
+    # whether it inherits. Restricting the parent may still change what it inherits.
+    function Get-OwnAcl { param([string]$Path) $a = Get-Acl -LiteralPath $Path; '{0}|{1}|{2}' -f $a.Owner, $a.AreAccessRulesProtected, ((@($a.Access | Where-Object { -not $_.IsInherited } | ForEach-Object { '{0}:{1}' -f $_.IdentityReference, $_.FileSystemRights })) -join ',') }
+    if ($onWindows) { $aclBefore = Get-OwnAcl $planted }
     $r = Invoke-Rmm -Name 'foreign' -ResultsRoot $root -Extra ('$env:MSP_TEST_FOREIGN_OWNER = ''{0}''' -f ($planted -replace "'", "''"))
     Assert-True 'planted foreign results folder: exit 3' ($r.Code -eq 3) ('exit {0}' -f $r.Code)
     Assert-True 'planted foreign results folder: nothing written' (@(Get-ChildItem -LiteralPath $planted -Force).Count -eq 0) ''
     Assert-True 'planted foreign results folder: says it was not used' ($r.Console -match 'belongs to another account; it was not used') ''
-    if ($onWindows) { Assert-True 'planted foreign results folder: permissions not taken over' ((Get-Acl -LiteralPath $planted).Sddl -eq $aclBefore) '' }
+    if ($onWindows) { $aclAfter = Get-OwnAcl $planted; Assert-True 'planted foreign results folder: permissions not taken over (owner, own entries, inheritance)' ($aclAfter -eq $aclBefore) ('before [{0}] after [{1}]' -f $aclBefore, $aclAfter) }
     else { Assert-True 'planted foreign results folder: permissions not taken over' ((Get-UnixMode $planted) -eq '777') (Get-UnixMode $planted) }
     Assert-True 'planted foreign results folder: summary line still printed' ($r.Last -match '^B5 WARN=\d+ FAIL=\d+ ERROR=\d+$') $r.Last
 

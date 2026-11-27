@@ -130,7 +130,7 @@ Remove-Item -LiteralPath $out -Recurse -Force
 
 # --- Log folder planted in advance (C:\Windows\Temp for SYSTEM, the shared /tmp) -----------
 # A test cannot create a folder another account owns, so MSP_TEST_FOREIGN_OWNER marks one as such.
-function Get-ModeText { param([string]$Path) return ([string](& ls -ld $Path)).Substring(0, 10) }
+function Get-ModeText { param([string]$Path) return ([string](& /bin/ls -ld $Path)).Substring(0, 10) }
 function Test-PrivateAcl {
     <# Windows: inheritance off and access for only Administrators, SYSTEM and this account. #>
     param([string]$Path)
