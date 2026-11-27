@@ -26,6 +26,11 @@
                         SKIPPED with the license reason, never ERROR; auditing off SKIPPED with the
                         reason; everything else PASS; no compromise indicator.
       Unknown user      FAIL for the account and the mailbox; the user checks SKIPPED, not ERROR.
+      Busy mailbox      5000 unrelated audit records crowd the user's general search; the
+                        separate search for changes still finds a New-InboxRule: WARN naming it.
+      Audit cap hit     Every audit search returns 5000 records without a change: "Mailbox
+                        changes" is WARN, never PASS, and says the counts are a minimum and to use
+                        a smaller -Days; 6000 deletions: "Mass deletion" says "at least".
       Role too narrow   Message trace and the audit log refused: SKIPPED naming the role.
       -Days 31          Refused by parameter validation; nothing connects.
       Missing scope     No Identity Protection scopes: risk SKIPPED naming the scope.
@@ -38,7 +43,7 @@
     Risk Level    : Safe -- writes and removes files in a temporary folder only; no network
     Prerequisites : Windows PowerShell 5.1 or PowerShell 7 | Admin: No
     Exit code     : 0 all passed, 1 any failure
-    Version       : 1.0.1
+    Version       : 1.1.0
 #>
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPositionalParameters', '', Justification = 'Assert-Equal / Assert-True (Name, Expected, Actual) are one-line test assertions used throughout.')]
 [CmdletBinding()]
@@ -242,10 +247,15 @@ function Get-MessageTraceV2 {
 }
 function Get-AdminAuditLogConfig { [CmdletBinding()] param() return [pscustomobject]@{ UnifiedAuditLogIngestionEnabled = [bool]$global:AuditOn } }
 function Search-UnifiedAuditLog {
+    # Like the real cmdlet: -Operations filters, and a search returns at most -ResultSize records
+    # (oldest first here). $global:AuditIgnoreFilter makes every search return the same records.
     [CmdletBinding()] param([datetime]$StartDate, [datetime]$EndDate, [string[]]$UserIds, [string[]]$ObjectIds, [string[]]$Operations, [int]$ResultSize)
     if ($global:DenyAudit) { throw $deniedError }
-    if ($ObjectIds) { return @($global:AuditByOthers) }
-    return @($global:AuditMine)
+    Write-Call ('Search-UnifiedAuditLog {0} Operations={1} ResultSize={2}' -f $(if ($ObjectIds) { 'ObjectIds' } else { 'UserIds' }), ($Operations -join ','), $ResultSize)
+    $set = @($global:AuditMine)
+    if ($ObjectIds) { $set = @($global:AuditByOthers) }
+    if ($Operations -and -not $global:AuditIgnoreFilter) { $set = @($set | Where-Object { $Operations -contains $_.Operations }) }
+    return @($set | Select-Object -First $ResultSize)
 }
 
 # --- A clean user (the compromised scenario adds to it) ---
@@ -392,6 +402,40 @@ $global:Sent += @(for ($k = 0; $k -lt 250; $k++) { [pscustomobject]@{ Received =
     Assert-NoRepeatedStep $r 'not urgent'
     $steps = @(Get-Step $r)
     Assert-True 'not urgent: usual order, no block step' ($steps[0] -match '^Reset the password' -and $steps[1] -match '^Revoke all sessions' -and @($steps | Where-Object { $_ -match '^Block sign-in|^Allow sign-in again' }).Count -eq 0) (($steps | Select-Object -First 3) -join ' | ')
+
+    # --- Busy mailbox: noise fills the general audit search, the rule is still found ---------------
+    $busy = @'
+$global:AuditMine = @(for ($k = 0; $k -lt 5000; $k++) { [pscustomobject]@{ CreationDate = $now.AddDays(-5).AddSeconds($k); Operations = 'MailItemsAccessed'; UserIds = 'alice@contoso.com'; RecordType = 'ExchangeItemAggregated'; AuditData = '{}' } })
+$global:AuditMine += @([pscustomobject]@{ CreationDate = $now.AddHours(-3); Operations = 'New-InboxRule'; UserIds = 'alice@contoso.com'; RecordType = 'ExchangeAdmin'; AuditData = '{"ClientIP":"198.51.100.77","Parameters":[{"Name":"Name","Value":"Invoices"},{"Name":"MoveToFolder","Value":"RSS Feeds"}]}' })
+'@
+    $r = Invoke-Mocked 'busy' ("{0}`n{1}`n{2}" -f $mocks, $connected, $busy) @('-UserPrincipalName', 'alice@contoso.com')
+    Assert-Clean $r 'busy mailbox'
+    Assert-True 'busy mailbox: changes searched for the user on their own' (@($r.Calls | Where-Object { $_ -eq 'Search-UnifiedAuditLog UserIds Operations=New-InboxRule,Set-InboxRule,UpdateInboxRules,Set-Mailbox,Add-MailboxPermission,Add-RecipientPermission,Set-MailboxJunkEmailConfiguration ResultSize=5000' }).Count -eq 1) ($r.Calls -join "`n")
+    Assert-True 'busy mailbox: deletions searched for the user on their own' (@($r.Calls | Where-Object { $_ -eq 'Search-UnifiedAuditLog UserIds Operations=HardDelete,SoftDelete,MoveToDeletedItems ResultSize=5000' }).Count -eq 1) ($r.Calls -join "`n")
+    Assert-Finding $r 'busy mailbox: the crowded-out New-InboxRule = WARN High, naming the rule' 'Mailbox changes' 'WARN' 'New-InboxRule "Invoices" by alice@contoso\.com from 198\.51\.100\.77' 'High'
+    Assert-True 'busy mailbox: the changes search did not hit the cap, so no "minimum" note there' ([string](Get-Finding $r 'Mailbox changes').Detail -notmatch 'minimum') ''
+    Assert-Finding $r 'busy mailbox: summary says its counts are a minimum' 'Audit log' 'INFO' 'hit 5000 records, so these counts are a minimum; run again with a smaller -Days'
+    Assert-True 'busy mailbox: every event once (5000 + the rule)' (@($r.Result.Data.AuditEvents).Count -eq 5001) ('{0} rows' -f @($r.Result.Data.AuditEvents).Count)
+
+    # --- Every audit search hits the cap and finds no change: never PASS ---------------------------
+    $full = @'
+$global:AuditMine = @(for ($k = 0; $k -lt 5000; $k++) { [pscustomobject]@{ CreationDate = $now.AddDays(-5).AddSeconds($k); Operations = 'MailItemsAccessed'; UserIds = 'alice@contoso.com'; RecordType = 'ExchangeItemAggregated'; AuditData = '{}' } })
+$global:AuditIgnoreFilter = $true
+'@
+    $r = Invoke-Mocked 'capped' ("{0}`n{1}`n{2}" -f $mocks, $connected, $full) @('-UserPrincipalName', 'alice@contoso.com')
+    Assert-Clean $r 'audit cap'
+    $f = Get-Finding $r 'Mailbox changes'
+    Assert-True 'audit cap, no change found: Mailbox changes is not PASS' ($f -and $f.Status -ne 'PASS') $(if ($f) { '{0}: {1}' -f $f.Status, $f.Detail })
+    Assert-Finding $r 'audit cap, no change found: WARN saying the result is a minimum and to narrow -Days' 'Mailbox changes' 'WARN' 'No rule, forwarding or permission change found, but the search hit 5000 records, so the result is a minimum.*smaller -Days' 'Medium'
+    Assert-True 'audit cap: not counted as a sign of compromise' ([string](Get-Finding $r 'Compromise indicators').Status -eq 'INFO') ''
+
+    $deleted = @'
+$global:AuditMine = @(for ($k = 0; $k -lt 6000; $k++) { [pscustomobject]@{ CreationDate = $now.AddDays(-2).AddSeconds($k); Operations = 'HardDelete'; UserIds = 'alice@contoso.com'; RecordType = 'ExchangeItemGroup'; AuditData = '{}' } })
+'@
+    $r = Invoke-Mocked 'deleted' ("{0}`n{1}`n{2}" -f $mocks, $connected, $deleted) @('-UserPrincipalName', 'alice@contoso.com')
+    Assert-Clean $r 'deletion cap'
+    Assert-Finding $r 'deletion cap: Mass deletion says "at least" and that the count is a minimum' 'Mass deletion' 'WARN' '^At least 5000 messages deleted.*the count is a minimum; run again with a smaller -Days' 'High'
+    Assert-Finding $r 'deletion cap: no change found, changes search complete, so PASS' 'Mailbox changes' 'PASS'
 
     # --- Unknown user ------------------------------------------------------------------------------
     $r = Invoke-Mocked 'unknown' ("{0}`n{1}" -f $mocks, $connected) @('-UserPrincipalName', 'ghost@contoso.com')

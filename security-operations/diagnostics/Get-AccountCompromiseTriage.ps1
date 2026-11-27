@@ -107,11 +107,13 @@
                     (Install-Module Microsoft.Graph, ExchangeOnlineManagement -Scope CurrentUser)
                     | Account: Global Reader, plus View-Only Audit Logs for the audit log. An admin
                     must consent to the seven Graph scopes once per tenant (see above).
-    Version       : 1.2.0
+    Version       : 1.2.1
     Limitations   : A clean result does not prove the account is safe. Sign-ins need Entra ID P1,
                     risk needs P2. Rules created through MAPI as hidden rules are not listed by
                     Get-InboxRule. Logs can lag by up to a few hours; the audit log by up to a day.
-                    Message trace and the audit log are read up to 5000 records per query.
+                    Message trace and the audit log are read up to 5000 records per query; the
+                    user's rule, forwarding, permission and deletion events are searched on their
+                    own, and a search that hits 5000 is reported as a minimum, never as clean.
 #>
 #Requires -Version 5.1
 [CmdletBinding()]
@@ -1019,7 +1021,7 @@ function Confirm-MSPChange {
 #endregion MSPHelper:Change
 #endregion MSPToolkit (generated)
 
-$ScriptVersion = '1.2.0'
+$ScriptVersion = '1.2.1'
 Initialize-MSPRun -ScriptName 'Get-AccountCompromiseTriage' -ScriptVersion $ScriptVersion -CheckId 'C5' -RiskLevel 'Read-Only' `
     -Parameters $PSBoundParameters -Description 'Microsoft 365 account compromise triage for one user (read-only; changes nothing)'
 # Number ranges are checked here, not with [ValidateRange], so a wrong value gets a plain message
@@ -1606,31 +1608,71 @@ Invoke-UserCheck -Name 'Audit log' -Category 'Audit' -ScriptBlock {
         Skip-MSPCheck -Reason 'Auditing (the unified audit log) is turned off in this tenant, so there is no record to search.' `
             -Recommendation 'Turn auditing on (Purview portal > Audit, or Set-AdminAuditLogConfig -UnifiedAuditLogIngestionEnabled $true) so the next incident can be investigated; it does not cover the past.'
     }
-    $mine = @(Invoke-Exchange -RoleHint $auditRoleHint { Search-UnifiedAuditLog -StartDate $since -EndDate $now -UserIds $target -ResultSize 5000 -ErrorAction Stop })
+    $cap = 5000
     $changeOps = @('New-InboxRule', 'Set-InboxRule', 'UpdateInboxRules', 'Set-Mailbox', 'Add-MailboxPermission', 'Add-RecipientPermission', 'Set-MailboxJunkEmailConfiguration')
-    $others = @(Invoke-Exchange -RoleHint $auditRoleHint { Search-UnifiedAuditLog -StartDate $since -EndDate $now -ObjectIds $target -Operations $changeOps -ResultSize 5000 -ErrorAction Stop })
+    $deleteOps = @('HardDelete', 'SoftDelete', 'MoveToDeletedItems')
+    # Everything the user did, for the summary. On a busy mailbox MailItemsAccessed and similar
+    # events fill the 5000 records, so the user's changes and deletions are also searched on their
+    # own: an attacker's New-InboxRule done as the user is never crowded out by that noise.
+    $mine = @(Invoke-Exchange -RoleHint $auditRoleHint { Search-UnifiedAuditLog -StartDate $since -EndDate $now -UserIds $target -ResultSize $cap -ErrorAction Stop })
+    $mineChanges = @(Invoke-Exchange -RoleHint $auditRoleHint { Search-UnifiedAuditLog -StartDate $since -EndDate $now -UserIds $target -Operations $changeOps -ResultSize $cap -ErrorAction Stop })
+    $mineDeletes = @(Invoke-Exchange -RoleHint $auditRoleHint { Search-UnifiedAuditLog -StartDate $since -EndDate $now -UserIds $target -Operations $deleteOps -ResultSize $cap -ErrorAction Stop })
+    $others = @(Invoke-Exchange -RoleHint $auditRoleHint { Search-UnifiedAuditLog -StartDate $since -EndDate $now -ObjectIds $target -Operations $changeOps -ResultSize $cap -ErrorAction Stop })
+    # A search that returns the full 5000 records may have stopped early: its counts are a minimum.
+    $changesCapped = ($mineChanges.Count -ge $cap) -or ($others.Count -ge $cap)
+    $deletesCapped = ($mineDeletes.Count -ge $cap)
+    $anyCapped = $changesCapped -or $deletesCapped -or ($mine.Count -ge $cap)
+    $narrow = 'run again with a smaller -Days (for example -Days 3) to cover the window completely'
     $seen = @{}
-    $records = @(@($mine) + @($others) | Where-Object { $k = '{0}|{1}|{2}' -f $_.CreationDate, $_.Operations, $_.UserIds; if ($seen.ContainsKey($k)) { $false } else { $seen[$k] = $true; $true } } | Sort-Object { [datetime]$_.CreationDate })
+    $records = @(@($mine) + @($mineChanges) + @($mineDeletes) + @($others) | Where-Object { $k = '{0}|{1}|{2}' -f $_.CreationDate, $_.Operations, $_.UserIds; if ($seen.ContainsKey($k)) { $false } else { $seen[$k] = $true; $true } } | Sort-Object { [datetime]$_.CreationDate })
     $rows = foreach ($r in $records) {
         $ip = ''
-        try { $ip = [string](([string]$r.AuditData | ConvertFrom-Json).ClientIP) } catch { $ip = '' }
-        [pscustomobject]@{ Time = ([datetime]$r.CreationDate).ToString('yyyy-MM-dd HH:mm'); Operation = [string]$r.Operations; By = [string]$r.UserIds; ClientIP = $ip; RecordType = [string]$r.RecordType }
+        $item = ''
+        try {
+            $ad = [string]$r.AuditData | ConvertFrom-Json
+            $ip = [string]$ad.ClientIP
+            # Rule and mailbox changes name what they changed (the rule's name, or the mailbox).
+            if ($changeOps -contains [string]$r.Operations) {
+                $p = @($ad.Parameters | Where-Object { $_.Name -in @('Name', 'Identity') } | Sort-Object { $_.Name -ne 'Name' } | Select-Object -First 1)
+                if ($p.Count -gt 0) { $item = [string]$p[0].Value }
+            }
+        }
+        catch { $ip = '' }
+        [pscustomobject]@{ Time = ([datetime]$r.CreationDate).ToString('yyyy-MM-dd HH:mm'); Operation = [string]$r.Operations; Item = $item; By = [string]$r.UserIds; ClientIP = $ip; RecordType = [string]$r.RecordType }
     }
     $rows = @($rows)
     Add-MSPData -Name 'AuditEvents' -Rows $rows
     $summary = (@($rows | Group-Object Operation | Sort-Object Count -Descending | Select-Object -First 8 | ForEach-Object { '{0} x{1}' -f $_.Name, $_.Count })) -join ', '
-    Add-Finding -Check 'Audit log' -Category 'Audit' -Status INFO -Detail ('{0} event(s) in {1} days{2}.' -f $rows.Count, $Days, $(if ($summary) { ': ' + $summary } else { '' }))
+    $summaryNote = ''
+    if ($anyCapped) { $summaryNote = (' At least one search hit {0} records, so these counts are a minimum; {1}.' -f $cap, $narrow) }
+    Add-Finding -Check 'Audit log' -Category 'Audit' -Status INFO -Detail ('{0} event(s) in {1} days{2}.{3}' -f $rows.Count, $Days, $(if ($summary) { ': ' + $summary } else { '' }), $summaryNote)
     $changes = @($rows | Where-Object { $changeOps -contains $_.Operation })
     if ($changes.Count -gt 0) {
+        $note = ''
+        if ($changesCapped) { $note = (' The search for changes hit {0} records, so this list is a minimum; {1}.' -f $cap, $narrow) }
         Add-Finding -Check 'Mailbox changes' -Category 'Audit' -Status WARN -Severity High `
-            -Detail ('Rules, forwarding or permissions changed in the window: {0}.' -f ((@($changes | ForEach-Object { '{0} {1} by {2}{3}' -f $_.Time, $_.Operation, $_.By, $(if ($_.ClientIP) { ' from ' + $_.ClientIP } else { '' }) })) -join '; ')) `
+            -Detail ('Rules, forwarding or permissions changed in the window: {0}.{1}' -f ((@($changes | ForEach-Object { '{0} {1}{2} by {3}{4}' -f $_.Time, $_.Operation, $(if ($_.Item) { ' "' + $_.Item + '"' } else { '' }), $_.By, $(if ($_.ClientIP) { ' from ' + $_.ClientIP } else { '' }) })) -join '; '), $note) `
             -Recommendation 'Match each change with the rules, forwarding and delegates above; the IP shows where the change came from (compare with the sign-ins).'
     }
+    elseif ($changesCapped) {
+        Add-Finding -Check 'Mailbox changes' -Category 'Audit' -Status WARN -Severity Medium `
+            -Detail ('No rule, forwarding or permission change found, but the search hit {0} records, so the result is a minimum and a change may be missing; {1}.' -f $cap, $narrow) `
+            -Recommendation 'Do not treat this as clean. Run the script again with a smaller -Days, or search the audit log in the Purview portal for New-InboxRule, Set-InboxRule, UpdateInboxRules and Set-Mailbox for this user.'
+    }
     else { Add-Finding -Check 'Mailbox changes' -Category 'Audit' -Status PASS -Detail 'No rule, forwarding or permission change recorded in the window.' }
-    $deletes = @($rows | Where-Object { $_.Operation -in @('HardDelete', 'SoftDelete', 'MoveToDeletedItems') })
+    $deletes = @($rows | Where-Object { $deleteOps -contains $_.Operation })
     if ($deletes.Count -ge 100) {
-        Add-Finding -Check 'Mass deletion' -Category 'Audit' -Status WARN -Severity High -Detail ('{0} messages deleted in the window (attackers delete replies and bounce messages to stay hidden).' -f $deletes.Count) `
+        $note = ''
+        $countText = [string]$deletes.Count
+        if ($deletesCapped) { $countText = 'At least {0}' -f $deletes.Count; $note = (' The search for deletions hit {0} records, so the count is a minimum; {1}.' -f $cap, $narrow) }
+        Add-Finding -Check 'Mass deletion' -Category 'Audit' -Status WARN -Severity High -Detail ('{0} messages deleted in the window (attackers delete replies and bounce messages to stay hidden).{1}' -f $countText, $note) `
             -Recommendation 'Check Recoverable Items for what was deleted, and when (compare with the sign-ins).'
+    }
+    elseif ($deletesCapped) {
+        # Only reached if the search returns fewer distinct records than its cap after merging; never reported as clean.
+        Add-Finding -Check 'Mass deletion' -Category 'Audit' -Status WARN -Severity Medium `
+            -Detail ('{0} deletion(s) found, but the search hit {1} records, so the count is a minimum; {2}.' -f $deletes.Count, $cap, $narrow) `
+            -Recommendation 'Check Recoverable Items for what was deleted, and when.'
     }
 }
 
