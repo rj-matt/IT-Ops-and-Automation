@@ -461,7 +461,9 @@ Outside RMM mode these options work as before, without `-ActiveNetwork`.
 
 **Changes need `-Force`.** B4, D1, D3 and Set-InactivityTimeout never change anything in RMM
 mode without `-Force` / `--force` (SKIPPED, exit 3). Run them with `-Rmm -WhatIf` first to see
-the plan in the procedure's output. **D2 (network stack reset) always refuses in RMM mode**, even
+the plan in the procedure's output. When there is nothing to change (for example B4 on a
+computer that has none of its services: each is INFO "not present on this computer"), the run
+exits 0. **D2 (network stack reset) always refuses in RMM mode**, even
 with `-Force` (exit 3): the reset cuts off the RMM agent's connection and needs a restart, so run
 it with someone at the machine, or on a remote session that survives a restart.
 

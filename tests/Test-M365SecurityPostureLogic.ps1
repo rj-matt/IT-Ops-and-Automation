@@ -261,19 +261,19 @@ foreach ($u in 'admin3', 'admin5', 'bob') { $global:Users[('id-{0}@contoso.com' 
 $global:Users['id-alice@contoso.com'] = [pscustomobject]@{ AssignedPlans = (New-Plans $true) }
 $global:OutboundPolicies = @([pscustomobject]@{ Name = 'Default'; AutoForwardingMode = 'On' })
 $global:Mailboxes = @(
-    [pscustomobject]@{ UserPrincipalName = 'alice@contoso.com'; ForwardingSmtpAddress = 'smtp:alice.private@gmail.com'; ForwardingAddress = $null; DeliverToMailboxAndForward = $true },
+    [pscustomobject]@{ UserPrincipalName = 'alice@contoso.com'; ForwardingSmtpAddress = 'smtp:alice.private@example.net'; ForwardingAddress = $null; DeliverToMailboxAndForward = $true },
     [pscustomobject]@{ UserPrincipalName = 'bob@contoso.com'; ForwardingSmtpAddress = 'smtp:carol@contoso.com'; ForwardingAddress = $null; DeliverToMailboxAndForward = $true },
     [pscustomobject]@{ UserPrincipalName = 'carol@contoso.com'; ForwardingSmtpAddress = $null; ForwardingAddress = $null; DeliverToMailboxAndForward = $false }
 )
 $global:Rules = @{
-    'bob@contoso.com'   = @([pscustomobject]@{ Name = 'Sync'; Enabled = $true; ForwardTo = $null; ForwardAsAttachmentTo = $null; RedirectTo = @('"Ext" [SMTP:collect@proton.me]') })
+    'bob@contoso.com'   = @([pscustomobject]@{ Name = 'Sync'; Enabled = $true; ForwardTo = $null; ForwardAsAttachmentTo = $null; RedirectTo = @('"Ext" [SMTP:collect@example.com]') })
     'carol@contoso.com' = @([pscustomobject]@{ Name = 'To team'; Enabled = $true; ForwardTo = @('"Team" [SMTP:team@contoso.com]'); ForwardAsAttachmentTo = $null; RedirectTo = $null },
-        [pscustomobject]@{ Name = 'Old'; Enabled = $false; ForwardTo = @('[SMTP:old@outlook.com]'); ForwardAsAttachmentTo = $null; RedirectTo = $null })
+        [pscustomobject]@{ Name = 'Old'; Enabled = $false; ForwardTo = @('[SMTP:old@old-mail.invalid]'); ForwardAsAttachmentTo = $null; RedirectTo = $null })
 }
 $global:Guests = @(
     [pscustomobject]@{ UserPrincipalName = 'g1'; Mail = 'old.partner@fabrikam.com'; AccountEnabled = $true; CreatedDateTime = (Get-Date).AddDays(-500); SignInActivity = [pscustomobject]@{ LastSignInDateTime = (Get-Date).AddDays(-200) } },
     [pscustomobject]@{ UserPrincipalName = 'g2'; Mail = 'active@fabrikam.com'; AccountEnabled = $true; CreatedDateTime = (Get-Date).AddDays(-500); SignInActivity = [pscustomobject]@{ LastSignInDateTime = (Get-Date).AddDays(-10) } },
-    [pscustomobject]@{ UserPrincipalName = 'g3'; Mail = 'never@tailspin.com'; AccountEnabled = $false; CreatedDateTime = (Get-Date).AddDays(-300); SignInActivity = $null }
+    [pscustomobject]@{ UserPrincipalName = 'g3'; Mail = 'never@example.com'; AccountEnabled = $false; CreatedDateTime = (Get-Date).AddDays(-300); SignInActivity = $null }
 )
 $global:AuditDisabled = $true
 $global:Scores = @(
@@ -310,11 +310,11 @@ try {
     Assert-True 'Directory Readers is not a privileged role' (@($r.Result.Data.Admins | Where-Object { $_.Member -eq 'reader@contoso.com' }).Count -eq 0)
     Assert-True 'Admins table joins MFA state' (@($r.Result.Data.Admins | Where-Object { $_.Member -eq 'admin3@contoso.com' -and "$($_.MfaRegistered)" -eq 'False' }).Count -eq 1)
     Assert-Finding $r 'Outbound forwarding On = WARN High' 'Outbound forwarding policy' 'WARN' 'Default' 'High'
-    Assert-Finding $r 'External mailbox forwarding = WARN High, internal ignored' 'Mailbox forwarding' 'WARN' '^1 mailbox.*alice@contoso\.com -> alice\.private@gmail\.com\.$' 'High'
-    Assert-Finding $r 'External redirect rule = WARN High, internal and disabled rules ignored' 'Forwarding rules' 'WARN' '^1 enabled inbox rule.*bob@contoso\.com: "Sync" -> collect@proton\.me\.$' 'High'
+    Assert-Finding $r 'External mailbox forwarding = WARN High, internal ignored' 'Mailbox forwarding' 'WARN' '^1 mailbox.*alice@contoso\.com -> alice\.private@example\.net\.$' 'High'
+    Assert-Finding $r 'External redirect rule = WARN High, internal and disabled rules ignored' 'Forwarding rules' 'WARN' '^1 enabled inbox rule.*bob@contoso\.com: "Sync" -> collect@example\.com\.$' 'High'
     Assert-Equal 'ExternalForwarding table' 2 @($r.Result.Data.ExternalForwarding).Count
     Assert-Finding $r 'Guests counted' 'Guest users' 'INFO' '^3 guest account\(s\), 2 enabled'
-    Assert-Finding $r 'Inactive and never-used guests = WARN Low' 'Inactive guests' 'WARN' '^2 guest.*old\.partner@fabrikam\.com \(last .*never@tailspin\.com \(never' 'Low'
+    Assert-Finding $r 'Inactive and never-used guests = WARN Low' 'Inactive guests' 'WARN' '^2 guest.*old\.partner@fabrikam\.com \(last .*never@example\.com \(never' 'Low'
     Assert-Finding $r 'Mailbox auditing off = FAIL' 'Mailbox auditing' 'FAIL' 'turned off'
     Assert-Finding $r 'Secure Score: newest snapshot, top 2 actions, deprecated left out' 'Secure Score' 'INFO' '^35 of 100 points \(35 %\).*Top improvements: Ensure multifactor authentication is enabled for all users in administrative roles \(\+10\); Enable Conditional Access policies to block legacy authentication \(\+8\)\.$'
     Assert-Equal 'SecureScoreActions table: deprecated and complete controls left out' 2 @($r.Result.Data.SecureScoreActions).Count

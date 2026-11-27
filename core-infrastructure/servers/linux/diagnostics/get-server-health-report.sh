@@ -46,7 +46,7 @@
 # Prerequisites : Linux with systemd for the service, time and journal checks | bash 3.2+ |
 #                 root: No (Yes, or the adm / systemd-journal group, for the journal; Yes for
 #                 certificates)
-# Version       : 1.1.0
+# Version       : 1.1.1
 # Limitations   : A snapshot, not monitoring. Hardware RAID controllers and SMART are not
 #                 checked. Pending package updates: run get-update-compliance-linux.sh (A6).
 #                 MSP_TEST_ROOT (development tests only) prefixes the files read.
@@ -1015,7 +1015,7 @@ msp_complete() {
 #endregion MSPHelper:Core
 #endregion MSPToolkit (generated)
 
-SCRIPT_VERSION='1.1.0'
+SCRIPT_VERSION='1.1.1'
 OUTPUT=''
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -1061,9 +1061,11 @@ disk_status() {
     printf 'PASS'
 }
 JOURNAL=0
+JOURNAL_MISSING=0
+msp_have journalctl || JOURNAL_MISSING=1
 journal_access() {
     local hint
-    msp_have journalctl || return 1
+    [ "$JOURNAL_MISSING" -eq 0 ] || return 1
     hint=$(journalctl -q --no-pager -n 1 2>&1 >/dev/null)
     printf '%s' "$hint" | grep -qiE 'not seeing messages|insufficient permissions|No journal files were opened' && return 1
     return 0
@@ -1251,7 +1253,7 @@ msp_check 'Services' 'Failed services' check_failed_units
 
 check_time() {
     local sync ntp
-    msp_have timedatectl || { msp_skip 'Time' 'Time synchronization' 'Skipped: timedatectl is not available.' 'Check chronyc tracking or ntpq -p by hand.'; return 0; }
+    msp_have timedatectl || { msp_skip 'Time' 'Time synchronization' 'timedatectl is not installed on this computer, so time synchronization could not be checked.' 'Check chronyc tracking or ntpq -p by hand.'; return 0; }
     sync=$(timedatectl show -p NTPSynchronized --value 2>/dev/null)
     ntp=$(timedatectl show -p NTP --value 2>/dev/null)
     if [ "$sync" = 'yes' ]; then
@@ -1268,6 +1270,10 @@ msp_check 'Time' 'Time synchronization' check_time
 
 check_oom() {
     local kills
+    if [ "$JOURNAL_MISSING" -eq 1 ]; then
+        msp_skip 'Events' 'Out-of-memory kills' 'journalctl is not installed on this computer (no systemd journal), so out-of-memory kills could not be checked.' 'Check the kernel log by hand: dmesg | grep -i "out of memory", or /var/log/kern.log.'
+        return 0
+    fi
     [ "$JOURNAL" -eq 1 ] || { msp_skip 'Events' 'Out-of-memory kills' 'Skipped: the system journal is not readable by this account.' "$(msp_root_hint) (or add the account to the adm / systemd-journal group)"; return 0; }
     kills=$(journalctl -q --no-pager -k -o cat --since "@$((NOW - 7 * 86400))" 2>/dev/null | grep -E 'Out of memory: Kill(ed)? process|oom-kill' | sed -n 's/.*Kill[a-z]* process [0-9]* (\([^)]*\)).*/\1/p' | sort | uniq -c | sort -rn | awk '{ printf "%s%s (%s)", (NR > 1 ? ", " : ""), $2, $1 }')
     if [ -n "$kills" ]; then
@@ -1305,7 +1311,11 @@ msp_check --root "Let's Encrypt keeps its certificates in a folder only root can
 
 check_listening() {
     local out list
-    msp_have ss || { printf 'ss: command not found\n' >&2; return 1; }
+    if ! msp_have ss; then
+        msp_skip 'Services' 'Listening services' 'ss is not installed on this computer, so listening services could not be listed.' \
+            'Install iproute2 (it provides ss) to include this check, or list them by hand with netstat -tln.'
+        return 0
+    fi
     out=$(ss -tlnH 2>/dev/null | awk '{ print $4 }' | grep -E '^(0\.0\.0\.0|\*|\[::\]):' | sed 's/.*://' | sort -n -u)
     list=$(printf '%s\n' "$out" | grep . | while read -r p; do msp_data_row 'Listening' Port# "$p"; printf '%s\n' "$p"; done | paste -sd ',' - | sed 's/,/, /g')
     msp_finding --status INFO --category 'Services' --check 'Listening services' \
