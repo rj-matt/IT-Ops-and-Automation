@@ -128,6 +128,109 @@ $null = & $psExe -NoProfile -ExecutionPolicy Bypass -File $validator -Path $out
 Assert-True 'export passes schema validation' ($LASTEXITCODE -eq 0)
 Remove-Item -LiteralPath $out -Recurse -Force
 
+# --- Log folder planted in advance (C:\Windows\Temp for SYSTEM, the shared /tmp) -----------
+# A test cannot create a folder another account owns, so MSP_TEST_FOREIGN_OWNER marks one as such.
+function Get-ModeText { param([string]$Path) return ([string](& /bin/ls -ld $Path)).Substring(0, 10) }
+function Test-PrivateAcl {
+    <# Windows: inheritance off and access for only Administrators, SYSTEM and this account. #>
+    param([string]$Path)
+    $acl = Get-Acl -LiteralPath $Path
+    $sids = @($acl.Access | ForEach-Object { $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } | Select-Object -Unique)
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    return ($acl.AreAccessRulesProtected -and @($sids | Where-Object { $_ -notin @('S-1-5-32-544', 'S-1-5-18', $me) }).Count -eq 0)
+}
+$savedTemp = $env:TEMP
+$savedTmpdir = $env:TMPDIR
+$logTest = Join-Path ([System.IO.Path]::GetTempPath()) ('msp-logtest-{0}' -f $PID)
+$logName = 'msp-toolkit'
+if ($onWindows) { $logName = 'MSP-Toolkit' }
+try {
+    foreach ($case in 'own', 'foreign', 'link') {
+        $base = Join-Path $logTest $case
+        $planted = Join-Path $base $logName
+        $elsewhere = Join-Path $base 'elsewhere'
+        $null = New-Item -ItemType Directory -Path $base, $elsewhere -Force
+        $env:TEMP = $base
+        $env:TMPDIR = $base
+        $env:MSP_TEST_FOREIGN_OWNER = ''
+        if ($case -eq 'foreign') {
+            $null = New-Item -ItemType Directory -Path $planted -Force
+            if (-not $onWindows) { & chmod 777 $planted }
+            $env:MSP_TEST_FOREIGN_OWNER = $planted
+        }
+        if ($case -eq 'link') {
+            try {
+                if ($onWindows) { $null = New-Item -ItemType Junction -Path $planted -Target $elsewhere -ErrorAction Stop }
+                else { $null = New-Item -ItemType SymbolicLink -Path $planted -Target $elsewhere -ErrorAction Stop }
+            }
+            catch { Write-Host ('  (link not created here: {0})' -f $_.Exception.Message); continue }
+        }
+        $null = Initialize-MSPRun -ScriptName 'Test-LogFolder' -ScriptVersion '1.0.0' -CheckId 'T4' -RiskLevel 'Read-Only' 6>$null
+        Write-MSPLog -Message 'secret line'
+        $lr = Get-Run
+        if ($case -eq 'own') {
+            Assert-True 'log folder: the standard folder is used when it is this account''s' ($lr.LogFolder -eq $planted -and (Split-Path $lr.LogPath -Parent) -eq $planted) ('{0} | {1}' -f $lr.LogFolder, $lr.LogPath)
+            Assert-True 'log folder: Get-MSPLogFolder returns the folder in use' ((Get-MSPLogFolder) -eq $lr.LogFolder) (Get-MSPLogFolder)
+        }
+        else {
+            Assert-True ('planted {0} folder: nothing written into it' -f $case) (@(Get-ChildItem -LiteralPath $elsewhere -Force).Count -eq 0 -and ($case -ne 'foreign' -or @(Get-ChildItem -LiteralPath $planted -Force).Count -eq 0)) ''
+            $leaf = ''
+            if ($lr.LogFolder) { $leaf = Split-Path $lr.LogFolder -Leaf }
+            Assert-True ('planted {0} folder: a new folder with a random name is used instead' -f $case) ($lr.LogPath -and (Split-Path $lr.LogFolder -Parent) -eq $base -and $leaf -ne $logName -and $leaf -like ($logName + '?*') -and (Split-Path $lr.LogPath -Parent) -eq $lr.LogFolder) ('{0} | {1}' -f $lr.LogFolder, $lr.LogPath)
+            Assert-True ('planted {0} folder: the log is written there' -f $case) ($lr.LogPath -and ([System.IO.File]::ReadAllText($lr.LogPath) -match 'secret line')) ''
+            Assert-True ('planted {0} folder: Get-MSPLogFolder returns the fallback (D2 backups go there too)' -f $case) ((Get-MSPLogFolder) -eq $lr.LogFolder) (Get-MSPLogFolder)
+        }
+        if ($lr.LogPath) {
+            if ($onWindows) { Assert-True ('{0}: log folder private (inheritance off; Administrators, SYSTEM, this account)' -f $case) (Test-PrivateAcl $lr.LogFolder) '' }
+            else {
+                Assert-True ('{0}: log folder mode 700' -f $case) ((Get-ModeText $lr.LogFolder) -eq 'drwx------') (Get-ModeText $lr.LogFolder)
+                Assert-True ('{0}: log file mode 600' -f $case) ((Get-ModeText $lr.LogPath) -eq '-rw-------') (Get-ModeText $lr.LogPath)
+            }
+        }
+    }
+    # A file or a link already at the log file's name is never opened.
+    $target = Join-Path $logTest 'target.txt'
+    [System.IO.File]::WriteAllText($target, '')
+    $existing = Join-Path $logTest 'existing.log'
+    [System.IO.File]::WriteAllText($existing, 'old')
+    $refused = $false
+    try { Add-MSPLogFile -Path $existing } catch { $refused = $true }
+    Assert-True 'log file: an existing file at the name is refused' ($refused -and [System.IO.File]::ReadAllText($existing) -eq 'old') ''
+    $linkPath = Join-Path $logTest 'link.log'
+    $linkMade = $true
+    try { $null = New-Item -ItemType SymbolicLink -Path $linkPath -Target $target -ErrorAction Stop } catch { $linkMade = $false }
+    if ($linkMade) {
+        $refused = $false
+        try { Add-MSPLogFile -Path $linkPath } catch { $refused = $true }
+        Assert-True 'log file: a link at the name is refused' $refused ''
+    }
+    # A results folder another account created in advance is refused, not taken over.
+    $env:MSP_TEST_FOREIGN_OWNER = ''
+    $plantedResults = Join-Path $logTest 'results'
+    $null = New-Item -ItemType Directory -Path $plantedResults -Force
+    if (-not $onWindows) { & chmod 777 $plantedResults }
+    $before = $null
+    if ($onWindows) { $before = (Get-Acl -LiteralPath $plantedResults).Sddl }
+    $env:MSP_TEST_FOREIGN_OWNER = $plantedResults
+    $message = ''
+    try { Protect-MSPResultFolder -Path $plantedResults } catch { $message = $_.Exception.Message }
+    Assert-True 'results folder of another account: refused with the reason' ($message -like '*belongs to another account; it was not used.') $message
+    if ($onWindows) { Assert-True 'results folder of another account: permissions not changed' ((Get-Acl -LiteralPath $plantedResults).Sddl -eq $before) '' }
+    else { Assert-True 'results folder of another account: permissions not changed' ((Get-ModeText $plantedResults) -eq 'drwxrwxrwx') (Get-ModeText $plantedResults) }
+    $env:MSP_TEST_FOREIGN_OWNER = ''
+    $ownResults = Join-Path $logTest 'own-results'
+    $null = New-Item -ItemType Directory -Path $ownResults -Force
+    Protect-MSPResultFolder -Path $ownResults
+    if ($onWindows) { Assert-True 'results folder of this account: restricted' (Test-PrivateAcl $ownResults) '' }
+    else { Assert-True 'results folder of this account: restricted' ((Get-ModeText $ownResults) -eq 'drwx------') (Get-ModeText $ownResults) }
+}
+finally {
+    $env:TEMP = $savedTemp
+    $env:TMPDIR = $savedTmpdir
+    Remove-Item -Path Env:\MSP_TEST_FOREIGN_OWNER -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $logTest -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 # --- Local subnet picker with fake network cmdlets ---------------------------------------
 function global:Get-NetIPInterface { param($InterfaceIndex, $AddressFamily, $ErrorAction) [pscustomobject]@{ InterfaceMetric = 10 } }
 function global:Get-DnsClientServerAddress { param($InterfaceIndex, $ErrorAction) [pscustomobject]@{ ServerAddresses = @('192.168.1.1') } }

@@ -48,7 +48,7 @@
 # Prerequisites : macOS 12+ or Linux | bash 3.2+ | root: No (sudo measures other users' and
 #                 system folders completely; Linux SMART needs sudo and smartctl). macOS: the
 #                 Trash and iPhone backups need Full Disk Access for Terminal to be measured.
-# Version       : 1.2.0
+# Version       : 1.2.1
 # Limitations   : Sizes are du's disk usage of what this account can read. A walk stopped by the
 #                 time limit is a minimum. MSP_TEST_ROOT (development tests only) prefixes the
 #                 system paths read.
@@ -58,7 +58,7 @@ MSP_SCRIPT_FILE=$0
 
 #region MSPToolkit (generated) Sections=Core
 # DO NOT EDIT — regenerate with Sync-MSPEmbeddedHelper.ps1
-# Source: endpoint-systems/utilities/msp-toolkit-common.sh | Sections: Core | SHA256: 1673c650cfecef22e44429ccc14c47a6259ba98c6c09aaec7ad23bf4f2e2d501
+# Source: endpoint-systems/utilities/msp-toolkit-common.sh | Sections: Core | SHA256: b8399b7edb8fd1e413b73706ecce12f49fa04c86437b0df23b58e74bf0bb8e74
 #region MSPHelper:Core
 # --- Run state ------------------------------------------------------------------------------
 # One toolkit script = one "run": one log file, one findings list, one optional export.
@@ -78,6 +78,7 @@ MSP_START_ISO=''
 MSP_START_STAMP=''
 MSP_END_ISO=''
 MSP_LOG_PATH=''
+MSP_LOG_DIR=''
 MSP_LOG_FAILED=0
 MSP_WORK_DIR=''
 MSP_COLOR=0
@@ -346,6 +347,11 @@ msp_say() {
 msp_log() {
     # msp_log LEVEL MESSAGE. Never fails: a full or locked disk must not stop a diagnostic.
     [ -n "$MSP_LOG_PATH" ] && [ "$MSP_LOG_FAILED" -eq 0 ] || return 0
+    # Only ever append to the file msp_init created: never through a link put in its place.
+    if [ -L "$MSP_LOG_PATH" ] || [ ! -O "$MSP_LOG_PATH" ]; then
+        MSP_LOG_FAILED=1
+        return 0
+    fi
     if ! printf '%s [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" "$2" >>"$MSP_LOG_PATH" 2>/dev/null; then
         MSP_LOG_FAILED=1
     fi
@@ -380,17 +386,41 @@ msp_detect_platform() {
     esac
 }
 
+msp__private_dir() {
+    # msp__private_dir DIR - true when DIR is a real folder (not a link) owned by this account.
+    # MSP_TEST_FOREIGN_OWNER (development tests only; folders separated by "|") marks folders to
+    # treat as another account's, because a test cannot create one; it can only make a folder be
+    # refused, never accepted.
+    [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] || return 1
+    case "|${MSP_TEST_FOREIGN_OWNER:-}|" in *"|$1|"*) return 1 ;; esac
+    return 0
+}
+
 msp__log_folder() {
-    # ${TMPDIR:-/tmp}/msp-toolkit. If another account (for example root from an earlier sudo run)
-    # owns it, use a per-user folder so the log still gets written.
+    # ${TMPDIR:-/tmp}/msp-toolkit, mode 700. If that name is a link, not a folder, or owned by
+    # another account (planted in advance in the shared /tmp, or left by an earlier sudo run), it
+    # is not used: a new private folder with a random name (mktemp -d) is used instead. Returns 1
+    # if neither works (the run then has no log file).
     local base dir
     base=${TMPDIR:-/tmp}
     base=${base%/}
     dir="$base/msp-toolkit"
-    if [ -d "$dir" ] && [ ! -w "$dir" ]; then dir="$base/msp-toolkit-$(id -u)"; fi
-    (umask 077 && mkdir -p "$dir") 2>/dev/null || return 1
-    [ -w "$dir" ] || return 1
+    if [ ! -e "$dir" ] && [ ! -L "$dir" ]; then (umask 077 && mkdir "$dir") 2>/dev/null; fi
+    if msp__private_dir "$dir" && chmod 700 "$dir" 2>/dev/null; then
+        printf '%s' "$dir"
+        return 0
+    fi
+    dir=$(umask 077 && mktemp -d "$base/msp-toolkit.XXXXXX" 2>/dev/null) || return 1
+    msp__private_dir "$dir" || return 1
     printf '%s' "$dir"
+}
+
+msp__log_file() {
+    # msp__log_file PATH - creates PATH as a new, empty file, mode 600. Fails if anything (a file,
+    # a link, a hard link) is already at that name, so the log is never written through it.
+    if [ -e "$1" ] || [ -L "$1" ]; then return 1; fi
+    (umask 077 && set -C && : >"$1") 2>/dev/null || return 1
+    [ -f "$1" ] && [ ! -L "$1" ] && [ -O "$1" ]
 }
 
 msp__cleanup() {
@@ -439,8 +469,11 @@ msp_init() {
     trap 'exit 130' INT TERM
 
     MSP_LOG_PATH=''
+    MSP_LOG_DIR=''
     if dir=$(msp__log_folder); then
+        MSP_LOG_DIR=$dir
         MSP_LOG_PATH="$dir/${MSP_SCRIPT_NAME}_${MSP_HOST}_${MSP_START_STAMP}.log"
+        msp__log_file "$MSP_LOG_PATH" || MSP_LOG_PATH=''
     fi
 
     msp_log INFO "===== START $MSP_SCRIPT_NAME v$MSP_SCRIPT_VERSION ($MSP_CHECK_ID) ====="
@@ -947,7 +980,7 @@ msp__rmm_dir() {
     # this account, so a folder or link planted by someone else in advance (/var/tmp is writable
     # by everyone) is never used. Returns 1 if it cannot be used.
     if [ ! -e "$1" ] && [ ! -L "$1" ]; then (umask 077 && mkdir "$1") 2>/dev/null || return 1; fi
-    [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] || { msp_log ERROR "Not used (a link, not a folder, or owned by another account): $1"; return 1; }
+    msp__private_dir "$1" || { msp_log ERROR "Not used (a link, not a folder, or owned by another account): $1"; return 1; }
     chmod 700 "$1" 2>/dev/null
 }
 
@@ -1017,7 +1050,7 @@ msp_complete() {
 #endregion MSPHelper:Core
 #endregion MSPToolkit (generated)
 
-SCRIPT_VERSION='1.2.0'
+SCRIPT_VERSION='1.2.1'
 OUTPUT=''
 SCAN_SECONDS=60
 TOP=10

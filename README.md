@@ -395,7 +395,14 @@ versions marked "estimated" (confirm in the browser's About page), "date unverif
 end-of-support date (the date is our best information but no official page confirmed it).
 
 **Where things are saved:** logs in `%TEMP%\MSP-Toolkit\` (Windows) or
-`${TMPDIR:-/tmp}/msp-toolkit/` (macOS/Linux), named `<Script>_<Computer>_<timestamp>.log`.
+`${TMPDIR:-/tmp}/msp-toolkit/` (macOS/Linux), named `<Script>_<Computer>_<timestamp>.log`. The
+folder is private (Windows: only the account running the script, Administrators and SYSTEM,
+inheritance off; macOS/Linux: mode 700, log files 600). If that folder is a link or another
+account created it in advance (`C:\Windows\Temp` is SYSTEM's `%TEMP%`; `/tmp` is shared), it is
+not used: the log goes to a new private folder with a random name next to it
+(`MSP-Toolkit-<random>` / `msp-toolkit.<random>`), and the banner's `Log` line shows where. A log
+file is always created new, never written through a file or link already at its name; if no
+private folder can be made, the script runs without a log file.
 Results only where you asked (`-OutputPath` / `--output`): a JSON file, a findings CSV and one
 CSV per table. Results can contain user, device and account names: keep them with the client's
 records, not on a shared USB stick.
@@ -431,7 +438,9 @@ the script runs (exit 1); bash scripts print a usage message and exit 3.
 **The results folder holds device and user details.** On Windows only Administrators and SYSTEM
 can open it (inheritance off, owner Administrators); on macOS/Linux it is mode 700 and each
 file 600, owned by root. A folder or link that someone else created there in advance is never
-used: the run exits 3 with "not used" in the output. Collect the files with the RMM (for
+used or taken over (Windows: a folder whose owner is not Administrators, SYSTEM or the account
+running the script; macOS/Linux: a folder not owned by that account): nothing is written, its
+permissions are left as they are, and the run exits 3 with "not used" in the output. Collect the files with the RMM (for
 example a "get file" step) and delete them from your side as you would any client data.
 
 **As SYSTEM / root with no signed-in user** (how RMM agents run scripts) the scripts detect it

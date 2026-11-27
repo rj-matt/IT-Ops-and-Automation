@@ -302,6 +302,74 @@ if [ -n "$log" ]; then
     check_true 'log: END line' grep -q '===== END ' "$log"
 fi
 check_true 'cleanup: run temp folder removed' sh -c "! ls -d '$RUN_TMP'/msp-run.* >/dev/null 2>&1"
+# mode_of PATH -> "drwx------" (stat options differ between macOS and Linux; ls does not).
+# shellcheck disable=SC2012
+mode_of() { ls -ld "$1" 2>/dev/null | cut -c1-10; }
+check_eq 'log folder: mode 700' 'drwx------' "$(mode_of "$RUN_TMP/msp-toolkit")"
+[ -n "$log" ] && check_eq 'log file: mode 600' '-rw-------' "$(mode_of "$log")"
+
+# --- Log folder and file planted in advance (the shared /tmp, or C:\Windows\Temp for SYSTEM) -----
+# init_log TMPDIR [MSP_TEST_FOREIGN_OWNER] -> "log path|log folder" of a run started there.
+init_log() {
+    (
+        TMPDIR="$1" MSP_TEST_FOREIGN_OWNER="${2-}" msp_init 'test-log' '1.0.0' 'T1' 'Read-Only' >/dev/null 2>&1
+        msp_log INFO 'secret line'
+        printf '%s|%s' "$MSP_LOG_PATH" "$MSP_LOG_DIR"
+    )
+}
+LOG_TMP=$(mktemp -d "${RUN_TMP%/*}/msp-test.XXXXXX")
+# A folder another account created at the expected name (simulated: a test cannot create a folder
+# someone else owns), open to everyone as such a folder would be.
+mkdir -p "$LOG_TMP/foreign/msp-toolkit" && chmod 777 "$LOG_TMP/foreign/msp-toolkit"
+out=$(init_log "$LOG_TMP/foreign" "$LOG_TMP/foreign/msp-toolkit")
+check_eq 'planted foreign folder: nothing written into it' '' "$(ls -A "$LOG_TMP/foreign/msp-toolkit")"
+case "${out%%|*}" in "$LOG_TMP/foreign/msp-toolkit."??????/test-log_*.log) r=yes ;; *) r="no: $out" ;; esac
+check_eq 'planted foreign folder: a new private folder (random name) used instead' 'yes' "$r"
+check_eq 'planted foreign folder: fallback folder mode 700' 'drwx------' "$(mode_of "${out#*|}")"
+check_eq 'planted foreign folder: log file mode 600' '-rw-------' "$(mode_of "${out%%|*}")"
+check_true 'planted foreign folder: log written in the fallback' grep -q 'secret line' "${out%%|*}"
+# A link at the folder's name.
+mkdir -p "$LOG_TMP/link/elsewhere" && ln -s "$LOG_TMP/link/elsewhere" "$LOG_TMP/link/msp-toolkit"
+out=$(init_log "$LOG_TMP/link")
+check_eq 'planted folder link: nothing written through it' '' "$(ls -A "$LOG_TMP/link/elsewhere")"
+case "${out%%|*}" in "$LOG_TMP/link/msp-toolkit."??????/test-log_*.log) r=yes ;; *) r="no: $out" ;; esac
+check_eq 'planted folder link: a new private folder used instead' 'yes' "$r"
+# A link and a hard link at the log file's predicted name (the name has the second it starts).
+mkdir -p "$LOG_TMP/file/msp-toolkit" && : >"$LOG_TMP/file/target"
+host=$(uname -n)
+host=${host%%.*}
+out=$(
+    # shellcheck disable=SC2329  # Replaces date for msp_init, so the log name is known in advance.
+    date() { printf '2026-01-01T00:00:00+0000 20260101-000000 1767225600\n'; }
+    ln -s "$LOG_TMP/file/target" "$LOG_TMP/file/msp-toolkit/test-log_${host}_20260101-000000.log"
+    TMPDIR="$LOG_TMP/file" msp_init 'test-log' '1.0.0' 'T1' 'Read-Only' >"$LOG_TMP/file/banner.txt" 2>&1
+    msp_log INFO 'secret line'
+    printf '%s' "$MSP_LOG_PATH"
+)
+check_eq 'planted log link: no log file used' '' "$out"
+check_eq 'planted log link: nothing written through it' '0' "$(wc -c <"$LOG_TMP/file/target" | tr -d ' ')"
+check_true 'planted log link: banner says there is no log file' grep -q 'could not create a log file' "$LOG_TMP/file/banner.txt"
+ln "$LOG_TMP/file/target" "$LOG_TMP/file/msp-toolkit/hard.log"
+check_false 'planted hard link: not opened' msp__log_file "$LOG_TMP/file/msp-toolkit/hard.log"
+check_eq 'planted hard link: nothing written through it' '0' "$(wc -c <"$LOG_TMP/file/target" | tr -d ' ')"
+# The log replaced by a link during the run: msp_log stops instead of writing through it.
+mkdir -p "$LOG_TMP/swap"
+out=$(
+    TMPDIR="$LOG_TMP/swap" msp_init 'test-log' '1.0.0' 'T1' 'Read-Only' >/dev/null 2>&1
+    [ -n "$MSP_LOG_PATH" ] && rm -f "$MSP_LOG_PATH" && ln -s "$LOG_TMP/file/target" "$MSP_LOG_PATH"
+    msp_log INFO 'secret line'
+    printf '%s' "$MSP_LOG_FAILED"
+)
+check_eq 'log swapped for a link mid-run: logging stops' '1' "$out"
+check_eq 'log swapped for a link mid-run: nothing written through it' '0' "$(wc -c <"$LOG_TMP/file/target" | tr -d ' ')"
+# Nowhere to write at all: the run goes on without a log file.
+if [ "$(id -u)" != 0 ]; then
+    mkdir -p "$LOG_TMP/ro" && chmod 500 "$LOG_TMP/ro"
+    out=$(init_log "$LOG_TMP/ro")
+    check_eq 'no writable temp folder: run continues without a log' '|' "$out"
+    chmod 700 "$LOG_TMP/ro"
+fi
+rm -rf "$LOG_TMP"
 
 # --- Files for the PowerShell cross-checks ---------------------------------------------------
 if [ -n "$EMIT_DIR" ]; then

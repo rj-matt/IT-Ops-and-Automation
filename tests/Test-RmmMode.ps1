@@ -242,6 +242,80 @@ try {
         Assert-True 'planted link: summary line still printed' ($r.Last -match '^B5 WARN=\d+ FAIL=\d+ ERROR=\d+$') $r.Last
     }
 
+    # A plain results folder another account created in advance (a standard user can create folders
+    # in %ProgramData%) is refused, not taken over. A test cannot create a folder someone else owns,
+    # so MSP_TEST_FOREIGN_OWNER marks it as such.
+    $root = Join-Path $work 'rr-foreign'
+    $planted = Join-Path $root 'results'
+    # First a normal run, so the parent folder (MSP_TEST_RESULTS_ROOT) is created and locked down
+    # before anything is planted; its permissions then cannot change during the planted run.
+    $pre = Invoke-Rmm -Name 'foreign-pre' -ResultsRoot $root
+    Assert-True 'planted foreign results folder: the parent is set up by a normal run first' ($pre.Code -eq 0 -and $pre.Json.Count -eq 1) ('exit {0}; {1} result(s)' -f $pre.Code, $pre.Json.Count)
+    Remove-Item -LiteralPath $planted -Recurse -Force
+    $null = New-Item -ItemType Directory -Path $planted
+    if (-not $onWindows) { & chmod 777 $planted }
+    $sddlBefore = ''
+    $entriesBefore = ''
+    if ($onWindows) {
+        $acl = Get-Acl -LiteralPath $planted
+        $sddlBefore = $acl.GetSecurityDescriptorSddlForm('Owner, Access')
+        $entriesBefore = (@($acl.Access | ForEach-Object { '{0}:{1}:{2}' -f $_.IdentityReference, $_.FileSystemRights, $_.IsInherited })) -join ', '
+    }
+    $r = Invoke-Rmm -Name 'foreign' -ResultsRoot $root -Extra ('$env:MSP_TEST_FOREIGN_OWNER = ''{0}''' -f ($planted -replace "'", "''"))
+    Assert-True 'planted foreign results folder: exit 3' ($r.Code -eq 3) ('exit {0}' -f $r.Code)
+    Assert-True 'planted foreign results folder: nothing written' (@(Get-ChildItem -LiteralPath $planted -Force).Count -eq 0) ''
+    Assert-True 'planted foreign results folder: says it was not used' ($r.Console -match 'belongs to another account; it was not used') ''
+    if ($onWindows) {
+        # The whole security descriptor (owner and every entry, own or inherited) must be unchanged.
+        $acl = Get-Acl -LiteralPath $planted
+        $sddlAfter = $acl.GetSecurityDescriptorSddlForm('Owner, Access')
+        $entriesAfter = (@($acl.Access | ForEach-Object { '{0}:{1}:{2}' -f $_.IdentityReference, $_.FileSystemRights, $_.IsInherited })) -join ', '
+        Write-Host ('  planted results folder SDDL before: {0}' -f $sddlBefore)
+        Write-Host ('  planted results folder SDDL after:  {0}' -f $sddlAfter)
+        Assert-True 'planted foreign results folder: permissions not taken over (full SDDL unchanged)' ($sddlAfter -ceq $sddlBefore) `
+            ('before [{0}] after [{1}]; entries before: {2}; entries after: {3}' -f $sddlBefore, $sddlAfter, $entriesBefore, $entriesAfter)
+    }
+    else { Assert-True 'planted foreign results folder: permissions not taken over' ((Get-UnixMode $planted) -eq '777') (Get-UnixMode $planted) }
+    Assert-True 'planted foreign results folder: summary line still printed' ($r.Last -match '^B5 WARN=\d+ FAIL=\d+ ERROR=\d+$') $r.Last
+
+    # A log folder another account created in advance (C:\Windows\Temp is SYSTEM's TEMP; /tmp is
+    # shared): a new private folder with a random name is used, nothing is written into it.
+    if ($onWindows) {
+        $logBase = Join-PathPart $systemProfile 'AppData', 'Local', 'Temp'
+        $plantedLog = Join-Path $logBase 'MSP-Toolkit'
+        $extra = ''
+    }
+    else {
+        $logBase = Join-Path $work 'tmp-foreign'
+        $plantedLog = Join-Path $logBase 'msp-toolkit'
+        $extra = ('$env:TMPDIR = ''{0}''' -f ($logBase -replace "'", "''")) + "`n"
+    }
+    if (Test-Path -LiteralPath $plantedLog) { Remove-Item -LiteralPath $plantedLog -Recurse -Force }
+    $null = New-Item -ItemType Directory -Path $plantedLog -Force
+    if (-not $onWindows) { & chmod 777 $plantedLog }
+    $extra += ('$env:MSP_TEST_FOREIGN_OWNER = ''{0}''' -f ($plantedLog -replace "'", "''"))
+    $r = Invoke-Rmm -Name 'foreign-log' -Extra $extra
+    Assert-True 'planted foreign log folder: run completes (exit 0)' ($r.Code -eq 0) ('exit {0}; console: {1}' -f $r.Code, $r.Console)
+    Assert-True 'planted foreign log folder: nothing written into it' (@(Get-ChildItem -LiteralPath $plantedLog -Force).Count -eq 0) ''
+    $logLine = @($r.Lines | Where-Object { $_ -like ' Log     : *' }) | Select-Object -First 1
+    $logFile = ''
+    if ($logLine) { $logFile = $logLine.Substring(' Log     : '.Length) }
+    $logDir = ''
+    if ($logFile) { $logDir = Split-Path $logFile -Parent }
+    Assert-True 'planted foreign log folder: a new folder with a random name used instead' ($logDir -and (Split-Path $logDir -Parent) -eq $logBase -and (Split-Path $logDir -Leaf) -ne (Split-Path $plantedLog -Leaf) -and (Test-Path -LiteralPath $logFile)) ('log line: [{0}]' -f $logLine)
+    if ($logDir -and (Test-Path -LiteralPath $logDir)) {
+        if ($onWindows) {
+            $acl = Get-Acl -LiteralPath $logDir
+            $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+            $sids = @($acl.Access | ForEach-Object { $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } | Select-Object -Unique)
+            Assert-True 'fallback log folder: inheritance off; only Administrators, SYSTEM and this account' ($acl.AreAccessRulesProtected -and @($sids | Where-Object { $_ -notin @('S-1-5-32-544', 'S-1-5-18', $me) }).Count -eq 0) ($sids -join ', ')
+        }
+        else {
+            Assert-True 'fallback log folder: mode 700' ((Get-UnixMode $logDir) -eq '700') (Get-UnixMode $logDir)
+            Assert-True 'fallback log file: mode 600' ((Get-UnixMode $logFile) -eq '600') (Get-UnixMode $logFile)
+        }
+    }
+
     # --- Per-user checks as SYSTEM ---------------------------------------------------------------
     $r = Invoke-Rmm -Name 'a5' -Script (Join-Path $repo 'endpoint-systems/diagnostics/system-info/Get-BrowserSecurityCheck.ps1') -ScriptArgs @('-Rmm')
     Assert-True 'A5: summary line' ($r.Last -match '^A5 WARN=\d+ FAIL=\d+ ERROR=\d+$') $r.Last
@@ -337,6 +411,25 @@ function New-Object {
     $f = Get-Finding $r.Result 'RMM mode'
     Assert-True 'D2 in RMM mode: SKIPPED with the reason' ($f -and $f.Status -eq 'SKIPPED' -and $f.Detail -match 'cuts off the RMM agent''s connection and needs a restart' -and $f.Recommendation -match 'survives a restart') $(if ($f) { $f.Detail })
     Assert-True 'D2 in RMM mode: nothing else ran' (@($r.Result.Findings | Where-Object { $_.Check -ne 'RMM mode' }).Count -eq 0) (($r.Result.Findings | ForEach-Object { $_.Check }) -join ', ')
+
+    # D2 outside RMM mode (-WhatIf, so nothing changes): Get-NetIPConfiguration throws on some
+    # adapters ("Exception setting NetAdapter", seen on a CI runner); the IPv4 pre-flight must still
+    # read the address and gateway instead of reporting ERROR.
+    if ($onWindows) {
+        $d2Mocks = @'
+function Get-NetAdapter { [CmdletBinding()] param([Parameter(ValueFromRemainingArguments = $true)]$Rest) [pscustomobject]@{ Name = 'Ethernet'; InterfaceDescription = 'Mock Ethernet'; Status = 'Up'; LinkSpeed = '1 Gbps'; ifIndex = 7; InterfaceGuid = '{00000000-0000-0000-0000-000000000007}' } }
+function Get-NetIPConfiguration { throw 'Exception setting "NetAdapter": "Cannot convert the "System.Object[]" value of type "System.Object[]" to type "Microsoft.Management.Infrastructure.CimInstance"."' }
+function Get-NetIPInterface { [CmdletBinding()] param([int]$InterfaceIndex, [string]$AddressFamily) [pscustomobject]@{ Dhcp = 'Enabled' } }
+function Get-NetIPAddress { [CmdletBinding()] param([int]$InterfaceIndex, [string]$AddressFamily) [pscustomobject]@{ IPAddress = '198.51.100.23'; PrefixLength = 24 } }
+function Get-NetRoute { [CmdletBinding()] param([int]$InterfaceIndex, [string]$DestinationPrefix) [pscustomobject]@{ NextHop = '198.51.100.1' } }
+function Get-DnsClientServerAddress { [CmdletBinding()] param([int]$InterfaceIndex, [string]$AddressFamily) [pscustomobject]@{ ServerAddresses = @('198.51.100.1') } }
+function Test-Connection { throw 'Test-Connection must not be called with -SkipConnectivityTest' }
+function Test-NetConnection { throw 'Test-NetConnection must not be called with -SkipConnectivityTest' }
+'@
+        $r = Invoke-Rmm -Name 'd2-ipconfig' -Script (Join-Path $repo 'endpoint-systems/remediation/elevated/network-resets/Reset-NetworkStack.ps1') -ScriptArgs @('-WhatIf', '-SkipConnectivityTest') -Scene $d2Mocks
+        Assert-True 'D2 pre-flight with Get-NetIPConfiguration throwing: address and gateway read' ($r.Console -match 'IPv4: Ethernet - Ethernet: 198\.51\.100\.23/24 gateway 198\.51\.100\.1') $r.Console
+        Assert-True 'D2 pre-flight with Get-NetIPConfiguration throwing: no ERROR for IPv4 settings' ($r.Console -notmatch 'IPv4 settings - The check could not complete') ''
+    }
 }
 finally {
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
